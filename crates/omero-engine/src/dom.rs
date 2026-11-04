@@ -11,6 +11,13 @@ use quick_xml::XmlVersion;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(u32);
 
+impl NodeId {
+    /// Dense arena index, for side tables indexed by node (e.g. computed styles).
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 #[derive(Debug)]
 pub enum NodeKind {
     Document,
@@ -58,6 +65,15 @@ impl Dom {
 
     fn new() -> Dom {
         Dom { nodes: vec![Node::new(NodeKind::Document, None, None)] }
+    }
+
+    /// Number of nodes, document node included.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.len() <= 1
     }
 
     fn node(&self, id: NodeId) -> &Node {
