@@ -150,12 +150,7 @@ pub fn parse_stylesheet(css: &str) -> Vec<Rule> {
 
 /// Parses a `style="…"` attribute.
 pub fn parse_declarations(css: &str) -> Vec<Declaration> {
-    let mut input = Parser::new(css);
-    let mut decls = Vec::new();
-    for item in RuleBodyParser::new(&mut input, &mut DeclParser).flatten() {
-        decls.extend(item);
-    }
-    decls
+    parse_body(&mut Parser::new(css))
 }
 
 struct SheetParser;
@@ -166,9 +161,7 @@ impl<'i> QualifiedRuleParser<'i> for SheetParser {
     type Error = ();
 
     fn parse_prelude(&mut self, input: &mut Parser<'i>) -> Result<SelectorList, ParseError<()>> {
-        let start = input.position();
-        while input.next().is_ok() {}
-        select::parse(input.slice_from(start)).ok_or_else(|| ParseError::custom(()))
+        select::parse_from(input).ok_or_else(|| ParseError::custom(()))
     }
 
     fn parse_block(
@@ -191,11 +184,14 @@ impl<'i> AtRuleParser<'i> for SheetParser {
         let start = input.position();
         while input.next().is_ok() {}
         let prelude = input.slice_from(start).to_ascii_lowercase();
-        // ponytail: @font-face and @import are ignored (publisher fonts come later).
-        match name.to_ascii_lowercase().as_str() {
-            "media" => Ok(media_applies(&prelude)),
-            "supports" => Ok(true),
-            _ => Err(ParseError::custom(())),
+        // ponytail: @font-face and @import are ignored (publisher fonts come later);
+        // @supports is assumed true unless negated, without evaluating the condition.
+        if name.eq_ignore_ascii_case("media") {
+            Ok(media_applies(&prelude))
+        } else if name.eq_ignore_ascii_case("supports") {
+            Ok(!prelude.trim_start().starts_with("not"))
+        } else {
+            Err(ParseError::custom(()))
         }
     }
 
@@ -206,27 +202,44 @@ impl<'i> AtRuleParser<'i> for SheetParser {
         input: &mut Parser<'i>,
     ) -> Result<Vec<Rule>, ParseError<()>> {
         let mut rules = Vec::new();
+        if !applies {
+            while input.next().is_ok() {} // skip without parsing rules we would discard
+            return Ok(rules);
+        }
         for item in StyleSheetParser::new(input, &mut SheetParser).flatten() {
-            if applies {
-                rules.extend(item);
-            }
+            rules.extend(item);
         }
         Ok(rules)
     }
 }
 
-/// `@media` queries for an e-ink reader: screen-ish, monochrome, Kindle KF8; not print, not Mobi7.
+/// Media queries (lowercased) for this device: a monochrome screen that reads KF8.
+/// Media types match exactly; `(color…)` features are false, other features true.
 fn media_applies(query: &str) -> bool {
     query.split(',').any(|q| {
-        let q = q.trim();
-        let negated = q.starts_with("not ");
-        let hit = q.is_empty()
-            || q.contains("all")
-            || q.contains("screen")
-            || q.contains("amzn-kf8")
-            || q.contains("monochrome")
-            || (q.starts_with('(') && !q.contains("color"));
-        hit != negated && !q.contains("amzn-mobi") && !q.contains("print")
+        let (mut negated, mut result, mut seen_type) = (false, true, false);
+        let mut rest = q.trim();
+        while !rest.is_empty() {
+            if let Some(after) = rest.strip_prefix('(') {
+                let (feature, tail) = after.split_once(')').unwrap_or((after, ""));
+                let name = feature.split(':').next().unwrap_or("").trim();
+                result &= !matches!(name, "color" | "min-color" | "color-index" | "min-color-index");
+                rest = tail.trim_start();
+                continue;
+            }
+            let end = rest.find(|c: char| c.is_whitespace() || c == '(').unwrap_or(rest.len());
+            let (word, tail) = rest.split_at(end);
+            match word {
+                "not" if !seen_type => negated = true,
+                "only" | "and" | "" => {}
+                t => {
+                    seen_type = true;
+                    result &= matches!(t, "all" | "screen" | "amzn-kf8");
+                }
+            }
+            rest = tail.trim_start();
+        }
+        result != negated
     })
 }
 
@@ -250,6 +263,17 @@ impl<'i> DeclarationParser<'i> for DeclParser {
         input: &mut Parser<'i>,
         _start: &ParserState,
     ) -> Result<Vec<Declaration>, ParseError<()>> {
+        // ponytail: CSS-wide keywords (inherit/initial/unset) drop the declaration instead of
+        // resolving it; lower-priority rules and normal inheritance then apply.
+        let wide = input.try_parse(|i| {
+            let k = i.expect_ident_cloned().map_err(|_| ())?;
+            i.expect_exhausted().map_err(|_| ())?;
+            // Only consume the value when it really is a CSS-wide keyword.
+            ["inherit", "initial", "unset", "revert"].iter().any(|w| k.eq_ignore_ascii_case(w)).then_some(()).ok_or(())
+        });
+        if wide.is_ok() {
+            return Ok(Vec::new());
+        }
         let props = property(&name.to_ascii_lowercase(), input).ok_or_else(|| ParseError::custom(()))?;
         let important = input.try_parse(cssparser::parse_important).is_ok();
         if !input.is_exhausted() {
@@ -402,7 +426,10 @@ fn property(name: &str, input: &mut Parser) -> Option<Vec<Property>> {
             "inline" => Display::Inline,
             "list-item" => Display::ListItem,
             "inline-block" | "inline-flex" => Display::InlineBlock,
-            "table" => Display::Table,
+            "table" | "inline-table" => Display::Table,
+            // ponytail: row groups and captions flow as blocks; columns carry no content.
+            "table-row-group" | "table-header-group" | "table-footer-group" | "table-caption" => Display::Block,
+            "table-column" | "table-column-group" => Display::None,
             "table-row" => Display::TableRow,
             "table-cell" => Display::TableCell,
             "none" => Display::None,
@@ -417,26 +444,43 @@ fn property(name: &str, input: &mut Parser) -> Option<Vec<Property>> {
             // [style] [variant] [weight] size[/line-height] family
             let mut out = vec![P::Italic(false), P::SmallCaps(false), P::FontWeight(400)];
             loop {
-                if let Ok(w) = input.try_parse(|i| font_weight(i).ok_or(())) {
-                    out[2] = P::FontWeight(w);
-                    continue;
-                }
-                match input.try_parse(|i| ident(i).ok_or(())).ok() {
-                    Some(s) if s == "italic" || s == "oblique" => out[0] = P::Italic(true),
-                    Some(s) if s == "small-caps" => out[1] = P::SmallCaps(true),
-                    Some(s) if s == "normal" => {}
-                    Some(_) => return None,
-                    None => break,
+                // Size keywords end the prefix: only consume idents that are style/variant/weight.
+                let prefix = input.try_parse(|i| match ident(i).as_deref() {
+                    Some("italic" | "oblique") => Ok(P::Italic(true)),
+                    Some("small-caps") => Ok(P::SmallCaps(true)),
+                    Some("normal") => Ok(P::Italic(false)),
+                    _ => Err(()),
+                });
+                match prefix {
+                    Ok(p @ P::SmallCaps(_)) => out[1] = p,
+                    Ok(p) => out[0] = p,
+                    Err(()) => match input.try_parse(|i| font_weight(i).ok_or(())) {
+                        Ok(w) => out[2] = P::FontWeight(w),
+                        Err(()) => break,
+                    },
                 }
             }
             out.push(P::FontSize(font_size(input)?));
-            if input.try_parse(|i| i.expect_delim('/')).is_ok() {
-                out.push(P::LineHeight(line_height(input)?));
-            }
+            // The shorthand resets line-height when it doesn't set it.
+            let lh =
+                if input.try_parse(|i| i.expect_delim('/')).is_ok() { line_height(input)? } else { LineHeight::Normal };
+            out.push(P::LineHeight(lh));
             out.push(P::FontFamily(font_family(input)?));
             Some(out)
         }
         "line-height" => one(P::LineHeight(line_height(input)?)),
+        _ if name.starts_with("margin-") || name.starts_with("padding-") => {
+            let (kind, suffix) = name.split_once('-')?;
+            let side = match suffix {
+                "top" => Side::Top,
+                "right" => Side::Right,
+                "bottom" => Side::Bottom,
+                "left" => Side::Left,
+                _ => return None,
+            };
+            let len = length(input)?;
+            one(if kind == "margin" { P::Margin(side, len) } else { P::Padding(side, len) })
+        }
         "text-align" => one(P::TextAlign(match ident(input)?.as_str() {
             "left" => TextAlign::Left,
             "right" | "end" => TextAlign::Right,
@@ -448,14 +492,6 @@ fn property(name: &str, input: &mut Parser) -> Option<Vec<Property>> {
         "text-indent" => one(P::TextIndent(length(input)?)),
         "margin" => box_sides(input, P::Margin),
         "padding" => box_sides(input, P::Padding),
-        "margin-top" => one(P::Margin(Side::Top, length(input)?)),
-        "margin-right" => one(P::Margin(Side::Right, length(input)?)),
-        "margin-bottom" => one(P::Margin(Side::Bottom, length(input)?)),
-        "margin-left" => one(P::Margin(Side::Left, length(input)?)),
-        "padding-top" => one(P::Padding(Side::Top, length(input)?)),
-        "padding-right" => one(P::Padding(Side::Right, length(input)?)),
-        "padding-bottom" => one(P::Padding(Side::Bottom, length(input)?)),
-        "padding-left" => one(P::Padding(Side::Left, length(input)?)),
         "page-break-before" | "break-before" => one(P::BreakBefore(page_break(input)?)),
         "page-break-after" | "break-after" => one(P::BreakAfter(page_break(input)?)),
         "page-break-inside" | "break-inside" => one(P::BreakInsideAvoid(ident(input)?.starts_with("avoid"))),
@@ -469,18 +505,16 @@ fn property(name: &str, input: &mut Parser) -> Option<Vec<Property>> {
             Some("super") => VerticalAlign::Super,
             _ => VerticalAlign::Baseline,
         })),
-        "list-style-type" | "list-style" => one(P::ListStyle(match ident(input)?.as_str() {
-            "none" => ListStyle::None,
-            "disc" => ListStyle::Disc,
-            "circle" => ListStyle::Circle,
-            "square" => ListStyle::Square,
-            "decimal" | "decimal-leading-zero" => ListStyle::Decimal,
-            "lower-alpha" | "lower-latin" => ListStyle::LowerAlpha,
-            "upper-alpha" | "upper-latin" => ListStyle::UpperAlpha,
-            "lower-roman" => ListStyle::LowerRoman,
-            "upper-roman" => ListStyle::UpperRoman,
-            _ => return None,
-        })),
+        "list-style" => {
+            // Any order; the first ident that names a marker type wins (position/image ignored).
+            let mut found = None;
+            while let Some(w) = ident(input) {
+                found = found.or(list_style(&w));
+            }
+            input.try_parse(|i| i.next().map(|_| ()).map_err(|_| ())).ok();
+            one(P::ListStyle(found?))
+        }
+        "list-style-type" => one(P::ListStyle(list_style(&ident(input)?)?)),
         "text-transform" => one(P::TextTransform(match ident(input)?.as_str() {
             "uppercase" => TextTransform::Uppercase,
             "lowercase" => TextTransform::Lowercase,
@@ -497,6 +531,21 @@ fn property(name: &str, input: &mut Parser) -> Option<Vec<Property>> {
         "height" => one(P::Height(length(input)?)),
         _ => None,
     }
+}
+
+fn list_style(name: &str) -> Option<ListStyle> {
+    Some(match name {
+        "none" => ListStyle::None,
+        "disc" => ListStyle::Disc,
+        "circle" => ListStyle::Circle,
+        "square" => ListStyle::Square,
+        "decimal" | "decimal-leading-zero" => ListStyle::Decimal,
+        "lower-alpha" | "lower-latin" => ListStyle::LowerAlpha,
+        "upper-alpha" | "upper-latin" => ListStyle::UpperAlpha,
+        "lower-roman" => ListStyle::LowerRoman,
+        "upper-roman" => ListStyle::UpperRoman,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -530,6 +579,37 @@ mod tests {
         assert!(h1[0].important);
         assert!(rules[2].declarations.is_empty(), "invalid declaration skipped, rule kept");
         assert_eq!(rules[4].declarations[0].property, Property::Margin(Side::Left, Length::Em(2.0)));
+    }
+
+    #[test]
+    fn media_queries_for_a_monochrome_kf8_screen() {
+        for (q, expected) in [
+            ("", true),
+            ("all", true),
+            ("screen", true),
+            ("amzn-kf8", true),
+            ("print", false),
+            ("amzn-mobi", false),
+            ("not amzn-mobi", true),
+            ("not print", true),
+            ("not all and (color)", true),
+            ("screen and (monochrome)", true),
+            ("only screen and (min-width: 600px)", true),
+            ("(color)", false),
+            ("print, amzn-kf8", true),
+        ] {
+            assert_eq!(media_applies(q), expected, "{q:?}");
+        }
+    }
+
+    #[test]
+    fn font_shorthand_keywords_and_css_wide_values() {
+        let d = parse_declarations("font: bold x-large Georgia, serif; font-style: inherit; list-style: square inside");
+        assert!(d.contains(&Declaration { property: Property::FontWeight(700), important: false }));
+        assert!(d.iter().any(|d| d.property == Property::FontSize(FontSize::Keyword(1.5))));
+        assert!(d.iter().any(|d| d.property == Property::LineHeight(LineHeight::Normal)), "shorthand resets it");
+        assert!(!d.iter().any(|d| d.property == Property::Italic(false) && d.important), "inherit dropped");
+        assert!(d.iter().any(|d| d.property == Property::ListStyle(ListStyle::Square)));
     }
 
     #[test]

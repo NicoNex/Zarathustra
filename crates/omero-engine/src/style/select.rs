@@ -333,8 +333,12 @@ impl selectors::Element for El<'_> {
 
 /// Parses a selector list such as `p.first, blockquote > p`; `None` if any part is invalid.
 pub fn parse(css: &str) -> Option<SelectorList> {
-    let mut parser = cssparser::Parser::new(css);
-    SelectorList::parse(&BookParser, &mut parser, selectors::parser::ParseRelative::No).ok()
+    parse_from(&mut cssparser::Parser::new(css))
+}
+
+/// Same as [`parse`], from a rule prelude already being tokenized.
+pub fn parse_from(input: &mut cssparser::Parser) -> Option<SelectorList> {
+    SelectorList::parse(&BookParser, input, selectors::parser::ParseRelative::No).ok()
 }
 
 /// Highest specificity among the selectors in `list` that match `el`; `None` if none match.
