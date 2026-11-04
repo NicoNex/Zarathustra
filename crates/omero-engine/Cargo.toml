@@ -9,3 +9,7 @@ harfrust = "0.15"
 skrifa = "0.49"
 zeno = "0.3"
 omero-device = { path = "../omero-device" }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"
+percent-encoding = "2"
+thiserror = "2"
