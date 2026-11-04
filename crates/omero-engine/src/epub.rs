@@ -51,6 +51,7 @@ pub struct TocEntry {
 
 #[derive(Debug, Clone)]
 struct ManifestItem {
+    id: String,
     path: String,
     media_type: String,
     properties: String,
@@ -76,23 +77,25 @@ impl<R: Read + Seek> Epub<R> {
             .to_string();
         let opf = parse(&mut archive, &opf_path)?;
 
-        let manifest: HashMap<&str, ManifestItem> = opf
+        // Document order matters for the fallbacks below (first match wins, deterministically).
+        let manifest: Vec<ManifestItem> = opf
             .find_all(Dom::ROOT, "item")
             .filter_map(|n| {
-                let item = ManifestItem {
+                Some(ManifestItem {
+                    id: opf.attr(n, "id")?.to_string(),
                     path: resolve(&opf_path, opf.attr(n, "href")?),
                     media_type: opf.attr(n, "media-type").unwrap_or_default().to_string(),
                     properties: opf.attr(n, "properties").unwrap_or_default().to_string(),
-                };
-                Some((opf.attr(n, "id")?, item))
+                })
             })
             .collect();
+        let by_id: HashMap<&str, &ManifestItem> = manifest.iter().map(|i| (i.id.as_str(), i)).collect();
 
         let spine_node = opf.find(Dom::ROOT, "spine").ok_or(EpubError::Missing("spine"))?;
         let spine = opf
             .find_all(spine_node, "itemref")
             .filter_map(|n| {
-                let item = manifest.get(opf.attr(n, "idref")?)?;
+                let item = by_id.get(opf.attr(n, "idref")?)?;
                 Some(SpineItem {
                     path: item.path.clone(),
                     media_type: item.media_type.clone(),
@@ -102,13 +105,13 @@ impl<R: Read + Seek> Epub<R> {
             .collect();
 
         let metadata = read_metadata(&opf);
-        let cover = find_cover(&opf, &manifest);
+        let cover = find_cover(&opf, &manifest, &by_id);
 
-        let nav = manifest.values().find(|i| has_token(&i.properties, "nav")).map(|i| i.path.clone());
+        let nav = manifest.iter().find(|i| has_token(&i.properties, "nav")).map(|i| i.path.clone());
         let ncx = opf
             .attr(spine_node, "toc")
-            .and_then(|id| manifest.get(id))
-            .or_else(|| manifest.values().find(|i| i.media_type == "application/x-dtbncx+xml"))
+            .and_then(|id| by_id.get(id).copied())
+            .or_else(|| manifest.iter().find(|i| i.media_type == "application/x-dtbncx+xml"))
             .map(|i| i.path.clone());
         let mut toc = Vec::new();
         // ponytail: a broken nav/NCX just leaves the TOC empty; the book still opens.
@@ -139,22 +142,34 @@ impl<R: Read + Seek> Epub<R> {
 }
 
 fn read<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> Result<Vec<u8>, EpubError> {
-    let mut file = archive.by_name(path)?;
-    let mut buf = Vec::with_capacity(file.size() as usize);
-    file.read_to_end(&mut buf)?;
+    let file = archive.by_name(path)?;
+    // The header's size is untrusted: cap both the reservation and the bytes read.
+    let mut buf = Vec::with_capacity(file.size().min(16 << 20) as usize);
+    file.take(MAX_MEMBER).read_to_end(&mut buf)?;
     Ok(buf)
 }
 
 fn parse<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> Result<Dom, EpubError> {
     let bytes = read(archive, path)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| EpubError::Encoding { path: path.into() })?;
-    Dom::parse_xml(text.trim_start_matches('\u{feff}')).map_err(|source| EpubError::Xml { path: path.into(), source })
+    Dom::parse_xml(text).map_err(|source| EpubError::Xml { path: path.into(), source })
 }
 
+/// Largest archive member we read into memory (big images, embedded fonts).
+const MAX_MEMBER: u64 = 64 << 20;
+
 /// Resolves `href` (relative to the file at `base`) to a normalized archive path.
+/// External URLs (`https:`, `mailto:`…) are returned unchanged.
 pub fn resolve(base: &str, href: &str) -> String {
+    if href.split_once(':').is_some_and(|(scheme, _)| scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+')) {
+        return href.to_string();
+    }
     let (href, fragment) = href.split_once('#').map_or((href, None), |(h, f)| (h, Some(f)));
     let href = percent_decode_str(href).decode_utf8_lossy();
+    if href.is_empty() {
+        // A bare `#fragment` points into the base document itself.
+        return fragment.map_or_else(|| base.to_string(), |f| format!("{base}#{f}"));
+    }
     let mut parts: Vec<&str> = match base.rsplit_once('/') {
         Some((dir, _)) if !href.starts_with('/') => dir.split('/').collect(),
         _ => Vec::new(),
@@ -198,7 +213,14 @@ fn read_metadata(opf: &Dom) -> Metadata {
     });
     Metadata {
         title: first("title"),
-        authors: opf.find_all(meta, "creator").map(|n| opf.text(n)).filter(|t| !t.is_empty()).collect(),
+        // Illustrators, editors, translators (opf:role other than "aut") are not authors.
+        // ponytail: EPUB3 `refines … property="role"` is not read yet.
+        authors: opf
+            .find_all(meta, "creator")
+            .filter(|&n| opf.attr(n, "role").is_none_or(|r| r == "aut"))
+            .map(|n| opf.text(n))
+            .filter(|t| !t.is_empty())
+            .collect(),
         language: first("language"),
         identifier: first("identifier"),
         series: collection.map(|n| opf.text(n)).or_else(|| meta_content("calibre:series").map(String::from)),
@@ -207,18 +229,18 @@ fn read_metadata(opf: &Dom) -> Metadata {
     }
 }
 
-fn find_cover(opf: &Dom, manifest: &HashMap<&str, ManifestItem>) -> Option<String> {
+fn find_cover(opf: &Dom, manifest: &[ManifestItem], by_id: &HashMap<&str, &ManifestItem>) -> Option<String> {
     let is_image = |i: &&ManifestItem| i.media_type.starts_with("image/");
     // EPUB3 property, then EPUB2 <meta name="cover" content="id">, then a manifest id or file name hint.
     manifest
-        .values()
+        .iter()
         .find(|i| has_token(&i.properties, "cover-image"))
         .or_else(|| {
-            let id = opf.find_all(Dom::ROOT, "meta").find(|&n| opf.attr(n, "name") == Some("cover"))?;
-            manifest.get(opf.attr(id, "content")?).filter(is_image)
+            let meta = opf.find_all(Dom::ROOT, "meta").find(|&n| opf.attr(n, "name") == Some("cover"))?;
+            by_id.get(opf.attr(meta, "content")?).copied().filter(is_image)
         })
-        .or_else(|| manifest.iter().find(|(id, i)| id.contains("cover") && is_image(i)).map(|(_, i)| i))
-        .or_else(|| manifest.values().filter(is_image).find(|i| i.path.to_lowercase().contains("cover")))
+        .or_else(|| manifest.iter().filter(is_image).find(|i| i.id.contains("cover")))
+        .or_else(|| manifest.iter().filter(is_image).find(|i| i.path.to_ascii_lowercase().contains("cover")))
         .map(|i| i.path.clone())
 }
 
@@ -255,7 +277,7 @@ fn ncx_toc(dom: &Dom, parent: NodeId, path: &str) -> Vec<TocEntry> {
     dom.children(parent)
         .filter(|&n| dom.name(n) == Some("navPoint"))
         .map(|np| TocEntry {
-            title: dom.find(np, "navLabel").map(|l| dom.text(l)).unwrap_or_default(),
+            title: dom.children(np).find(|&c| dom.name(c) == Some("navLabel")).map(|l| dom.text(l)).unwrap_or_default(),
             target: dom
                 .children(np)
                 .find(|&c| dom.name(c) == Some("content"))
@@ -353,6 +375,8 @@ pub(crate) mod tests {
         assert_eq!(resolve("OEBPS/text/a.xhtml", "../img/b.png"), "OEBPS/img/b.png");
         assert_eq!(resolve("content.opf", "x%20y.html#f"), "x y.html#f");
         assert_eq!(resolve("a/b.opf", "/root.css"), "root.css");
+        assert_eq!(resolve("OEBPS/nav.xhtml", "#ch3"), "OEBPS/nav.xhtml#ch3");
+        assert_eq!(resolve("OEBPS/nav.xhtml", "https://example.com/x"), "https://example.com/x");
     }
 }
 

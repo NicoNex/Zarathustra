@@ -3,6 +3,7 @@
 //! Names are local (namespace prefixes stripped). Text nodes remember their byte
 //! offset in the source file, the anchor for stable reading positions.
 
+use quick_xml::escape::resolve_html5_entity;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::XmlVersion;
@@ -13,8 +14,15 @@ pub struct NodeId(u32);
 #[derive(Debug)]
 pub enum NodeKind {
     Document,
-    Element { name: Box<str>, attrs: Vec<(Box<str>, Box<str>)> },
-    Text { text: Box<str>, offset: u32 },
+    Element {
+        name: Box<str>,
+        attrs: Vec<(Box<str>, Box<str>)>,
+    },
+    /// `String` so entity-split runs grow in place while parsing.
+    Text {
+        text: String,
+        offset: u32,
+    },
 }
 
 #[derive(Debug)]
@@ -122,50 +130,64 @@ impl Dom {
 
     /// Concatenated text of the subtree, ASCII whitespace collapsed (no-break spaces kept).
     pub fn text(&self, id: NodeId) -> String {
-        let mut s = String::new();
+        let mut out = String::new();
+        let mut pending_space = false;
         for n in std::iter::once(id).chain(self.descendants(id)) {
-            if let NodeKind::Text { text, .. } = &self.node(n).kind {
-                s.push_str(text);
+            let NodeKind::Text { text, .. } = &self.node(n).kind else { continue };
+            for (i, word) in text.split(|c: char| c.is_ascii_whitespace()).enumerate() {
+                pending_space |= i > 0;
+                if word.is_empty() {
+                    continue;
+                }
+                if pending_space && !out.is_empty() {
+                    out.push(' ');
+                }
+                pending_space = false;
+                out.push_str(word);
             }
         }
-        s.split(|c: char| c.is_ascii_whitespace()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+        out
     }
 
-    /// Parses well-formed XML/XHTML. HTML named entities beyond XML's five
-    /// (`&nbsp;`, `&mdash;`…) are resolved too, since EPUBs use them without a DTD.
+    /// Parses well-formed XML/XHTML. All HTML5 named entities (`&nbsp;`, `&mdash;`…) are
+    /// resolved, since EPUBs use them without a DTD. A leading BOM is skipped; text
+    /// offsets still count from the start of `src`.
     pub fn parse_xml(src: &str) -> Result<Dom, ParseError> {
         let mut dom = Dom::new();
-        let mut reader = Reader::from_str(src);
-        let mut stack = vec![Dom::ROOT];
+        let body = src.trim_start_matches('\u{feff}');
+        let bom = (src.len() - body.len()) as u32;
+        let mut reader = Reader::from_str(body);
+        let mut cur = Dom::ROOT;
         let err = |reader: &Reader<&[u8]>, e: &dyn std::fmt::Display| ParseError {
             position: reader.error_position(),
             message: e.to_string(),
         };
         loop {
-            let offset = reader.buffer_position() as u32;
+            let offset = bom + reader.buffer_position() as u32;
             let event = reader.read_event().map_err(|e| err(&reader, &e))?;
-            let top = *stack.last().expect("root is never popped");
             match event {
                 Event::Start(e) => {
                     let kind = element(&e).map_err(|e| err(&reader, &e))?;
-                    stack.push(dom.append(top, kind));
+                    cur = dom.append(cur, kind);
                 }
                 Event::Empty(e) => {
                     let kind = element(&e).map_err(|e| err(&reader, &e))?;
-                    dom.append(top, kind);
+                    dom.append(cur, kind);
                 }
-                Event::End(_) => {
-                    if stack.len() > 1 {
-                        stack.pop();
-                    }
-                }
-                Event::Text(t) => push_text(&mut dom, top, &t.xml_content(XmlVersion::Implicit1_0), offset),
-                Event::CData(t) => push_text(&mut dom, top, &t.into_inner(), offset),
+                Event::End(_) => cur = dom.parent(cur).unwrap_or(Dom::ROOT),
+                Event::Text(t) => push_text(&mut dom, cur, &t.xml_content(XmlVersion::Implicit1_0), offset),
+                Event::CData(t) => push_text(&mut dom, cur, &t.into_inner(), offset),
                 Event::GeneralRef(r) => {
-                    let name = r.xml_content(XmlVersion::Implicit1_0);
-                    let resolved =
-                        resolve_entity(&name).ok_or_else(|| err(&reader, &format!("unknown entity &{name};")))?;
-                    push_text(&mut dom, top, &resolved, offset);
+                    let mut utf8 = [0; 4];
+                    let text = match r.resolve_char_ref().map_err(|e| err(&reader, &e))? {
+                        Some(c) => &*c.encode_utf8(&mut utf8),
+                        None => {
+                            let name = r.xml_content(XmlVersion::Implicit1_0);
+                            resolve_html5_entity(&name)
+                                .ok_or_else(|| err(&reader, &format!("unknown entity &{name};")))?
+                        }
+                    };
+                    push_text(&mut dom, cur, text, offset);
                 }
                 Event::Eof => break,
                 _ => {}
@@ -175,106 +197,31 @@ impl Dom {
     }
 }
 
-fn local(name: &str) -> &str {
-    name.rsplit_once(':').map_or(name, |(_, l)| l)
-}
-
 fn element(e: &BytesStart) -> Result<NodeKind, quick_xml::Error> {
     let mut attrs = Vec::new();
     for a in e.attributes().with_checks(false) {
         let a = a.map_err(quick_xml::Error::from)?;
-        let key = a.key.as_ref();
-        // Keep epub:type and xml:lang distinguishable; drop other namespace declarations.
-        let key = match key {
-            "epub:type" | "xml:lang" => key,
+        // Keep epub:type and xml:lang distinguishable; drop namespace declarations.
+        // ponytail: matches the conventional `epub:` prefix only, not other prefixes bound to the OPS namespace.
+        let key = match a.key.as_ref() {
+            k @ ("epub:type" | "xml:lang") => k,
             k if k.starts_with("xmlns") => continue,
-            k => local(k),
+            _ => a.key.local_name().into_inner(),
         };
-        attrs.push((key.into(), a.normalized_value_with(XmlVersion::Implicit1_0, 1, named_entity)?.into()));
+        attrs.push((key.into(), a.normalized_value_with(XmlVersion::Implicit1_0, 1, resolve_html5_entity)?.into()));
     }
-    Ok(NodeKind::Element { name: local(e.name().as_ref()).into(), attrs })
+    Ok(NodeKind::Element { name: e.name().local_name().into_inner().into(), attrs })
 }
 
 /// Appends text, merging with a preceding text sibling (entities split text into events).
 fn push_text(dom: &mut Dom, parent: NodeId, text: &str, offset: u32) {
     if let Some(last) = dom.node(parent).last_child {
         if let NodeKind::Text { text: prev, .. } = &mut dom.nodes[last.0 as usize].kind {
-            let mut merged = String::with_capacity(prev.len() + text.len());
-            merged.push_str(prev);
-            merged.push_str(text);
-            *prev = merged.into();
+            prev.push_str(text);
             return;
         }
     }
     dom.append(parent, NodeKind::Text { text: text.into(), offset });
-}
-
-/// Numeric references plus [`named_entity`].
-fn resolve_entity(name: &str) -> Option<String> {
-    if let Some(num) = name.strip_prefix('#') {
-        let code = match num.strip_prefix(['x', 'X']) {
-            Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-            None => num.parse().ok()?,
-        };
-        return char::from_u32(code).map(String::from);
-    }
-    named_entity(name).map(String::from)
-}
-
-/// XML's predefined entities and the HTML entities common in books.
-// ponytail: common subset; add more names when a real book needs them.
-fn named_entity(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "lt" => "<",
-        "gt" => ">",
-        "amp" => "&",
-        "quot" => "\"",
-        "apos" => "'",
-        "nbsp" => "\u{a0}",
-        "shy" => "\u{ad}",
-        "ensp" => "\u{2002}",
-        "emsp" => "\u{2003}",
-        "thinsp" => "\u{2009}",
-        "zwnj" => "\u{200c}",
-        "zwj" => "\u{200d}",
-        "ndash" => "–",
-        "mdash" => "—",
-        "lsquo" => "‘",
-        "rsquo" => "’",
-        "sbquo" => "‚",
-        "ldquo" => "“",
-        "rdquo" => "”",
-        "bdquo" => "„",
-        "laquo" => "«",
-        "raquo" => "»",
-        "hellip" => "…",
-        "bull" => "•",
-        "middot" => "·",
-        "copy" => "©",
-        "reg" => "®",
-        "trade" => "™",
-        "deg" => "°",
-        "times" => "×",
-        "divide" => "÷",
-        "sect" => "§",
-        "para" => "¶",
-        "dagger" => "†",
-        "Dagger" => "‡",
-        "prime" => "′",
-        "Prime" => "″",
-        "euro" => "€",
-        "pound" => "£",
-        "agrave" => "à",
-        "egrave" => "è",
-        "eacute" => "é",
-        "igrave" => "ì",
-        "ograve" => "ò",
-        "ugrave" => "ù",
-        "Agrave" => "À",
-        "Egrave" => "È",
-        "Eacute" => "É",
-        _ => return None,
-    })
 }
 
 #[cfg(test)]
@@ -324,6 +271,7 @@ mod tests {
     #[test]
     fn malformed_xml_is_an_error() {
         assert!(Dom::parse_xml("<p>&bogus;</p>").is_err());
+        assert!(Dom::parse_xml("<p>&ouml;&rarr;</p>").is_ok(), "full HTML5 entity table");
         assert!(Dom::parse_xml("<p><b></p>").is_err());
     }
 }
