@@ -4,7 +4,7 @@
 //! top-left corner = exit, middle = draw with your finger; a tap in the
 //! middle's left/right third turns the "page" with the hardware swipe.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use omero_device::{Canvas, Device, Event, Phase, Rect, Refresh, Swipe, Waveform};
@@ -13,6 +13,8 @@ const BAND: i32 = 220;
 const EXIT: i32 = 160;
 const DOT: i32 = 24;
 const TAP_SLOP: i32 = 30;
+/// Quit after this long without input, so nobody gets stuck in the probe.
+const IDLE_EXIT: Duration = Duration::from_secs(60);
 
 fn draw_page(c: &mut Canvas, inverted: bool) {
     let (w, h) = (c.width, c.height);
@@ -50,7 +52,11 @@ fn run(dev: &mut dyn Device) -> Result<()> {
     let mut start = (0, 0);
     loop {
         events.clear();
-        dev.wait_events(None, &mut events)?;
+        dev.wait_events(Some(IDLE_EXIT), &mut events)?;
+        if events.is_empty() {
+            eprintln!("idle for {IDLE_EXIT:?}, exiting");
+            return Ok(());
+        }
         let t0 = Instant::now();
         // Everything drawn in this batch goes out as one refresh: the panel is slower than the touch rate.
         let mut dirty = Rect::default();
@@ -61,7 +67,10 @@ fn run(dev: &mut dyn Device) -> Result<()> {
             };
             let in_middle = t.y >= BAND && t.y < h - BAND;
             match t.phase {
-                Phase::Down if t.x < EXIT && t.y < EXIT => return Ok(()),
+                Phase::Down if t.x < EXIT && t.y < EXIT => {
+                    eprintln!("exit corner");
+                    return Ok(());
+                }
                 Phase::Down if !in_middle => {
                     if let Some(l) = dev.light() {
                         let l = l.step(t.y < BAND, if t.x < w / 2 { -10 } else { 10 });

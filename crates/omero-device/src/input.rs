@@ -175,6 +175,15 @@ impl TouchPanel {
             else {
                 continue;
             };
+            // ponytail: bring-up log for touch calibration; drop once transforms are verified per model.
+            eprintln!(
+                "touch {}: x {}..{} y {}..{} {transform:?}",
+                path.display(),
+                ax.minimum,
+                ax.maximum,
+                ay.minimum,
+                ay.maximum
+            );
             return Ok(TouchPanel {
                 file,
                 decoder: MtDecoder::default(),
@@ -213,7 +222,11 @@ impl TouchPanel {
             }
         }
         for t in &mut out[start..] {
+            let raw = (t.x, t.y);
             (t.x, t.y) = self.map(t.x, t.y);
+            if t.phase == Phase::Down {
+                eprintln!("touch down raw={raw:?} screen=({}, {})", t.x, t.y); // ponytail: bring-up log
+            }
         }
         Ok(())
     }
