@@ -9,7 +9,7 @@ use omero_device::{Canvas, Rect, Refresh, Waveform};
 use omero_engine::dom::Dom;
 use omero_engine::font::{draw_glyph, Face, Rasterizer};
 use omero_engine::layout::hyphen::Hyphenators;
-use omero_engine::layout::paragraph::{layout, Params2, Run};
+use omero_engine::layout::paragraph::{LayoutParams, Run, Typesetter};
 use omero_engine::style::cascade::{compute, Preferences, Stylesheets};
 use omero_engine::style::css::TextAlign;
 
@@ -21,7 +21,7 @@ watery part of the world. It is a way I have of driving off the spleen and regul
 const MARGIN: i32 = 90;
 
 /// One justified paragraph through the real engine: Knuth–Plass, hyphenation, protrusion.
-fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i32, hyph: &mut Hyphenators) -> i32 {
+fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i32, ts: &mut Typesetter) -> i32 {
     let dom = Dom::parse_xml("<p>x</p>").expect("static markup");
     let prefs = Preferences {
         font_size: size,
@@ -33,9 +33,9 @@ fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i3
     };
     let style = compute(&dom, &Stylesheets::default(), &prefs).into_iter().flatten().last().expect("p styled");
     let runs = [Run { text: TEXT, style: &style, face, lang: Some("en") }];
-    let params = Params2 { measure: prefs.page_width, indent: size * 1.5, align: TextAlign::Justify };
+    let params = LayoutParams { measure: prefs.page_width, indent: size * 1.5, align: TextAlign::Justify };
     let mut y = top as f32;
-    for line in layout(&runs, &params, hyph) {
+    for line in ts.layout(&runs, &params) {
         let baseline = y + line.baseline;
         for g in &line.glyphs {
             let (gx, glyph) = r.glyph(face, g.gid, g.size, MARGIN as f32 + g.x);
@@ -49,11 +49,11 @@ fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i3
 fn render(c: &mut Canvas, fonts: &[Face], size: f32, contrast: f32) {
     c.fill(c.bounds(), 255);
     let mut r = Rasterizer::new(contrast);
-    let mut hyph = Hyphenators::new(hyph_dir());
+    let mut ts = Typesetter::new(Hyphenators::new(hyph_dir()));
     let mut y = MARGIN;
     let t = Instant::now();
     for face in fonts {
-        y = paragraph(c, &mut r, face, size, y, &mut hyph);
+        y = paragraph(c, &mut r, face, size, y, &mut ts);
     }
     eprintln!("typeset {} fonts in {:?}", fonts.len(), t.elapsed());
 }

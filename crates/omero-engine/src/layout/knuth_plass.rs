@@ -14,6 +14,11 @@ pub enum Item {
 }
 
 impl Item {
+    /// Natural width this item contributes to a line it sits inside.
+    pub fn width(&self) -> f32 {
+        self.metrics().w as f32
+    }
+
     /// What this item contributes to a line it sits inside.
     fn metrics(&self) -> Sums {
         match *self {
