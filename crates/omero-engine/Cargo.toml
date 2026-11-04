@@ -16,3 +16,5 @@ thiserror = "2"
 cssparser = "0.38"
 selectors = "0.42"
 precomputed-hash = "0.1"
+hyphenation = { version = "0.8", features = ["embed_all"] }
+icu_segmenter = "2"
