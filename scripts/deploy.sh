@@ -7,12 +7,15 @@ set -e
 cd "$(dirname "$0")/.."
 cargo build --release --target armv7-unknown-linux-musleabihf -p omero
 BIN=target/armv7-unknown-linux-musleabihf/release
+BINS="omero-probe omero-textprobe"
 
 if [ -n "$KINDLE_HOST" ]; then
 	k() { ssh -p "${KINDLE_PORT:-2222}" -o BatchMode=yes "root@$KINDLE_HOST" "$@"; }
 	k 'mkdir -p /mnt/us/omero/bin /mnt/us/extensions/omero'
 	# No scp/sftp assumptions: stream files through ssh.
-	k 'cat > /mnt/us/omero/bin/omero-probe.new && chmod +x /mnt/us/omero/bin/omero-probe.new && mv /mnt/us/omero/bin/omero-probe.new /mnt/us/omero/bin/omero-probe' <"$BIN/omero-probe"
+	for b in $BINS; do
+		k "cat > /mnt/us/omero/bin/$b.new && chmod +x /mnt/us/omero/bin/$b.new && mv /mnt/us/omero/bin/$b.new /mnt/us/omero/bin/$b" <"$BIN/$b"
+	done
 	for f in dist/kual/omero/*; do
 		k "cat > /mnt/us/extensions/omero/$(basename "$f")" <"$f"
 	done
@@ -24,7 +27,7 @@ else
 	KINDLE="${KINDLE:-/run/media/$USER/Kindle}"
 	[ -d "$KINDLE" ] || { echo "Kindle not mounted at $KINDLE (or set KINDLE_HOST)" >&2; exit 1; }
 	mkdir -p "$KINDLE/omero/bin" "$KINDLE/extensions/omero"
-	cp "$BIN/omero-probe" "$KINDLE/omero/bin/"
+	for b in $BINS; do cp "$BIN/$b" "$KINDLE/omero/bin/"; done
 	cp dist/kual/omero/* "$KINDLE/extensions/omero/"
 	sync
 	echo "Deployed to $KINDLE. Eject, then KUAL → Omero."

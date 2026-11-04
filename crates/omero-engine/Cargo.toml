@@ -1,0 +1,11 @@
+[package]
+name = "omero-engine"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+harfrust = "0.15"
+skrifa = "0.49"
+zeno = "0.3"
+omero-device = { path = "../omero-device" }

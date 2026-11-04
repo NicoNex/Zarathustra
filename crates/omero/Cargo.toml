@@ -13,4 +13,9 @@ emulator = ["omero-device/emulator"]
 
 [dependencies]
 omero-device = { path = "../omero-device" }
+omero-engine = { path = "../omero-engine" }
 anyhow = "1"
+
+[[bin]]
+name = "omero-textprobe"
+path = "src/bin/textprobe.rs"

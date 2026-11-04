@@ -169,7 +169,7 @@ Export: Markdown and JSON per book or all books (`/mnt/us/omero-exports/`).
 
 ## 9. Fonts
 
-- Sources: `/mnt/us/fonts` (user, USB-visible) + system fonts from the profile (Bookerly on Kindle). Default: Bookerly.
+- Sources: `/mnt/us/fonts` (user, USB-visible) + system fonts from the profile. On Kindle `/usr/java/lib/fonts` adds Bookerly, Baskerville, Palatino, Caecilia, Futura, Helvetica and OpenDyslexic. UI, symbol and CJK system fonts (Amazon Ember, Kindle_Symbol, STSong…) are filtered out of the reading-font list. Default: Bookerly.
 - Scan on start and on USB unplug, indexed by `skrifa` name table: typographic family (name ID 16/1), style, weight, italic, variable axes. Classified serif/sans via OS/2 `sFamilyClass`/PANOSE.
 - **Fonts screen**: 2-column grid of family cards, each rendered in its own face ("Aa" + name), with style count / "Variable" badge, filter chips (All, Serif, Sans, Publisher), and a "Publisher font" card (use embedded book fonts). Weight fine-tune: the `wght` axis on variable fonts, synthetic emboldening otherwise. This matters on e-ink.
 
@@ -182,6 +182,14 @@ Export: Markdown and JSON per book or all books (`/mnt/us/omero-exports/`).
 ## 11. Quick settings (swipe down from top edge)
 
 Rounded panel: date/time, battery + estimated days left. Tiles (4×2): Wi-Fi, Auto warmth, Dark mode (inverted rendering), Rotate, Refresh screen, Screenshot, Sleep timer, Settings. Two 64 px pill sliders: Brightness, Warmth (with AUTO badge). A day bar shows the warm schedule.
+
+## 11b. Sleep screen
+
+When the device suspends (power button, sleep timer, or idle timeout), Omero draws the sleep screen first, refreshes it with a full flash, waits for the marker, then calls `Device::suspend`. No ads, ever: Omero owns the power button because the Amazon framework is stopped.
+
+- Default: the cover of the book being read, scaled to fit, centered on white, with a light gray-level tone map tuned for e-ink. Fallback when there is no cover: title + author typeset in the book font.
+- Options (Settings): book cover / plain (blank screen with the time it went to sleep) / a random image from `/mnt/us/omero/sleep/`.
+- The sleep image is pre-rendered when the book opens, so suspend doesn't wait on decoding.
 
 ## 12. Visual language
 
