@@ -24,7 +24,8 @@ if [ -n "$KINDLE_HOST" ]; then
 else
 	KINDLE="${KINDLE:-/run/media/$USER/Kindle}"
 	[ -d "$KINDLE" ] || { echo "Kindle not mounted at $KINDLE (or set KINDLE_HOST)" >&2; exit 1; }
-	bundle | tar -xf - -C "$KINDLE" --no-same-owner
+	# VFAT: no ownership, permissions or mtimes to restore.
+	bundle | tar -xf - -C "$KINDLE" --no-same-owner --no-same-permissions -m
 	sync
 	echo "Deployed to $KINDLE. Eject, then KUAL → Omero."
 fi

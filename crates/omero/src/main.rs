@@ -50,10 +50,14 @@ fn run(dev: &mut dyn Device) -> Result<()> {
 
     let mut events = Vec::new();
     let mut start = (0, 0);
+    let mut last_input = Instant::now();
     loop {
         events.clear();
         dev.wait_events(Some(IDLE_EXIT), &mut events)?;
-        if events.is_empty() {
+        // Empty batches also come from EINTR or frames without touches, so time idleness explicitly.
+        if !events.is_empty() {
+            last_input = Instant::now();
+        } else if last_input.elapsed() >= IDLE_EXIT {
             eprintln!("idle for {IDLE_EXIT:?}, exiting");
             return Ok(());
         }

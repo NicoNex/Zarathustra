@@ -126,7 +126,8 @@ impl OutlinePen for ZenoPen<'_> {
 /// so layout never depends on hinting.
 pub struct Rasterizer {
     glyphs: HashMap<GlyphKey, Glyph>,
-    hinting: HashMap<(u32, u32), HintingInstance>,
+    /// `None` when the font can't be hinted; such glyphs are drawn unhinted.
+    hinting: HashMap<(u32, u32), Option<HintingInstance>>,
     path: Vec<Command>,
     /// Coverage curve: values > 1 darken stems, which thin e-ink text needs.
     lut: [u8; 256],
@@ -142,14 +143,17 @@ impl Rasterizer {
         Rasterizer { glyphs: HashMap::new(), hinting: HashMap::new(), path: Vec::new(), lut }
     }
 
-    pub fn glyph(&mut self, face: &Face, gid: u32, size: f32, x: f32) -> &Glyph {
-        let subpixel = ((x.fract() * SUBPIXEL_STEPS as f32) as u32).min(SUBPIXEL_STEPS - 1);
+    /// The glyph for pen position `x`, and the integer x to draw it at: `x` is rounded to the
+    /// nearest quarter pixel, whose fraction is baked into the cached bitmap.
+    pub fn glyph(&mut self, face: &Face, gid: u32, size: f32, x: f32) -> (i32, &Glyph) {
+        let q = (x * SUBPIXEL_STEPS as f32).round() as i32;
+        let (ix, subpixel) = (q.div_euclid(SUBPIXEL_STEPS as i32), q.rem_euclid(SUBPIXEL_STEPS as i32) as u32);
         let key = GlyphKey { face: face.id, gid, size: (size * 64.0).round() as u32, subpixel };
         if !self.glyphs.contains_key(&key) {
             let glyph = self.render(face, key, size);
             self.glyphs.insert(key, glyph);
         }
-        &self.glyphs[&key]
+        (ix, &self.glyphs[&key])
     }
 
     fn render(&mut self, face: &Face, key: GlyphKey, size: f32) -> Glyph {
@@ -166,13 +170,15 @@ impl Rasterizer {
                     preserve_linear_metrics: true,
                 },
             };
-            HintingInstance::new(&outlines, Size::new(size), LocationRef::default(), options)
-                .expect("autohinter always available")
+            HintingInstance::new(&outlines, Size::new(size), LocationRef::default(), options).ok()
         });
         self.path.clear();
         let mut pen = ZenoPen { path: &mut self.path, dx: key.subpixel as f32 / SUBPIXEL_STEPS as f32 };
-        let drawn = outline.draw(DrawSettings::hinted(hinting, false), &mut pen).is_ok()
-            || outline.draw(DrawSettings::unhinted(Size::new(size), LocationRef::default()), &mut pen).is_ok();
+        let hinted = hinting.as_ref().is_some_and(|h| outline.draw(DrawSettings::hinted(h, false), &mut pen).is_ok());
+        let drawn = hinted || {
+            pen.path.clear(); // drop whatever a failed hinted draw emitted
+            outline.draw(DrawSettings::unhinted(Size::new(size), LocationRef::default()), &mut pen).is_ok()
+        };
         if !drawn || self.path.is_empty() {
             return empty;
         }
@@ -225,7 +231,8 @@ mod tests {
         assert!(width > 60.0 && width < 120.0, "width {width}");
 
         let mut r = Rasterizer::new(1.0);
-        let g = r.glyph(&face, glyphs[0].gid, 32.0, 0.0);
+        let (x, g) = r.glyph(&face, glyphs[0].gid, 32.0, 9.9);
+        assert_eq!(x, 10, "9.9 rounds to the next whole pixel");
         assert!(g.width > 5 && g.height > 5 && g.top < 0, "glyph above baseline");
         assert!(g.coverage.contains(&255));
     }

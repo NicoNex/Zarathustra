@@ -48,9 +48,8 @@ fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i3
         let mut x = MARGIN as f32;
         for w in &words[i..j] {
             for g in w {
-                let gx = x + g.x_offset;
-                let glyph = r.glyph(face, g.gid, size, gx);
-                draw_glyph(c, glyph, gx.floor() as i32, y - g.y_offset.round() as i32, 0);
+                let (gx, glyph) = r.glyph(face, g.gid, size, x + g.x_offset);
+                draw_glyph(c, glyph, gx, y - g.y_offset.round() as i32, 0);
                 x += g.x_advance;
             }
             x += gap;
@@ -106,5 +105,11 @@ fn main() -> Result<()> {
     let m =
         dev.refresh(&Refresh { rect: Rect::new(0, 0, w, h), waveform: Waveform::Full, flash: true, swipe: None })?;
     dev.wait_refresh(m)?;
+    // Keep the page up (run.sh restarts the Amazon UI as soon as we exit) until a tap or a minute passes.
+    let deadline = Instant::now() + std::time::Duration::from_secs(60);
+    let mut events = Vec::new();
+    while Instant::now() < deadline && events.is_empty() {
+        dev.wait_events(Some(deadline - Instant::now()), &mut events)?;
+    }
     Ok(())
 }
