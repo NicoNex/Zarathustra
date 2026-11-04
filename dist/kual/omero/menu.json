@@ -1,0 +1,17 @@
+{
+	"items": [
+	{
+		"name": "Omero",
+		"priority": 0,
+		"items": [
+		{
+			"name": "Hardware probe",
+			"priority": 1,
+			"action": "/mnt/us/extensions/omero/run.sh",
+			"params": "omero-probe",
+			"status": false
+		}
+		]
+	}
+	]
+}

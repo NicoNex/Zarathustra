@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/omero-device", "crates/omero"]
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-or-later"
+version = "0.1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

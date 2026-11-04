@@ -1,0 +1,16 @@
+[package]
+name = "omero"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "omero-probe"
+path = "src/main.rs"
+
+[features]
+emulator = ["omero-device/emulator"]
+
+[dependencies]
+omero-device = { path = "../omero-device" }
+anyhow = "1"
