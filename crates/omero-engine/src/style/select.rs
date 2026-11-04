@@ -36,7 +36,8 @@ impl Hash for Atom {
 
 impl From<&str> for Atom {
     fn from(s: &str) -> Atom {
-        // FNV-1a: cheap and good enough for the selector bloom filter.
+        // FNV-1a, required by the selectors crate's bounds.
+        // ponytail: no ancestor bloom filter yet (matching passes None); wire one if cascade profiling asks.
         let hash = s.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
         Atom { s: s.into(), hash }
     }
@@ -108,17 +109,61 @@ pub type SelectorList = selectors::SelectorList<BookSelectors>;
 
 pub struct BookParser;
 
+const OPS_NS: &str = "http://www.idpf.org/2007/ops";
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+
+/// Dynamic states a static book never has: valid CSS that simply never matches.
+const NEVER_PSEUDO_CLASSES: &[&str] = &[
+    "hover",
+    "active",
+    "focus",
+    "focus-within",
+    "focus-visible",
+    "visited",
+    "target",
+    "checked",
+    "disabled",
+    "enabled",
+    "indeterminate",
+    "default",
+    "invalid",
+    "valid",
+    "required",
+    "optional",
+    "read-only",
+    "read-write",
+];
+const NEVER_PSEUDO_ELEMENTS: &[&str] =
+    &["before", "after", "first-line", "first-letter", "marker", "selection", "placeholder"];
+
 impl<'i> selectors::parser::Parser<'i> for BookParser {
     type Impl = BookSelectors;
     type Error = SelectorParseErrorKind;
 
-    fn parse_non_ts_pseudo_class(&self, _name: &str) -> Result<Never, ParseError<Self::Error>> {
-        Ok(Never)
+    // Unknown names invalidate the whole selector list, as CSS requires.
+    fn parse_non_ts_pseudo_class(&self, name: &str) -> Result<Never, ParseError<Self::Error>> {
+        known(NEVER_PSEUDO_CLASSES, name)
     }
 
-    fn parse_pseudo_element(&self, _name: &str) -> Result<Never, ParseError<Self::Error>> {
-        Ok(Never)
+    fn parse_pseudo_element(&self, name: &str) -> Result<Never, ParseError<Self::Error>> {
+        known(NEVER_PSEUDO_ELEMENTS, name)
     }
+
+    fn namespace_for_prefix(&self, prefix: &Atom) -> Option<Atom> {
+        match prefix.as_ref() {
+            "epub" => Some(OPS_NS.into()),
+            "xml" => Some(XML_NS.into()),
+            _ => None,
+        }
+    }
+}
+
+fn known(names: &[&str], name: &str) -> Result<Never, ParseError<SelectorParseErrorKind>> {
+    names
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(name))
+        .then_some(Never)
+        .ok_or_else(|| ParseError::custom(SelectorParseErrorKind::UnsupportedPseudoClassOrElement))
 }
 
 /// An element of a [`Dom`] as seen by the selector matcher.
@@ -146,6 +191,16 @@ impl<'a> El<'a> {
 
     fn attr(&self, name: &str) -> Option<&'a str> {
         self.dom.attr(self.id, name)
+    }
+
+    /// Case-insensitive lookup: selectors lowercase attribute names, SVG keeps `viewBox`.
+    fn attr_ci(&self, name: &str) -> Option<&'a str> {
+        self.attr(name).or_else(|| match self.dom.kind(self.id) {
+            NodeKind::Element { attrs, .. } => {
+                attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| &**v)
+            }
+            _ => None,
+        })
     }
 }
 
@@ -204,11 +259,20 @@ impl selectors::Element for El<'_> {
 
     fn attr_matches(
         &self,
-        _ns: &NamespaceConstraint<&Atom>,
+        ns: &NamespaceConstraint<&Atom>,
         local_name: &Atom,
         operation: &AttrSelectorOperation<&Atom>,
     ) -> bool {
-        self.attr(local_name.as_ref()).is_some_and(|v| operation.eval_str(v))
+        // The DOM keeps `epub:type` and `xml:lang` prefixed; everything else is a bare local name.
+        let name = local_name.as_ref();
+        let prefixed = |p: &str| self.attr_ci(&format!("{p}:{name}"));
+        let value = match ns {
+            NamespaceConstraint::Specific(url) if url.as_ref() == OPS_NS => prefixed("epub"),
+            NamespaceConstraint::Specific(url) if url.as_ref() == XML_NS => prefixed("xml"),
+            NamespaceConstraint::Specific(_) => self.attr_ci(name),
+            NamespaceConstraint::Any => self.attr_ci(name).or_else(|| prefixed("epub")).or_else(|| prefixed("xml")),
+        };
+        value.is_some_and(|v| operation.eval_str(v))
     }
 
     fn match_non_ts_pseudo_class(&self, _pc: &Never, _context: &mut MatchingContext<BookSelectors>) -> bool {
@@ -222,7 +286,8 @@ impl selectors::Element for El<'_> {
     fn apply_selector_flags(&self, _flags: ElementSelectorFlags) {}
 
     fn is_link(&self) -> bool {
-        self.dom.name(self.id) == Some("a") && self.attr("href").is_some()
+        self.dom.name(self.id).is_some_and(|n| ["a", "area", "link"].iter().any(|l| n.eq_ignore_ascii_case(l)))
+            && self.attr("href").is_some()
     }
 
     fn is_html_slot_element(&self) -> bool {
@@ -266,13 +331,13 @@ impl selectors::Element for El<'_> {
     }
 }
 
-/// Parses a selector list such as `p.first, blockquote > p`.
+/// Parses a selector list such as `p.first, blockquote > p`; `None` if any part is invalid.
 pub fn parse(css: &str) -> Option<SelectorList> {
     let mut parser = cssparser::Parser::new(css);
     SelectorList::parse(&BookParser, &mut parser, selectors::parser::ParseRelative::No).ok()
 }
 
-/// Specificity of each selector in the list, in the order `matches` reports.
+/// Highest specificity among the selectors in `list` that match `el`; `None` if none match.
 pub fn matches(list: &SelectorList, el: El, caches: &mut selectors::context::SelectorCaches) -> Option<u32> {
     let mut ctx = MatchingContext::new(
         selectors::matching::MatchingMode::Normal,
@@ -322,6 +387,20 @@ mod tests {
         assert_eq!(el_matching(&dom, "P#P2"), Vec::<String>::new(), "ids are case-sensitive");
         assert_eq!(el_matching(&dom, "P"), ["p1", "p2", "p3", "p4"], "type selectors are not");
         assert_eq!(el_matching(&dom, "p:hover, a::before"), Vec::<String>::new());
+        assert!(parse("p:frist-child, h1").is_none(), "unknown pseudo-class invalidates the list");
+    }
+
+    #[test]
+    fn matches_epub_namespaced_attributes() {
+        let dom = Dom::parse_xml(
+            r#"<html xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="it-IT"><body>
+            <aside id="n" epub:type="footnote rearnote">x</aside><svg id="s" viewBox="0 0 1 1"/></body></html>"#,
+        )
+        .expect("parses");
+        assert_eq!(el_matching(&dom, "aside[epub|type~=footnote]"), ["n"]);
+        assert_eq!(el_matching(&dom, "[*|type~=rearnote]"), ["n"]);
+        assert_eq!(el_matching(&dom, "[xml|lang|=it]").len(), 1);
+        assert_eq!(el_matching(&dom, "svg[viewBox]"), ["s"]);
     }
 
     #[test]

@@ -31,7 +31,14 @@ struct Node {
     parent: Option<NodeId>,
     first_child: Option<NodeId>,
     last_child: Option<NodeId>,
+    prev_sibling: Option<NodeId>,
     next_sibling: Option<NodeId>,
+}
+
+impl Node {
+    fn new(kind: NodeKind, parent: Option<NodeId>, prev_sibling: Option<NodeId>) -> Node {
+        Node { kind, parent, first_child: None, last_child: None, prev_sibling, next_sibling: None }
+    }
 }
 
 #[derive(Debug)]
@@ -50,9 +57,7 @@ impl Dom {
     pub const ROOT: NodeId = NodeId(0);
 
     fn new() -> Dom {
-        let root =
-            Node { kind: NodeKind::Document, parent: None, first_child: None, last_child: None, next_sibling: None };
-        Dom { nodes: vec![root] }
+        Dom { nodes: vec![Node::new(NodeKind::Document, None, None)] }
     }
 
     fn node(&self, id: NodeId) -> &Node {
@@ -61,8 +66,9 @@ impl Dom {
 
     fn append(&mut self, parent: NodeId, kind: NodeKind) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
-        self.nodes.push(Node { kind, parent: Some(parent), first_child: None, last_child: None, next_sibling: None });
-        match self.node(parent).last_child {
+        let prev = self.node(parent).last_child;
+        self.nodes.push(Node::new(kind, Some(parent), prev));
+        match prev {
             Some(last) => self.nodes[last.0 as usize].next_sibling = Some(id),
             None => self.nodes[parent.0 as usize].first_child = Some(id),
         }
@@ -83,9 +89,7 @@ impl Dom {
     }
 
     pub fn prev_sibling(&self, id: NodeId) -> Option<NodeId> {
-        // ponytail: O(siblings) walk; add prev links if selector matching shows up in profiles.
-        let first = self.node(self.node(id).parent?).first_child?;
-        std::iter::successors(Some(first), |&c| self.node(c).next_sibling).take_while(|&c| c != id).last()
+        self.node(id).prev_sibling
     }
 
     pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
