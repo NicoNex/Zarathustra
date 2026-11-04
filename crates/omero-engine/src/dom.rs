@@ -82,6 +82,12 @@ impl Dom {
         self.node(id).next_sibling
     }
 
+    pub fn prev_sibling(&self, id: NodeId) -> Option<NodeId> {
+        // ponytail: O(siblings) walk; add prev links if selector matching shows up in profiles.
+        let first = self.node(self.node(id).parent?).first_child?;
+        std::iter::successors(Some(first), |&c| self.node(c).next_sibling).take_while(|&c| c != id).last()
+    }
+
     pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         std::iter::successors(self.node(id).first_child, |&c| self.node(c).next_sibling)
     }

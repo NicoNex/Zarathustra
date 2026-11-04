@@ -13,3 +13,6 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = { version = "0.42", features = ["escape-html"] }
 percent-encoding = "2"
 thiserror = "2"
+cssparser = "0.38"
+selectors = "0.42"
+precomputed-hash = "0.1"
