@@ -37,11 +37,20 @@ pub struct Params {
     pub double_hyphen: f32,
     /// Extra demerits when adjacent lines differ by more than one fitness class.
     pub fitness_mismatch: f32,
+    /// TeX's \emergencystretch: background stretch added to every line, for a last pass
+    /// that must succeed (lines with a single word have no glue of their own).
+    pub emergency_stretch: f32,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { tolerance: 2.0, line_penalty: 10.0, double_hyphen: 3000.0, fitness_mismatch: 100.0 }
+        Params {
+            tolerance: 2.0,
+            line_penalty: 10.0,
+            double_hyphen: 3000.0,
+            fitness_mismatch: 100.0,
+            emergency_stretch: 0.0,
+        }
     }
 }
 
@@ -121,8 +130,8 @@ struct Node {
 /// Finds optimal breaks. `widths[i]` is the measure of line `i`; the last entry applies to
 /// all later lines. The last item must be a forced break (`Penalty { cost: -INFINITY }`).
 /// Returns `None` when no breaking is feasible at `p.tolerance`; callers retry looser.
-// ponytail: no TeX emergency-stretch pass or final-hyphen demerits; the caller's looser retry
-// (and its greedy fallback) cover pathological paragraphs.
+// ponytail: no final-hyphen demerits; callers retry looser (with emergency stretch) and fall
+// back to greedy for pathological paragraphs.
 pub fn breaks(items: &[Item], widths: &[f32], p: &Params) -> Option<Vec<Break>> {
     if items.is_empty() {
         return Some(Vec::new());
@@ -181,7 +190,7 @@ pub fn breaks(items: &[Item], widths: &[f32], p: &Params) -> Option<Vec<Break>> 
             let ai = active[i];
             let a = nodes[ai];
             let line = prefix[b] - a.sums;
-            let ratio = adjustment(line.w + pen_width, line.y, line.z, measure(a.line));
+            let ratio = adjustment(line.w + pen_width, line.y + p.emergency_stretch as f64, line.z, measure(a.line));
 
             // Overfull lines and forced breaks end this active node's reach.
             if ratio >= -1.0 && !forced {

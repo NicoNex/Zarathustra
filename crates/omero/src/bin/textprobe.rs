@@ -6,7 +6,12 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use omero_device::{Canvas, Rect, Refresh, Waveform};
-use omero_engine::font::{draw_glyph, Face, Rasterizer, ShapedGlyph};
+use omero_engine::dom::Dom;
+use omero_engine::font::{draw_glyph, Face, Rasterizer};
+use omero_engine::layout::hyphen::Hyphenators;
+use omero_engine::layout::paragraph::{layout, Params2, Run};
+use omero_engine::style::cascade::{compute, Preferences, Stylesheets};
+use omero_engine::style::css::TextAlign;
 
 const TEXT: &str = "Call me Ishmael. Some years ago—never mind how long precisely—having little or no money \
 in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the \
@@ -15,60 +20,52 @@ watery part of the world. It is a way I have of driving off the spleen and regul
 
 const MARGIN: i32 = 90;
 
-/// Greedy, justified paragraph; enough to judge glyph quality (real line breaking comes later).
-fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i32) -> i32 {
-    let m = face.line_metrics(size);
-    let line_h = (size * 1.5).round() as i32;
-    let width = (c.width - 2 * MARGIN) as f32;
-    let mut space = Vec::new();
-    face.shape(" ", size, Some("en"), &mut space);
-    let space_w = space.first().map_or(size / 4.0, |g| g.x_advance);
-
-    let words: Vec<Vec<ShapedGlyph>> = TEXT
-        .split(' ')
-        .map(|w| {
-            let mut g = Vec::new();
-            face.shape(w, size, Some("en"), &mut g);
-            g
-        })
-        .collect();
-    let adv = |w: &[ShapedGlyph]| w.iter().map(|g| g.x_advance).sum::<f32>();
-
-    let mut y = top + m.ascent.round() as i32;
-    let mut i = 0;
-    while i < words.len() {
-        let (mut j, mut used) = (i, 0.0);
-        while j < words.len() && used + adv(&words[j]) + if j > i { space_w } else { 0.0 } <= width {
-            used += adv(&words[j]) + if j > i { space_w } else { 0.0 };
-            j += 1;
+/// One justified paragraph through the real engine: Knuth–Plass, hyphenation, protrusion.
+fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i32, hyph: &mut Hyphenators) -> i32 {
+    let dom = Dom::parse_xml("<p>x</p>").expect("static markup");
+    let prefs = Preferences {
+        font_size: size,
+        font_family: None,
+        line_height: Some(1.5),
+        justify: Some(true),
+        hyphenate: true,
+        page_width: (c.width - 2 * MARGIN) as f32,
+    };
+    let style = compute(&dom, &Stylesheets::default(), &prefs).into_iter().flatten().last().expect("p styled");
+    let runs = [Run { text: TEXT, style: &style, face, lang: Some("en") }];
+    let params = Params2 { measure: prefs.page_width, indent: size * 1.5, align: TextAlign::Justify };
+    let mut y = top as f32;
+    for line in layout(&runs, &params, hyph) {
+        let baseline = y + line.baseline;
+        for g in &line.glyphs {
+            let (gx, glyph) = r.glyph(face, g.gid, g.size, MARGIN as f32 + g.x);
+            draw_glyph(c, glyph, gx, (baseline + g.y).round() as i32, 0);
         }
-        let j = j.max(i + 1);
-        let last = j == words.len();
-        let gap = if last || j - i < 2 { space_w } else { space_w + (width - used) / (j - i - 1) as f32 };
-        let mut x = MARGIN as f32;
-        for w in &words[i..j] {
-            for g in w {
-                let (gx, glyph) = r.glyph(face, g.gid, size, x + g.x_offset);
-                draw_glyph(c, glyph, gx, y - g.y_offset.round() as i32, 0);
-                x += g.x_advance;
-            }
-            x += gap;
-        }
-        y += line_h;
-        i = j;
+        y += line.height;
     }
-    y - m.ascent.round() as i32 + line_h / 2
+    (y + size) as i32
 }
 
 fn render(c: &mut Canvas, fonts: &[Face], size: f32, contrast: f32) {
     c.fill(c.bounds(), 255);
     let mut r = Rasterizer::new(contrast);
+    let mut hyph = Hyphenators::new(hyph_dir());
     let mut y = MARGIN;
     let t = Instant::now();
     for face in fonts {
-        y = paragraph(c, &mut r, face, size, y);
+        y = paragraph(c, &mut r, face, size, y, &mut hyph);
     }
     eprintln!("typeset {} fonts in {:?}", fonts.len(), t.elapsed());
+}
+
+/// Hyphenation dictionaries: next to the binary on the device, the repo's assets on a dev machine.
+fn hyph_dir() -> std::path::PathBuf {
+    let device = std::path::Path::new("/mnt/us/omero/hyph");
+    if device.exists() {
+        device.into()
+    } else {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/hyphenation").into()
+    }
 }
 
 fn main() -> Result<()> {
