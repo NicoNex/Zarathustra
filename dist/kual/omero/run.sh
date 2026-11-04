@@ -13,7 +13,8 @@ trap "" TERM
 stop lab126_gui
 usleep 1250000
 trap - TERM
-trap restore EXIT INT TERM
+trap restore EXIT
+trap "exit 1" INT TERM
 
 lipc-set-prop com.lab126.powerd preventScreenSaver 1
 "$BIN" >"$LOG" 2>&1

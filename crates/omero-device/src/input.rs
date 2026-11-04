@@ -4,7 +4,10 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::mem::size_of;
 use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+
+use crate::sys::{ioc, ioctl, IOC_READ};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -24,6 +27,7 @@ pub struct Touch {
 const EV_SYN: u16 = 0;
 const EV_ABS: u16 = 3;
 const SYN_REPORT: u16 = 0;
+const SYN_DROPPED: u16 = 3;
 const ABS_MT_SLOT: u16 = 0x2f;
 const ABS_MT_POSITION_X: u16 = 0x35;
 const ABS_MT_POSITION_Y: u16 = 0x36;
@@ -47,6 +51,8 @@ const EMPTY_SLOT: Slot = Slot { id: -1, down_id: -1, x: 0, y: 0, dirty: false };
 pub struct MtDecoder {
     slots: Vec<Slot>,
     cur: usize,
+    /// After `SYN_DROPPED`, events are discarded until the next `SYN_REPORT`.
+    dropping: bool,
 }
 
 impl MtDecoder {
@@ -60,23 +66,41 @@ impl MtDecoder {
     }
 
     pub fn feed(&mut self, ty: u16, code: u16, value: i32, out: &mut Vec<Touch>) {
+        if self.dropping {
+            self.dropping = !(ty == EV_SYN && code == SYN_REPORT);
+            return;
+        }
         match (ty, code) {
             // ponytail: slot index is trusted; the kernel bounds it by the device's slot count.
             (EV_ABS, ABS_MT_SLOT) => self.cur = value.clamp(0, 63) as usize,
             (EV_ABS, ABS_MT_TRACKING_ID) => self.slot().id = value,
             (EV_ABS, ABS_MT_POSITION_X) => self.slot().x = value,
             (EV_ABS, ABS_MT_POSITION_Y) => self.slot().y = value,
+            (EV_SYN, SYN_DROPPED) => {
+                // Kernel queue overflowed: end every contact so none stays stuck down.
+                // ponytail: no EVIOCGMTSLOTS resync; a finger still down reappears as Down on its next move.
+                for s in self.slots.iter_mut().filter(|s| s.down_id >= 0) {
+                    out.push(Touch { id: s.down_id, phase: Phase::Up, x: s.x, y: s.y });
+                    *s = Slot { down_id: -1, dirty: false, ..*s };
+                }
+                self.dropping = true;
+            }
             (EV_SYN, SYN_REPORT) => {
                 for s in self.slots.iter_mut().filter(|s| s.dirty) {
                     s.dirty = false;
-                    let (phase, id) = match (s.id >= 0, s.down_id >= 0) {
-                        (true, false) => (Phase::Down, s.id),
-                        (true, true) => (Phase::Move, s.id),
-                        (false, true) => (Phase::Up, s.down_id),
-                        (false, false) => continue,
-                    };
+                    let (x, y) = (s.x, s.y);
+                    match (s.id >= 0, s.down_id >= 0) {
+                        (true, false) => out.push(Touch { id: s.id, phase: Phase::Down, x, y }),
+                        (true, true) if s.id == s.down_id => out.push(Touch { id: s.id, phase: Phase::Move, x, y }),
+                        // A new contact replaced the old one within a single frame.
+                        (true, true) => {
+                            out.push(Touch { id: s.down_id, phase: Phase::Up, x, y });
+                            out.push(Touch { id: s.id, phase: Phase::Down, x, y });
+                        }
+                        (false, true) => out.push(Touch { id: s.down_id, phase: Phase::Up, x, y }),
+                        (false, false) => {}
+                    }
                     s.down_id = s.id;
-                    out.push(Touch { id, phase, x: s.x, y: s.y });
                 }
             }
             _ => {}
@@ -104,29 +128,12 @@ struct RawEvent {
     value: i32,
 }
 
-#[repr(C)]
-#[derive(Default)]
-struct AbsInfo {
-    value: i32,
-    minimum: i32,
-    maximum: i32,
-    fuzz: i32,
-    flat: i32,
-    resolution: i32,
-}
-
-const fn ioc(dir: u32, ty: u8, nr: u32, size: usize) -> libc::c_ulong {
-    ((dir << 30) | ((size as u32) << 16) | ((ty as u32) << 8) | nr) as libc::c_ulong
-}
-const IOC_READ: u32 = 2;
-
-fn abs_info(fd: RawFd, axis: u16) -> io::Result<AbsInfo> {
-    let mut info = AbsInfo::default();
-    let req = ioc(IOC_READ, b'E', 0x40 + axis as u32, size_of::<AbsInfo>());
+fn abs_info(fd: RawFd, axis: u16) -> io::Result<libc::input_absinfo> {
+    // SAFETY: input_absinfo is plain old data; all-zero is valid.
+    let mut info: libc::input_absinfo = unsafe { std::mem::zeroed() };
+    let req = ioc(IOC_READ, b'E', 0x40 + axis as u32, size_of::<libc::input_absinfo>());
     // SAFETY: EVIOCGABS writes one input_absinfo into `info`.
-    if unsafe { libc::ioctl(fd, req as _, &mut info) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    unsafe { ioctl(fd, req, &mut info)? };
     Ok(info)
 }
 
@@ -134,7 +141,7 @@ fn has_mt_position(fd: RawFd) -> bool {
     let mut bits = [0u8; 8]; // ABS_MAX (0x3f) + 1 bits
     let req = ioc(IOC_READ, b'E', 0x20 + EV_ABS as u32, bits.len());
     // SAFETY: EVIOCGBIT writes at most `bits.len()` bytes.
-    let ok = unsafe { libc::ioctl(fd, req as _, bits.as_mut_ptr()) } >= 0;
+    let ok = unsafe { ioctl(fd, req, bits.as_mut_ptr()) }.is_ok();
     ok && bits[(ABS_MT_POSITION_X / 8) as usize] & (1 << (ABS_MT_POSITION_X % 8)) != 0
 }
 
@@ -163,8 +170,11 @@ impl TouchPanel {
             if !has_mt_position(file.as_raw_fd()) {
                 continue;
             }
-            let ax = abs_info(file.as_raw_fd(), ABS_MT_POSITION_X)?;
-            let ay = abs_info(file.as_raw_fd(), ABS_MT_POSITION_Y)?;
+            let (Ok(ax), Ok(ay)) =
+                (abs_info(file.as_raw_fd(), ABS_MT_POSITION_X), abs_info(file.as_raw_fd(), ABS_MT_POSITION_Y))
+            else {
+                continue;
+            };
             return Ok(TouchPanel {
                 file,
                 decoder: MtDecoder::default(),
@@ -197,6 +207,10 @@ impl TouchPanel {
                 let ev: RawEvent = unsafe { std::ptr::read_unaligned(chunk.as_ptr().cast()) };
                 self.decoder.feed(ev.ty, ev.code, ev.value, out);
             }
+            // evdev fills the buffer while events are queued; a short read means drained.
+            if n < buf.len() {
+                break;
+            }
         }
         for t in &mut out[start..] {
             (t.x, t.y) = self.map(t.x, t.y);
@@ -206,11 +220,8 @@ impl TouchPanel {
 
     fn map(&self, x: i32, y: i32) -> (i32, i32) {
         let t = self.transform;
-        let (mut x, mut y, rx, ry) = if t.swap_xy {
-            (y, x, self.range_y, self.range_x)
-        } else {
-            (x, y, self.range_x, self.range_y)
-        };
+        let (mut x, mut y, rx, ry) =
+            if t.swap_xy { (y, x, self.range_y, self.range_x) } else { (x, y, self.range_x, self.range_y) };
         let scale = |v: i32, (lo, hi): (i32, i32), len: i32| {
             ((v - lo) as i64 * (len - 1) as i64 / (hi - lo).max(1) as i64) as i32
         };
@@ -225,8 +236,6 @@ impl TouchPanel {
         (x, y)
     }
 }
-
-use std::os::unix::fs::OpenOptionsExt;
 
 #[cfg(test)]
 mod tests {
@@ -281,6 +290,34 @@ mod tests {
         ]);
         let phases: Vec<_> = out.iter().map(|t| (t.id, t.phase)).collect();
         assert_eq!(phases, vec![(1, Phase::Down), (2, Phase::Down), (1, Phase::Up)]);
+    }
+
+    #[test]
+    fn contact_replaced_within_one_frame_is_up_then_down() {
+        let out = run(&[
+            (EV_ABS, ABS_MT_TRACKING_ID, 7),
+            SYN,
+            (EV_ABS, ABS_MT_TRACKING_ID, -1),
+            (EV_ABS, ABS_MT_TRACKING_ID, 8),
+            SYN,
+        ]);
+        let phases: Vec<_> = out.iter().map(|t| (t.id, t.phase)).collect();
+        assert_eq!(phases, vec![(7, Phase::Down), (7, Phase::Up), (8, Phase::Down)]);
+    }
+
+    #[test]
+    fn syn_dropped_releases_contacts_and_skips_to_next_report() {
+        let out = run(&[
+            (EV_ABS, ABS_MT_TRACKING_ID, 7),
+            SYN,
+            (EV_SYN, SYN_DROPPED, 0),
+            (EV_ABS, ABS_MT_POSITION_X, 99), // discarded
+            SYN,
+            (EV_ABS, ABS_MT_POSITION_X, 5),
+            SYN,
+        ]);
+        let phases: Vec<_> = out.iter().map(|t| (t.id, t.phase, t.x)).collect();
+        assert_eq!(phases, vec![(7, Phase::Down, 0), (7, Phase::Up, 0), (7, Phase::Down, 5)]);
     }
 
     #[test]

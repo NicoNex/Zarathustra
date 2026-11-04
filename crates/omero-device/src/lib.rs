@@ -4,6 +4,7 @@ pub mod canvas;
 pub mod geom;
 pub mod input;
 pub mod kindle;
+mod sys;
 pub mod sysfs;
 
 #[cfg(feature = "emulator")]
@@ -53,6 +54,19 @@ pub struct Light {
     pub warmth: Option<u8>,
 }
 
+impl Light {
+    /// Moves brightness (or warmth) by `delta` percent, clamped to 0–100.
+    pub fn step(mut self, warmth: bool, delta: i16) -> Light {
+        let step = |v: u8| (v as i16 + delta).clamp(0, 100) as u8;
+        if warmth {
+            self.warmth = self.warmth.map(step);
+        } else {
+            self.brightness = step(self.brightness);
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u8,
@@ -69,6 +83,8 @@ pub enum Event {
 pub trait Device {
     fn name(&self) -> &str;
     fn dpi(&self) -> u32;
+    /// Screen size in pixels.
+    fn size(&self) -> (i32, i32);
     fn canvas(&mut self) -> Canvas<'_>;
     /// Submits a refresh; returns a marker for [`Device::wait_refresh`].
     fn refresh(&mut self, r: &Refresh) -> io::Result<u32>;
@@ -79,4 +95,12 @@ pub trait Device {
     fn light(&self) -> Option<Light>;
     fn set_light(&mut self, light: Light) -> io::Result<()>;
     fn battery(&self) -> Option<Battery>;
+}
+
+/// The backend this build targets: the desktop emulator with the `emulator` feature, else the Kindle.
+pub fn open_default() -> io::Result<Box<dyn Device>> {
+    #[cfg(feature = "emulator")]
+    return Ok(Box::new(emulator::Emulator::new()?));
+    #[cfg(not(feature = "emulator"))]
+    return Ok(Box::new(kindle::Kindle::open()?));
 }

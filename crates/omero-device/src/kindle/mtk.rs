@@ -6,6 +6,7 @@ use std::io;
 use std::mem::size_of;
 use std::os::fd::AsRawFd;
 
+use crate::sys::{ioc, ioctl, IOC_READ, IOC_WRITE};
 use crate::{Canvas, Rect, Refresh, Swipe, Waveform};
 
 #[repr(C)]
@@ -58,12 +59,9 @@ struct MarkerData {
     collision_test: u32,
 }
 
-const fn ioc(dir: u32, nr: u32, size: usize) -> u32 {
-    (dir << 30) | ((size as u32) << 16) | ((b'F' as u32) << 8) | nr
-}
-const SEND_UPDATE_MTK: u32 = ioc(1, 0x2E, size_of::<UpdateDataMtk>());
-const WAIT_FOR_UPDATE_COMPLETE: u32 = ioc(3, 0x2F, size_of::<MarkerData>());
-const SET_UPDATE_FLAGS_MTK: u32 = ioc(1, 0x3B, size_of::<u32>());
+const SEND_UPDATE_MTK: u32 = ioc(IOC_WRITE, b'F', 0x2E, size_of::<UpdateDataMtk>());
+const WAIT_FOR_UPDATE_COMPLETE: u32 = ioc(IOC_READ | IOC_WRITE, b'F', 0x2F, size_of::<MarkerData>());
+const SET_UPDATE_FLAGS_MTK: u32 = ioc(IOC_WRITE, b'F', 0x3B, size_of::<u32>());
 
 const WAVEFORM_DU: u32 = 1;
 const WAVEFORM_GC16: u32 = 2;
@@ -106,14 +104,6 @@ const VAR_YOFFSET: usize = 5;
 const VAR_BPP: usize = 6;
 const VAR_ROTATE: usize = 34;
 
-fn ioctl<T>(fd: i32, req: u32, arg: *mut T) -> io::Result<()> {
-    // SAFETY: callers pass a pointer to the struct the request expects.
-    if unsafe { libc::ioctl(fd, req as _, arg) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 pub struct MtkFb {
     file: File,
     map: *mut u8,
@@ -131,10 +121,12 @@ impl MtkFb {
         let file = File::options().read(true).write(true).open(path)?;
         let fd = file.as_raw_fd();
         let mut var = [0u32; 40];
-        ioctl(fd, FBIOGET_VSCREENINFO, var.as_mut_ptr())?;
+        // SAFETY: fb_var_screeninfo is 40 u32s.
+        unsafe { ioctl(fd, FBIOGET_VSCREENINFO, var.as_mut_ptr())? };
         // SAFETY: FixInfo is plain old data; all-zero is valid.
         let mut fix: FixInfo = unsafe { std::mem::zeroed() };
-        ioctl(fd, FBIOGET_FSCREENINFO, &mut fix)?;
+        // SAFETY: FixInfo mirrors fb_fix_screeninfo.
+        unsafe { ioctl(fd, FBIOGET_FSCREENINFO, &mut fix)? };
         if var[VAR_BPP] != 8 {
             // ponytail: 8-bit gray only (what MTK Kindles expose); add a converter if a device needs 16/32 bpp.
             return Err(io::Error::new(io::ErrorKind::Unsupported, format!("{} bpp framebuffer", var[VAR_BPP])));
@@ -160,7 +152,11 @@ impl MtkFb {
         };
         // Keep the driver from silently promoting refreshes to slow REAGL.
         let mut fast = 0x8000_0000u32 | 1;
-        ioctl(fd, SET_UPDATE_FLAGS_MTK, &mut fast)?;
+        // SAFETY: the request takes one u32.
+        if let Err(e) = unsafe { ioctl(fd, SET_UPDATE_FLAGS_MTK, &mut fast) } {
+            // Best effort: refreshes still work, the driver may just pick slower REAGL.
+            eprintln!("MTK fast mode unavailable: {e}");
+        }
         Ok(fb)
     }
 
@@ -208,7 +204,8 @@ impl MtkFb {
             hist_gray_waveform_mode: WAVEFORM_GC16,
             ..Default::default()
         };
-        ioctl(self.file.as_raw_fd(), SEND_UPDATE_MTK, &mut data)?;
+        // SAFETY: UpdateDataMtk mirrors mxcfb_update_data_mtk (size checked in tests).
+        unsafe { ioctl(self.file.as_raw_fd(), SEND_UPDATE_MTK, &mut data)? };
         Ok(self.marker)
     }
 
@@ -217,7 +214,8 @@ impl MtkFb {
             return Ok(());
         }
         let mut data = MarkerData { marker, collision_test: 0 };
-        ioctl(self.file.as_raw_fd(), WAIT_FOR_UPDATE_COMPLETE, &mut data)
+        // SAFETY: MarkerData mirrors mxcfb_update_marker_data.
+        unsafe { ioctl(self.file.as_raw_fd(), WAIT_FOR_UPDATE_COMPLETE, &mut data) }
     }
 }
 

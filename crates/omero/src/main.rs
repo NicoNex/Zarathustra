@@ -31,36 +31,20 @@ fn draw_page(c: &mut Canvas, inverted: bool) {
     let ramp = Rect::new(60, h / 2 - 120, w - 120, 240);
     let step = ramp.w / 16;
     for i in 0..16 {
-        let g = (i * 17) as u8;
-        let g = if inverted { 255 - g } else { g };
+        let g = if inverted { 255 - i * 17 } else { i * 17 } as u8;
         c.fill(Rect::new(ramp.x + i * step, ramp.y, step, ramp.h), g);
     }
 }
 
-fn adjust(dev: &mut dyn Device, warmth: bool, delta: i16) -> Result<()> {
-    let Some(mut l) = dev.light() else { return Ok(()) };
-    let step = |v: u8| (v as i16 + delta).clamp(0, 100) as u8;
-    if warmth {
-        l.warmth = l.warmth.map(step);
-    } else {
-        l.brightness = step(l.brightness);
-    }
-    dev.set_light(l)?;
-    eprintln!("light: {l:?}");
-    Ok(())
-}
-
 fn run(dev: &mut dyn Device) -> Result<()> {
-    let (w, h) = {
-        let c = dev.canvas();
-        (c.width, c.height)
-    };
+    let (w, h) = dev.size();
+    let screen = Rect::new(0, 0, w, h);
     eprintln!("probe: {} {w}x{h} battery={:?} light={:?}", dev.name(), dev.battery(), dev.light());
 
     let mut inverted = false;
     draw_page(&mut dev.canvas(), inverted);
-    let m = dev.refresh(&Refresh { rect: Rect::new(0, 0, w, h), waveform: Waveform::Full, flash: true, swipe: None })?;
-    dev.wait_refresh(m)?;
+    // The last submitted refresh; the framebuffer isn't rewritten under an in-flight full-screen update.
+    let mut marker = dev.refresh(&Refresh { rect: screen, waveform: Waveform::Full, flash: true, swipe: None })?;
 
     let mut events = Vec::new();
     let mut start = (0, 0);
@@ -68,55 +52,62 @@ fn run(dev: &mut dyn Device) -> Result<()> {
         events.clear();
         dev.wait_events(None, &mut events)?;
         let t0 = Instant::now();
-        // Coalesce: only the latest Move matters on a slow panel.
-        let last_move = events.iter().rposition(|e| matches!(e, Event::Touch(t) if t.phase == Phase::Move));
-        for (i, ev) in events.iter().enumerate() {
+        // Everything drawn in this batch goes out as one refresh: the panel is slower than the touch rate.
+        let mut dirty = Rect::default();
+        for ev in &events {
             let t = match ev {
                 Event::Quit => return Ok(()),
                 Event::Touch(t) => *t,
             };
-            if t.phase == Phase::Move && Some(i) != last_move {
-                continue;
-            }
             let in_middle = t.y >= BAND && t.y < h - BAND;
             match t.phase {
-                Phase::Down => {
-                    start = (t.x, t.y);
-                    if t.x < EXIT && t.y < EXIT {
-                        return Ok(());
-                    }
-                    if !in_middle {
-                        adjust(dev, t.y < BAND, if t.x < w / 2 { -10 } else { 10 })?;
-                        continue;
+                Phase::Down if t.x < EXIT && t.y < EXIT => return Ok(()),
+                Phase::Down if !in_middle => {
+                    if let Some(l) = dev.light() {
+                        let l = l.step(t.y < BAND, if t.x < w / 2 { -10 } else { 10 });
+                        dev.set_light(l)?;
+                        eprintln!("light: {l:?}");
                     }
                 }
                 Phase::Up => {
                     let tap = (t.x - start.0).abs() < TAP_SLOP && (t.y - start.1).abs() < TAP_SLOP;
-                    let side = if t.x < w / 3 { Some(Swipe::Right) } else if t.x > 2 * w / 3 { Some(Swipe::Left) } else { None };
+                    let side = match t.x {
+                        x if x < w / 3 => Some(Swipe::Right),
+                        x if x > 2 * w / 3 => Some(Swipe::Left),
+                        _ => None,
+                    };
                     if in_middle && tap && side.is_some() {
+                        dev.wait_refresh(marker)?;
                         inverted = !inverted;
                         draw_page(&mut dev.canvas(), inverted);
-                        let r = Refresh { rect: Rect::new(0, 0, w, h), waveform: Waveform::Text, flash: false, swipe: side };
-                        dev.refresh(&r)?;
+                        marker = dev.refresh(&Refresh {
+                            rect: screen,
+                            waveform: Waveform::Text,
+                            flash: false,
+                            swipe: side,
+                        })?;
+                        dirty = Rect::default();
                         eprintln!("page turn submitted in {:?}", t0.elapsed());
                     }
-                    continue;
                 }
-                Phase::Move if !in_middle => continue,
-                Phase::Move => {}
+                Phase::Down | Phase::Move if in_middle => {
+                    if t.phase == Phase::Down {
+                        start = (t.x, t.y);
+                    }
+                    let dot = Rect::new(t.x - DOT / 2, t.y - DOT / 2, DOT, DOT);
+                    dev.canvas().fill(dot, 0);
+                    dirty = dirty.union(&dot);
+                }
+                Phase::Down | Phase::Move => {}
             }
-            let dot = Rect::new(t.x - DOT / 2, t.y - DOT / 2, DOT, DOT);
-            dev.canvas().fill(dot, 0);
-            dev.refresh(&Refresh { rect: dot, waveform: Waveform::Fast, flash: false, swipe: None })?;
-            eprintln!("dot submitted in {:?}", t0.elapsed());
+        }
+        if !dirty.is_empty() {
+            dev.wait_refresh(marker)?;
+            marker = dev.refresh(&Refresh { rect: dirty, waveform: Waveform::Fast, flash: false, swipe: None })?;
         }
     }
 }
 
 fn main() -> Result<()> {
-    #[cfg(feature = "emulator")]
-    let mut dev = omero_device::emulator::Emulator::new()?;
-    #[cfg(not(feature = "emulator"))]
-    let mut dev = omero_device::kindle::Kindle::open()?;
-    run(&mut dev)
+    run(omero_device::open_default()?.as_mut())
 }

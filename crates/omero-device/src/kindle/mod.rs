@@ -3,10 +3,10 @@
 mod mtk;
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
-use crate::input::{TouchPanel, Transform};
+use crate::input::{Touch, TouchPanel, Transform};
 use crate::sysfs::{self, Led, SysfsLight};
 use crate::{Battery, Canvas, Device, Event, Light, Refresh};
 
@@ -35,7 +35,8 @@ pub struct Kindle {
     fb: mtk::MtkFb,
     touch: TouchPanel,
     light: Option<SysfsLight>,
-    battery: PathBuf,
+    /// Reused across `wait_events` calls.
+    touches: Vec<Touch>,
 }
 
 impl Kindle {
@@ -46,16 +47,12 @@ impl Kindle {
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "unknown Kindle model"))?;
         let fb = mtk::MtkFb::open("/dev/fb0")?;
         let touch = TouchPanel::find(Path::new("/dev/input"), (fb.width, fb.height), model.touch)?;
-        let light = Led::open(model.white_led).ok().map(|white| SysfsLight {
-            white,
-            warm: model.warm_led.and_then(|p| Led::open(p).ok()),
-        });
-        Ok(Kindle { model, fb, touch, light, battery: model.battery.into() })
-    }
-
-    /// Framebuffer facts worth logging while bringing up a new model.
-    pub fn describe(&self) -> String {
-        format!("{} {}x{} rotate={}", self.model.name, self.fb.width, self.fb.height, self.fb.rotate)
+        let light = Led::open(model.white_led)
+            .ok()
+            .map(|white| SysfsLight { white, warm: model.warm_led.and_then(|p| Led::open(p).ok()) });
+        // ponytail: one-time bring-up log; drop once more models are verified.
+        eprintln!("{} {}x{} rotate={}", model.name, fb.width, fb.height, fb.rotate);
+        Ok(Kindle { model, fb, touch, light, touches: Vec::new() })
     }
 }
 
@@ -66,6 +63,10 @@ impl Device for Kindle {
 
     fn dpi(&self) -> u32 {
         self.model.dpi
+    }
+
+    fn size(&self) -> (i32, i32) {
+        (self.fb.width, self.fb.height)
     }
 
     fn canvas(&mut self) -> Canvas<'_> {
@@ -82,15 +83,16 @@ impl Device for Kindle {
 
     fn wait_events(&mut self, timeout: Option<Duration>, out: &mut Vec<Event>) -> io::Result<()> {
         let mut pfd = libc::pollfd { fd: self.touch.fd(), events: libc::POLLIN, revents: 0 };
-        let ms = timeout.map_or(-1, |t| t.as_millis().min(i32::MAX as u128) as i32);
+        // Round up so a sub-millisecond remainder doesn't become a busy-spinning 0.
+        let ms = timeout.map_or(-1, |t| t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32);
         // SAFETY: one valid pollfd.
         if unsafe { libc::poll(&mut pfd, 1, ms) } < 0 {
             let e = io::Error::last_os_error();
             return if e.kind() == io::ErrorKind::Interrupted { Ok(()) } else { Err(e) };
         }
-        let mut touches = Vec::new();
-        self.touch.read(&mut touches)?;
-        out.extend(touches.into_iter().map(Event::Touch));
+        self.touches.clear();
+        self.touch.read(&mut self.touches)?;
+        out.extend(self.touches.iter().copied().map(Event::Touch));
         Ok(())
     }
 
@@ -106,6 +108,6 @@ impl Device for Kindle {
     }
 
     fn battery(&self) -> Option<Battery> {
-        sysfs::battery(&self.battery)
+        sysfs::battery(Path::new(self.model.battery))
     }
 }

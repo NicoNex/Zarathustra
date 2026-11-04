@@ -7,10 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::{Battery, Light};
 
 fn read_int(path: &Path) -> io::Result<i64> {
-    fs::read_to_string(path)?
-        .trim()
-        .parse()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    fs::read_to_string(path)?.trim().parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// One backlight LED (`.../backlight/<name>/{brightness,max_brightness}`).
@@ -47,10 +44,7 @@ pub struct SysfsLight {
 
 impl SysfsLight {
     pub fn get(&self) -> Option<Light> {
-        Some(Light {
-            brightness: self.white.get().ok()?,
-            warmth: self.warm.as_ref().and_then(|w| w.get().ok()),
-        })
+        Some(Light { brightness: self.white.get().ok()?, warmth: self.warm.as_ref().and_then(|w| w.get().ok()) })
     }
 
     pub fn set(&self, light: Light) -> io::Result<()> {
