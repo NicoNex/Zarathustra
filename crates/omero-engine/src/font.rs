@@ -16,7 +16,7 @@ const SUBPIXEL_STEPS: u32 = 4;
 /// One font file at its default instance.
 pub struct Face {
     pub id: u32,
-    bytes: Arc<[u8]>,
+    bytes: Arc<Vec<u8>>,
     shaper: harfrust::Font,
     upem: f32,
 }
@@ -39,10 +39,12 @@ pub struct LineMetrics {
 }
 
 impl Face {
-    pub fn from_bytes(id: u32, bytes: impl Into<Arc<[u8]>>) -> Option<Face> {
-        let bytes: Arc<[u8]> = bytes.into();
+    pub fn from_bytes(id: u32, bytes: Vec<u8>) -> Option<Face> {
+        let bytes = Arc::new(bytes);
         let upem = FontRef::new(&bytes).ok()?.metrics(Size::unscaled(), LocationRef::default()).units_per_em as f32;
-        let shaper = harfrust::Font::new(bytes.to_vec(), 0)?;
+        // Shares the same allocation with the shaper: no second copy of the font in RAM.
+        let shared: Arc<dyn AsRef<[u8]> + Send + Sync> = bytes.clone();
+        let shaper = harfrust::Font::new(shared, 0)?;
         Some(Face { id, bytes, shaper, upem })
     }
 
@@ -51,6 +53,7 @@ impl Face {
     }
 
     /// Shapes one run of text (single script and direction) at `size` pixels per em.
+    // ponytail: fresh harfrust Buffer per call; fine at one call per paragraph run, pool it if profiling says so.
     pub fn shape(&self, text: &str, size: f32, language: Option<&str>, out: &mut Vec<ShapedGlyph>) {
         let mut buffer = Buffer::new();
         buffer.push_str(text);

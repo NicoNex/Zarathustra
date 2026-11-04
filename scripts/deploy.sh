@@ -9,26 +9,22 @@ cargo build --release --target armv7-unknown-linux-musleabihf -p omero
 BIN=target/armv7-unknown-linux-musleabihf/release
 BINS="omero-probe omero-textprobe"
 
+# Stage the device layout (omero/bin/*, extensions/omero/*) and ship it as one tar stream.
+STAGE=target/kindle-stage
+rm -rf "$STAGE" && mkdir -p "$STAGE/omero/bin" "$STAGE/extensions"
+for b in $BINS; do cp "$BIN/$b" "$STAGE/omero/bin/"; done
+cp -r dist/kual/omero "$STAGE/extensions/"
+bundle() { tar -cf - -C "$STAGE" omero extensions; }
+
 if [ -n "$KINDLE_HOST" ]; then
 	k() { ssh -p "${KINDLE_PORT:-2222}" -o BatchMode=yes "root@$KINDLE_HOST" "$@"; }
-	k 'mkdir -p /mnt/us/omero/bin /mnt/us/extensions/omero'
-	# No scp/sftp assumptions: stream files through ssh.
-	for b in $BINS; do
-		k "cat > /mnt/us/omero/bin/$b.new && chmod +x /mnt/us/omero/bin/$b.new && mv /mnt/us/omero/bin/$b.new /mnt/us/omero/bin/$b" <"$BIN/$b"
-	done
-	for f in dist/kual/omero/*; do
-		k "cat > /mnt/us/extensions/omero/$(basename "$f")" <"$f"
-	done
+	bundle | k 'tar -xf - -C /mnt/us'
 	echo "Deployed to $KINDLE_HOST."
-	if [ -n "$1" ]; then
-		k "/mnt/us/extensions/omero/run.sh $1; cat /mnt/us/omero/$1.log"
-	fi
+	[ -z "$1" ] || k "/mnt/us/extensions/omero/run.sh $1; cat /mnt/us/omero/$1.log"
 else
 	KINDLE="${KINDLE:-/run/media/$USER/Kindle}"
 	[ -d "$KINDLE" ] || { echo "Kindle not mounted at $KINDLE (or set KINDLE_HOST)" >&2; exit 1; }
-	mkdir -p "$KINDLE/omero/bin" "$KINDLE/extensions/omero"
-	for b in $BINS; do cp "$BIN/$b" "$KINDLE/omero/bin/"; done
-	cp dist/kual/omero/* "$KINDLE/extensions/omero/"
+	bundle | tar -xf - -C "$KINDLE" --no-same-owner
 	sync
 	echo "Deployed to $KINDLE. Eject, then KUAL → Omero."
 fi
