@@ -72,12 +72,13 @@ impl Dom {
         self.nodes.len()
     }
 
+    /// True when the document node has no children (`len()` still counts the document node).
     pub fn is_empty(&self) -> bool {
         self.nodes.len() <= 1
     }
 
     fn node(&self, id: NodeId) -> &Node {
-        &self.nodes[id.0 as usize]
+        &self.nodes[id.index()]
     }
 
     fn append(&mut self, parent: NodeId, kind: NodeKind) -> NodeId {

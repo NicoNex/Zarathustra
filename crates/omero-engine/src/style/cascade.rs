@@ -6,11 +6,13 @@
 //! the user picks font, size, line height and justification; the publisher keeps structure.
 
 use super::css::{
-    self, Declaration, Display, FontSize, Length, LineHeight, ListStyle, Property, Side, TextAlign, TextTransform,
+    self, Declaration, Display, FontSize, Length, LineHeight, ListStyle, Property, TextAlign, TextTransform,
     VerticalAlign, WhiteSpace,
 };
 use super::select::{self, El};
 use crate::dom::{Dom, NodeId};
+use std::rc::Rc;
+use std::sync::LazyLock;
 
 /// Browser-like defaults tuned for books.
 const USER_AGENT_CSS: &str = r#"
@@ -36,6 +38,11 @@ ul ul, ol ol, ul ol, ol ul { margin: 0 }
 hr { margin: .5em 0 } center, th { text-align: center } td, th { padding: 0 .25em }
 "#;
 
+/// CSS `line-height: normal`.
+const NORMAL_LINE_HEIGHT: f32 = 1.2;
+/// Line height when neither the publisher nor the reader sets one.
+const DEFAULT_LINE_HEIGHT: f32 = 1.4;
+
 /// The reader's choices, applied over publisher styles.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preferences {
@@ -48,20 +55,32 @@ pub struct Preferences {
     /// `Some(true)` justifies body text, `Some(false)` ragged-right, `None` as published.
     pub justify: Option<bool>,
     pub hyphenate: bool,
-    /// Width of the text area in device pixels (for percentages).
+    /// Width of the text area in device pixels.
     pub page_width: f32,
+}
+
+/// Specified line height as CSS inherits it: factors scale with each element's font size,
+/// lengths stay absolute.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineSpec {
+    Factor(f32),
+    Px(f32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
-    pub font_family: Vec<String>,
+    /// Shared: a refcount bump per element, not a copy.
+    pub font_family: Rc<[String]>,
+    /// The family is monospace (code), which the reader font doesn't replace.
+    pub monospace: bool,
     /// Device pixels.
     pub font_size: f32,
     pub italic: bool,
     pub font_weight: u16,
     pub small_caps: bool,
-    /// Device pixels.
+    pub line_spec: LineSpec,
+    /// Device pixels, resolved from `line_spec`.
     pub line_height: f32,
     pub text_align: TextAlign,
     pub text_indent: f32,
@@ -79,18 +98,23 @@ pub struct ComputedStyle {
     pub hyphens: bool,
     pub width: Option<f32>,
     pub height: Option<f32>,
+    /// Width available to this element's children (the containing block for percentages).
+    pub content_width: f32,
 }
 
 impl ComputedStyle {
-    fn root(p: &Preferences) -> ComputedStyle {
+    fn initial(p: &Preferences) -> ComputedStyle {
+        let line_spec = LineSpec::Factor(p.line_height.unwrap_or(DEFAULT_LINE_HEIGHT));
         ComputedStyle {
             display: Display::Block,
-            font_family: vec!["serif".into()],
+            font_family: Rc::from(["serif".to_string()]),
+            monospace: false,
             font_size: p.font_size,
             italic: false,
             font_weight: 400,
             small_caps: false,
-            line_height: p.font_size * p.line_height.unwrap_or(1.4),
+            line_spec,
+            line_height: 0.0,
             text_align: TextAlign::Start,
             text_indent: 0.0,
             margin: [Some(0.0); 4],
@@ -106,6 +130,7 @@ impl ComputedStyle {
             hyphens: true,
             width: None,
             height: None,
+            content_width: p.page_width,
         }
     }
 
@@ -113,6 +138,7 @@ impl ComputedStyle {
     fn inherit(&self) -> ComputedStyle {
         ComputedStyle {
             display: Display::Inline,
+            font_family: Rc::clone(&self.font_family),
             margin: [Some(0.0); 4],
             padding: [0.0; 4],
             break_before: false,
@@ -121,16 +147,18 @@ impl ComputedStyle {
             vertical_align: VerticalAlign::Baseline,
             width: None,
             height: None,
-            ..self.clone()
+            ..*self
         }
     }
+}
 
-    pub fn is_monospace(&self) -> bool {
-        self.font_family.iter().any(|f| {
-            let f = f.to_ascii_lowercase();
-            f == "monospace" || f.contains("courier") || f.contains("mono")
-        })
-    }
+/// Code fonts: `monospace`, Courier, and families with a whole word `Mono` (not "Monotype").
+fn is_monospace(families: &[String]) -> bool {
+    families.iter().any(|f| {
+        f.eq_ignore_ascii_case("monospace")
+            || f.to_ascii_lowercase().contains("courier")
+            || f.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w.eq_ignore_ascii_case("mono"))
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -139,30 +167,30 @@ enum Origin {
     Author,
 }
 
-struct Sheet {
-    origin: Origin,
-    rules: Vec<css::Rule>,
-}
+/// The user-agent sheet is constant: parsed once per process.
+static USER_AGENT: LazyLock<Vec<css::Rule>> = LazyLock::new(|| css::parse_stylesheet(USER_AGENT_CSS));
 
-/// User-agent rules plus the chapter's author stylesheets, in document order.
+/// A chapter's author stylesheets, in document order (the UA sheet is implied).
+#[derive(Default)]
 pub struct Stylesheets {
-    sheets: Vec<Sheet>,
-}
-
-impl Default for Stylesheets {
-    fn default() -> Self {
-        Stylesheets { sheets: vec![Sheet { origin: Origin::UserAgent, rules: css::parse_stylesheet(USER_AGENT_CSS) }] }
-    }
+    author: Vec<Vec<css::Rule>>,
 }
 
 impl Stylesheets {
     pub fn add_author(&mut self, css_text: &str) {
-        self.sheets.push(Sheet { origin: Origin::Author, rules: css::parse_stylesheet(css_text) });
+        self.author.push(css::parse_stylesheet(css_text));
+    }
+
+    fn sheets(&self) -> impl Iterator<Item = (Origin, &[css::Rule])> {
+        std::iter::once((Origin::UserAgent, USER_AGENT.as_slice()))
+            .chain(self.author.iter().map(|r| (Origin::Author, r.as_slice())))
     }
 }
 
-/// Sort key: (level, specificity, source order). Higher applies later and wins.
-type Key = (u8, u32, u32);
+/// Sort key: (font-size last?, level, specificity, source order). Font-size declarations
+/// sort first so `em` elsewhere refers to the element's own size; within each group,
+/// higher keys apply later and win.
+type Key = (bool, u8, u32, u32);
 
 fn level(origin: Origin, important: bool) -> u8 {
     match (origin, important) {
@@ -173,45 +201,67 @@ fn level(origin: Origin, important: bool) -> u8 {
     }
 }
 
+struct Ctx<'a> {
+    prefs: &'a Preferences,
+    /// The root element's font size: what `rem` refers to.
+    root_font_size: f32,
+}
+
 /// Computes styles for every element of `dom` (`None` for text and the document node).
+// ponytail: every rule is tested against every element (O(elements × rules), ~30 ms per chapter
+// on the Kindle with real books); bucket rules by rightmost id/class/tag if big stylesheets lag.
 pub fn compute(dom: &Dom, sheets: &Stylesheets, prefs: &Preferences) -> Vec<Option<ComputedStyle>> {
     let mut styles: Vec<Option<ComputedStyle>> = vec![None; dom.len()];
-    let root = ComputedStyle::root(prefs);
+    let initial = ComputedStyle::initial(prefs);
+    let mut ctx = Ctx { prefs, root_font_size: prefs.font_size };
     let mut caches = Default::default();
+    let mut seen_root = false;
 
     for id in dom.descendants(Dom::ROOT) {
         if dom.name(id).is_none() {
             continue;
         }
-        let parent = parent_style(dom, &styles, id).unwrap_or(&root);
+        let parent = parent_style(dom, &styles, id).unwrap_or(&initial);
         let mut style = parent.inherit();
 
         // Borrows both the sheets and this element's inline declarations, so it lives per element.
         let inline = dom.attr(id, "style").map(css::parse_declarations).unwrap_or_default();
         let mut matched: Vec<(Key, &Declaration)> = Vec::new();
         let mut order = 0u32;
-        for sheet in &sheets.sheets {
-            for rule in &sheet.rules {
+        for (origin, rules) in sheets.sheets() {
+            for rule in rules {
                 order += 1;
                 if let Some(spec) = select::matches(&rule.selectors, El { dom, id }, &mut caches) {
                     for d in &rule.declarations {
-                        matched.push(((level(sheet.origin, d.important), spec, order), d));
+                        let other = !matches!(d.property, Property::FontSize(_));
+                        matched.push(((other, level(origin, d.important), spec, order), d));
                     }
                 }
             }
         }
         for d in &inline {
             // Inline style: author level, above any selector specificity.
-            matched.push(((level(Origin::Author, d.important), u32::MAX, u32::MAX), d));
+            let other = !matches!(d.property, Property::FontSize(_));
+            matched.push(((other, level(Origin::Author, d.important), u32::MAX, u32::MAX), d));
         }
         matched.sort_by_key(|(k, _)| *k);
-        // font-size first: `em` in every other property refers to the element's own size.
-        let (sizes, others): (Vec<_>, Vec<_>) =
-            matched.iter().partition(|(_, d)| matches!(d.property, Property::FontSize(_)));
-        for (_, d) in sizes.iter().chain(&others) {
-            apply(&mut style, parent, &d.property, prefs);
+        for (_, d) in &matched {
+            apply(&mut style, parent, &d.property, &ctx);
         }
         apply_preferences(&mut style, prefs);
+        style.line_height = match style.line_spec {
+            LineSpec::Factor(f) => f * style.font_size,
+            LineSpec::Px(px) => px,
+        };
+        if !matches!(style.display, Display::Inline) {
+            let [_, r, _, l] = style.margin;
+            let inset = r.unwrap_or(0.0) + l.unwrap_or(0.0) + style.padding[1] + style.padding[3];
+            style.content_width = style.width.unwrap_or(parent.content_width - inset).max(0.0);
+        }
+        if !seen_root {
+            seen_root = true;
+            ctx.root_font_size = style.font_size;
+        }
         styles[id.index()] = Some(style);
     }
     styles
@@ -223,57 +273,54 @@ fn parent_style<'a>(dom: &Dom, styles: &'a [Option<ComputedStyle>], id: NodeId) 
 
 /// Resolves a length in device pixels. Absolute CSS px scale with the reader's text size
 /// (16 CSS px = the base size), so a publisher's fixed sizes follow the size slider.
-fn resolve(len: Length, font_size: f32, prefs: &Preferences, percent_of: f32) -> Option<f32> {
+/// `percent_of` is `None` where a percentage has no definite basis (it then computes to auto).
+fn resolve(len: Length, font_size: f32, ctx: &Ctx, percent_of: Option<f32>) -> Option<f32> {
     Some(match len {
-        Length::Px(v) => v * prefs.font_size / 16.0,
+        Length::Px(v) => v * ctx.prefs.font_size / 16.0,
         Length::Em(v) => v * font_size,
-        Length::Rem(v) => v * prefs.font_size,
-        Length::Percent(v) => v / 100.0 * percent_of,
+        Length::Rem(v) => v * ctx.root_font_size,
+        Length::Percent(v) => v / 100.0 * percent_of?,
         Length::Auto => return None,
     })
 }
 
-fn side(s: Side) -> usize {
-    match s {
-        Side::Top => 0,
-        Side::Right => 1,
-        Side::Bottom => 2,
-        Side::Left => 3,
-    }
-}
-
-fn apply(s: &mut ComputedStyle, parent: &ComputedStyle, p: &Property, prefs: &Preferences) {
-    let width = prefs.page_width;
+fn apply(s: &mut ComputedStyle, parent: &ComputedStyle, p: &Property, ctx: &Ctx) {
+    let cb = Some(parent.content_width);
     match p {
         Property::Display(d) => s.display = *d,
-        Property::FontFamily(f) => s.font_family = f.clone(),
+        Property::FontFamily(f) => {
+            s.monospace = is_monospace(f);
+            s.font_family = Rc::from(f.as_slice());
+        }
         Property::FontSize(fs) => {
             let pf = parent.font_size;
             s.font_size = match *fs {
                 FontSize::Length(Length::Em(v)) => v * pf,
                 FontSize::Length(Length::Percent(v)) => v / 100.0 * pf,
-                FontSize::Length(l) => resolve(l, pf, prefs, pf).unwrap_or(pf),
-                FontSize::Keyword(k) => k * prefs.font_size,
+                FontSize::Length(l) => resolve(l, pf, ctx, Some(pf)).unwrap_or(pf),
+                FontSize::Keyword(k) => k * ctx.prefs.font_size,
                 FontSize::Larger => pf * 1.2,
                 FontSize::Smaller => pf / 1.2,
             };
-            // Keep the parent's line-height ratio until line-height itself is set.
-            s.line_height = parent.line_height / pf * s.font_size;
         }
         Property::Italic(v) => s.italic = *v,
         Property::FontWeight(w) => s.font_weight = *w,
         Property::SmallCaps(v) => s.small_caps = *v,
         Property::LineHeight(lh) => {
-            s.line_height = match *lh {
-                LineHeight::Normal => s.font_size * 1.2,
-                LineHeight::Factor(f) => s.font_size * f,
-                LineHeight::Length(l) => resolve(l, s.font_size, prefs, s.font_size).unwrap_or(s.line_height),
+            s.line_spec = match *lh {
+                LineHeight::Normal => LineSpec::Factor(NORMAL_LINE_HEIGHT),
+                LineHeight::Factor(f) => LineSpec::Factor(f),
+                // em/% compute to an absolute length, which descendants inherit as is.
+                LineHeight::Length(l) => match resolve(l, s.font_size, ctx, Some(s.font_size)) {
+                    Some(px) => LineSpec::Px(px),
+                    None => s.line_spec,
+                },
             }
         }
         Property::TextAlign(a) => s.text_align = *a,
-        Property::TextIndent(l) => s.text_indent = resolve(*l, s.font_size, prefs, width).unwrap_or(0.0),
-        Property::Margin(sd, l) => s.margin[side(*sd)] = resolve(*l, s.font_size, prefs, width),
-        Property::Padding(sd, l) => s.padding[side(*sd)] = resolve(*l, s.font_size, prefs, width).unwrap_or(0.0),
+        Property::TextIndent(l) => s.text_indent = resolve(*l, s.font_size, ctx, cb).unwrap_or(0.0),
+        Property::Margin(sd, l) => s.margin[*sd as usize] = resolve(*l, s.font_size, ctx, cb),
+        Property::Padding(sd, l) => s.padding[*sd as usize] = resolve(*l, s.font_size, ctx, cb).unwrap_or(0.0),
         Property::BreakBefore(v) => s.break_before = *v,
         Property::BreakAfter(v) => s.break_after = *v,
         Property::BreakInsideAvoid(v) => s.break_inside_avoid = *v,
@@ -281,22 +328,23 @@ fn apply(s: &mut ComputedStyle, parent: &ComputedStyle, p: &Property, prefs: &Pr
         Property::VerticalAlign(v) => s.vertical_align = *v,
         Property::ListStyle(l) => s.list_style = *l,
         Property::TextTransform(t) => s.text_transform = *t,
-        Property::LetterSpacing(l) => s.letter_spacing = resolve(*l, s.font_size, prefs, 0.0).unwrap_or(0.0),
+        Property::LetterSpacing(l) => s.letter_spacing = resolve(*l, s.font_size, ctx, None).unwrap_or(0.0),
         Property::Hyphens(h) => s.hyphens = *h,
-        Property::Width(l) => s.width = resolve(*l, s.font_size, prefs, width),
-        Property::Height(l) => s.height = resolve(*l, s.font_size, prefs, width),
+        Property::Width(l) => s.width = resolve(*l, s.font_size, ctx, cb),
+        // ponytail: percentage heights have no definite containing height in reflowable text → auto.
+        Property::Height(l) => s.height = resolve(*l, s.font_size, ctx, None),
     }
 }
 
 /// The reader wins on typography; structure (indents, emphasis, centred blocks) stays the publisher's.
 fn apply_preferences(s: &mut ComputedStyle, prefs: &Preferences) {
     if let Some(family) = &prefs.font_family {
-        if !s.is_monospace() {
-            s.font_family = vec![family.clone()];
+        if !s.monospace {
+            s.font_family = Rc::from([family.clone()]);
         }
     }
     if let Some(factor) = prefs.line_height {
-        s.line_height = s.font_size * factor;
+        s.line_spec = LineSpec::Factor(factor);
     }
     match prefs.justify {
         Some(true) if matches!(s.text_align, TextAlign::Start | TextAlign::Left) => s.text_align = TextAlign::Justify,
@@ -349,7 +397,7 @@ mod tests {
         assert_eq!(p1.text_indent, 45.0, "1.5em of 30px");
         assert_eq!(p1.margin[0], Some(0.0));
         assert_eq!(p1.text_align, TextAlign::Justify, "left → justified by the reader's preference");
-        assert_eq!(p1.font_family, ["Bookerly"]);
+        assert_eq!(p1.font_family.as_ref(), ["Bookerly"]);
 
         let e = style_of(&dom, &styles, "e");
         assert!(e.italic, "UA em");
@@ -365,12 +413,42 @@ mod tests {
         assert_eq!(h.font_weight, 700);
         assert_eq!(h.font_size, 80.0, "24pt = 32 CSS px → 32/16·40");
         assert_eq!(h.margin[2], Some(40.0), "1rem = base size");
-        assert_eq!(h.font_family, ["Bookerly"], "reader font wins over the publisher's");
+        assert_eq!(h.font_family.as_ref(), ["Bookerly"], "reader font wins over the publisher's");
         assert!(!h.hyphens, "headings don't hyphenate");
 
         let code = style_of(&dom, &styles, "code");
-        assert!(code.is_monospace(), "monospace survives the reader font");
+        assert!(code.monospace, "monospace survives the reader font");
+        assert_eq!(code.font_family.as_ref(), ["monospace"]);
         assert_eq!(code.white_space, WhiteSpace::Pre);
+    }
+
+    #[test]
+    fn rem_zero_sizes_line_height_lengths_and_containing_blocks() {
+        let dom = Dom::parse_xml(
+            r#"<html id="root"><body id="b"><div id="z"><span id="s">x</span></div>
+            <p id="lh">a <small id="sm">b</small></p>
+            <blockquote id="q"><p id="qp">c</p></blockquote>
+            <p id="mono">m</p><img id="img"/></body></html>"#,
+        )
+        .expect("parses");
+        let mut sheets = Stylesheets::default();
+        sheets.add_author(
+            "html { font-size: 62.5% } body { font-size: 1.6rem }
+             #z { font-size: 0 } #s { font-size: 16px }
+             #lh { line-height: 20px } small { font-size: .5em }
+             blockquote { margin: 0 100px } #qp { margin-left: 10% }
+             #mono { font-family: 'Monotype Baskerville', serif } img { height: 100% }",
+        );
+        let p = Preferences { line_height: None, ..prefs() };
+        let styles = compute(&dom, &sheets, &p);
+        let get = |id| style_of(&dom, &styles, id);
+        assert_eq!(get("b").font_size, 40.0, "62.5% · 1.6rem = the base size");
+        assert!(get("s").line_height.is_finite(), "font-size: 0 parent must not poison children");
+        assert_eq!(get("sm").line_height, get("lh").line_height, "length line-height inherits absolute");
+        let q = get("q").content_width;
+        assert_eq!(get("qp").margin[3], Some(q * 0.1), "percent of the blockquote, not the page");
+        assert_eq!(get("mono").font_family.as_ref(), ["Bookerly"], "Monotype is not monospace");
+        assert_eq!(get("img").height, None, "percentage height → auto");
     }
 
     #[test]
@@ -406,7 +484,9 @@ mod real_books {
             hyphenate: true,
             page_width: 1056.0,
         };
-        for path in entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|e| e == "epub")) {
+        for path in
+            entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|e| e == "epub"))
+        {
             let mut book = Epub::open(std::fs::File::open(&path).expect("file")).expect("opens");
             let start = std::time::Instant::now();
             let (mut elements, mut rules) = (0, 0);
@@ -423,7 +503,7 @@ mod real_books {
                 for style in dom.find_all(Dom::ROOT, "style") {
                     sheets.add_author(&dom.text(style));
                 }
-                rules = sheets.sheets.iter().map(|s| s.rules.len()).sum();
+                rules = sheets.sheets().map(|(_, r)| r.len()).sum();
                 elements += compute(&dom, &sheets, &prefs).iter().flatten().count();
             }
             eprintln!(

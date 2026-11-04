@@ -83,6 +83,7 @@ pub enum TextTransform {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Discriminants index `[top, right, bottom, left]` arrays.
 pub enum Side {
     Top,
     Right,
