@@ -7,6 +7,7 @@ use std::path::Path;
 use omero_device::{Canvas, Rect};
 use omero_store::{Annotation, Kind, Store};
 
+use crate::i18n::{lang, t};
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
 use crate::ui::{button, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
@@ -140,23 +141,20 @@ impl Notebook {
         else {
             return;
         };
-        topbar(c, raster, sans, serif_bold, "‹  Library", "Highlights");
+        topbar(c, raster, sans, serif_bold, t().back_library, t().highlights);
 
         let width = (W - 2 * PAD) as f32;
         let title = Label { face: serif_bold, size: 46.0, ink: INK };
         title.draw(c, raster, &title.fit(&self.title, width), PAD as f32, TOPBAR_H + 82);
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
-        let count = match self.highlights.len() {
-            1 => "1 highlight".to_string(),
-            n => format!("{n} highlights"),
-        };
+        let count = lang().highlights(self.highlights.len());
         let byline = if self.author.is_empty() { count } else { format!("{}  ·  {count}", self.author) };
         soft.draw(c, raster, &soft.fit(&byline, width), PAD as f32, TOPBAR_H + 134);
         c.fill(Rect::new(PAD, LIST_TOP - 2, W - 2 * PAD, 2), LINE);
 
         if self.highlights.is_empty() {
-            soft.draw(c, raster, "No highlights yet.", PAD as f32, LIST_TOP + 90);
-            soft.draw(c, raster, "Press and hold a word while reading to start one.", PAD as f32, LIST_TOP + 136);
+            soft.draw(c, raster, t().no_highlights, PAD as f32, LIST_TOP + 90);
+            soft.draw(c, raster, t().no_highlights_hint, PAD as f32, LIST_TOP + 136);
         }
         let quote = Label { face: serif, size: QUOTE_SIZE, ink: INK };
         let chapter = Label { face: sans, size: 24.0, ink: INK_SOFT };
@@ -180,11 +178,11 @@ impl Notebook {
             let nav = Label { face: sans, size: 30.0, ink: INK };
             if self.page > 0 {
                 button(c, Self::prev_button(), false);
-                nav.centered(c, raster, "‹  Previous", Self::prev_button());
+                nav.centered(c, raster, t().previous, Self::prev_button());
             }
             if self.page + 1 < pages {
                 button(c, Self::next_button(), false);
-                nav.centered(c, raster, "Next  ›", Self::next_button());
+                nav.centered(c, raster, t().next, Self::next_button());
             }
             let footer = Rect::new(0, H - FOOTER_H, W, FOOTER_H);
             soft.centered(c, raster, &format!("{} / {pages}", self.page + 1), footer);

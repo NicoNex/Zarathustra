@@ -5,6 +5,7 @@ use omero_device::{Canvas, Rect};
 use omero_engine::book::{Book, Chapter};
 use omero_engine::epub::TocEntry;
 
+use crate::i18n::t;
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
 use crate::ui::{button, rounded_rect, Label, INK, INK_SOFT};
 use crate::{Ctx, H, W};
@@ -152,7 +153,7 @@ impl Toc {
         else {
             return;
         };
-        topbar(c, raster, sans, serif_bold, "‹  Back", "Contents");
+        topbar(c, raster, sans, serif_bold, t().back, t().contents);
 
         let first = self.page * ROWS;
         for (row, (i, e)) in entries.iter().enumerate().skip(first).take(ROWS).enumerate() {
@@ -175,11 +176,11 @@ impl Toc {
             let nav = Label { face: sans, size: 30.0, ink: INK };
             if self.page > 0 {
                 button(c, Self::prev_button(), false);
-                nav.centered(c, raster, "‹  Previous", Self::prev_button());
+                nav.centered(c, raster, t().previous, Self::prev_button());
             }
             if self.page + 1 < pages {
                 button(c, Self::next_button(), false);
-                nav.centered(c, raster, "Next  ›", Self::next_button());
+                nav.centered(c, raster, t().next, Self::next_button());
             }
             let count = Label { face: sans, size: 30.0, ink: INK_SOFT };
             let footer = Rect::new(0, H - FOOTER_H, W, FOOTER_H);

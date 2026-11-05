@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use omero_device::{Battery, Canvas, Device, Light, Phase, Rect, Touch, Waveform};
 
 use crate::clock::{date_text, hhmm, local_now};
+use crate::i18n::t;
 use crate::settings::Settings;
 use crate::ui::{rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, W};
@@ -119,12 +120,8 @@ impl Tile {
     }
 
     fn label(self) -> [&'static str; 2] {
-        match self {
-            Tile::AutoWarmth => ["Auto", "warmth"],
-            Tile::Animation => ["Page", "animation"],
-            Tile::Clock => ["Clock in", "reader"],
-            Tile::Sleep => ["Sleep", ""],
-        }
+        let i = TILES.iter().position(|t| *t == self).unwrap_or(0);
+        t().tiles[i]
     }
 }
 
@@ -391,14 +388,15 @@ impl QuickPanel {
         let (days, minutes) = local_now();
         let clock = Label { face: bold, size: 72.0, ink: INK };
         let x = PAD as f32 + clock.draw(c, raster, &hhmm(minutes), PAD as f32, 124) + 28.0;
-        Label { face: sans, size: 32.0, ink: INK_SOFT }.draw(c, raster, &date_text(days), x, 124);
+        Label { face: sans, size: 32.0, ink: INK_SOFT }.draw(c, raster, &date_text(crate::i18n::lang(), days), x, 124);
         if let Some(b) = self.battery {
             let icon = Rect::new(W - PAD - 58, 98, 52, 28);
             rounded_outline(c, icon, 7, 3, INK, PAPER);
             rounded_rect(c, Rect::new(icon.right() + 2, icon.y + 8, 5, 12), 2, INK);
             let fill = (icon.w - 12) * b.percent as i32 / 100;
             rounded_rect(c, Rect::new(icon.x + 6, icon.y + 6, fill, icon.h - 12), 3, INK);
-            let text = if b.charging { format!("Charging · {}%", b.percent) } else { format!("{}%", b.percent) };
+            let text =
+                if b.charging { format!("{} · {}%", t().charging, b.percent) } else { format!("{}%", b.percent) };
             let label = Label { face: sans, size: 32.0, ink: INK };
             label.draw(c, raster, &text, icon.x as f32 - 18.0 - label.width(&text), 124);
         }
@@ -420,7 +418,7 @@ impl QuickPanel {
                 rounded_rect(c, Rect::new(x + 16, y + 16, 44, 44), 22, bg);
             } else {
                 let state = Label { face: bold, size: 38.0, ink };
-                state.draw(c, raster, if on { "On" } else { "Off" }, x as f32, y + 66);
+                state.draw(c, raster, if on { t().on } else { t().off }, x as f32, y + 66);
             }
             let label = Label { face: sans, size: 30.0, ink };
             for (i, line) in tile.label().iter().enumerate() {
@@ -445,14 +443,14 @@ impl QuickPanel {
         let value = self.value(s);
         let y = s.label_y();
         let name = Label { face: bold, size: 34.0, ink: INK };
-        let title = if s == Slider::Brightness { "Brightness" } else { "Warmth" };
+        let title = if s == Slider::Brightness { t().brightness } else { t().warmth };
         let end = PAD as f32 + name.draw(c, raster, title, PAD as f32, y);
         if s == Slider::Warmth && self.settings.auto_warmth {
             let chip = Label { face: bold, size: 22.0, ink: PAPER };
-            let w = chip.width("AUTO") as i32 + 32;
+            let w = chip.width(t().auto) as i32 + 32;
             let r = Rect::new(end as i32 + 18, y - 30, w, 38);
             rounded_rect(c, r, r.h / 2, INK);
-            chip.draw(c, raster, "AUTO", r.x as f32 + 16.0, y - 3);
+            chip.draw(c, raster, t().auto, r.x as f32 + 16.0, y - 3);
         }
         let text = format!("{value}%");
         let num = Label { face: sans, size: 34.0, ink: if enabled { INK } else { INK_SOFT } };

@@ -3,6 +3,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::i18n::Lang;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Settings {
     /// Hardware swipe animation on page turns.
@@ -16,11 +18,21 @@ pub struct Settings {
     /// Last manual light levels (0–100).
     pub brightness: u8,
     pub warmth: u8,
+    /// UI language.
+    pub lang: Lang,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { swipe_animation: true, clock: true, auto_warmth: false, night_warmth: 60, brightness: 40, warmth: 0 }
+        Settings {
+            swipe_animation: true,
+            clock: true,
+            auto_warmth: false,
+            night_warmth: 60,
+            brightness: 40,
+            warmth: 0,
+            lang: Lang::It,
+        }
     }
 }
 
@@ -60,6 +72,7 @@ impl Settings {
                 "night_warmth" => percent(&mut s.night_warmth),
                 "brightness" => percent(&mut s.brightness),
                 "warmth" => percent(&mut s.warmth),
+                "lang" => s.lang = Lang::from_code(value).unwrap_or(s.lang),
                 _ => {}
             }
         }
@@ -67,10 +80,11 @@ impl Settings {
     }
 
     pub fn to_text(&self) -> String {
-        let Settings { swipe_animation, clock, auto_warmth, night_warmth, brightness, warmth } = self;
+        let Settings { swipe_animation, clock, auto_warmth, night_warmth, brightness, warmth, lang } = self;
         format!(
             "swipe_animation={swipe_animation}\nclock={clock}\nauto_warmth={auto_warmth}\n\
-             night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\n"
+             night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\nlang={}\n",
+            lang.code()
         )
     }
 }
@@ -94,6 +108,7 @@ mod tests {
             night_warmth: 75,
             brightness: 12,
             warmth: 33,
+            lang: Lang::En,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let dir = scratch("round-trip");

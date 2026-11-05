@@ -9,7 +9,6 @@ use crate::clock::{date_text, hhmm, local_now};
 use crate::ui::{Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
-const HINT: &str = "Sleeping · press power to wake";
 /// Side and top margin around the cover.
 const MARGIN: i32 = 48;
 /// The strip under the cover with the title line and the hint.
@@ -35,7 +34,7 @@ pub fn render_sleep(
         return;
     };
     let hint = Label { face: sans, size: 28.0, ink: INK_SOFT };
-    hint.draw_centred(c, raster, HINT, W as f32 / 2.0, H - 48);
+    hint.draw_centred(c, raster, crate::i18n::t().sleeping, W as f32 / 2.0, H - 48);
 
     if title.is_empty() {
         return clock(c, raster, sans, bold, battery);
@@ -89,7 +88,13 @@ fn clock(c: &mut Canvas, raster: &mut Rasterizer, sans: &Face, bold: &Face, batt
         label.draw_centred(c, raster, text, W as f32 / 2.0, y);
     };
     center(&Label { face: bold, size: 200.0, ink: INK }, &time, H * 2 / 5, c, raster);
-    center(&Label { face: sans, size: 44.0, ink: INK_SOFT }, &date_text(days), H * 2 / 5 + 96, c, raster);
+    center(
+        &Label { face: sans, size: 44.0, ink: INK_SOFT },
+        &date_text(crate::i18n::lang(), days),
+        H * 2 / 5 + 96,
+        c,
+        raster,
+    );
     if let Some(b) = battery {
         center(&Label { face: sans, size: 32.0, ink: INK_SOFT }, &format!("{}%", b.percent), H - 120, c, raster);
     }

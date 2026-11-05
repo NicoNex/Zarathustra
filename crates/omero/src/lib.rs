@@ -3,6 +3,7 @@
 pub mod clock;
 pub mod highlight;
 pub mod home;
+pub mod i18n;
 pub mod menu;
 pub mod notebook;
 pub mod pace;
@@ -67,6 +68,7 @@ impl Ctx {
             Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/omero-state")).to_path_buf()
         };
         std::fs::create_dir_all(&state_dir).ok();
+        i18n::set_lang(settings::Settings::load(&state_dir).lang);
         Ctx { fonts, ts, raster: Rasterizer::new(1.3), state_dir }
     }
 

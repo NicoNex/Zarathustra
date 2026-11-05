@@ -9,6 +9,7 @@ use omero_engine::font::{Face, Rasterizer};
 use omero_engine::image::{self, GrayImage};
 use omero_engine::library::{BookEntry, Library, SortBy};
 
+use crate::i18n::t;
 use crate::notebook::{self, Notebook};
 use crate::reader::Position;
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
@@ -45,8 +46,8 @@ pub enum Filter {
     Finished,
 }
 
-const FILTERS: [(Filter, &str); 4] =
-    [(Filter::All, "All"), (Filter::Unread, "Unread"), (Filter::Reading, "Reading"), (Filter::Finished, "Read")];
+/// In the order of `Strings::filters`.
+const FILTERS: [Filter; 4] = [Filter::All, Filter::Unread, Filter::Reading, Filter::Finished];
 
 struct Entry {
     book: BookEntry,
@@ -188,8 +189,8 @@ impl Home {
     /// Filter chips' rectangles, measured with the chip font.
     fn chips(&self, label: &Label) -> Vec<(Filter, &'static str, Rect)> {
         let mut x = PAD;
-        (FILTERS.iter())
-            .map(|&(f, name)| {
+        (FILTERS.into_iter().zip(t().filters))
+            .map(|(f, name)| {
                 let w = label.width(name) as i32 + 56;
                 let r = Rect::new(x, self.chips_top(self.page), w, CHIPS_H);
                 x += w + 16;
@@ -214,11 +215,11 @@ impl Home {
         };
         let faces = Faces { serif, serif_bold, sans, sans_bold };
 
-        Label { face: serif_bold, size: 66.0, ink: INK }.draw(c, raster, "Library", PAD as f32, 150);
+        Label { face: serif_bold, size: 66.0, ink: INK }.draw(c, raster, t().library, PAD as f32, 150);
         self.view_toggle(c);
         rounded_outline(c, EXIT, EXIT.h / 2, 3, INK, PAPER);
         let exit = Label { face: sans, size: 30.0, ink: INK };
-        exit.draw_centred(c, raster, "Exit", (EXIT.x + EXIT.w / 2) as f32, EXIT.y + 47);
+        exit.draw_centred(c, raster, t().exit, (EXIT.x + EXIT.w / 2) as f32, EXIT.y + 47);
 
         if let (true, Some((i, big))) = (self.card(self.page), &self.current) {
             self.continue_card(c, raster, &faces, &self.books[*i], big.as_ref());
@@ -237,7 +238,7 @@ impl Home {
 
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
         if self.shown.is_empty() {
-            soft.draw(c, raster, "No books here", PAD as f32, self.items_top(self.page) + 60);
+            soft.draw(c, raster, t().no_books, PAD as f32, self.items_top(self.page) + 60);
         }
         for (i, r) in self.items() {
             if self.grid {
@@ -280,7 +281,7 @@ impl Home {
         let x = (r.right() + 44) as f32;
         let width = (card.right() - 40) as f32 - x;
         let small = Label { face: f.sans, size: 26.0, ink: INK_SOFT };
-        small.draw(c, raster, "CONTINUE READING", x, card.y + 70);
+        small.draw(c, raster, t().continue_reading, x, card.y + 70);
         let title = Label { face: f.serif_bold, size: 46.0, ink: INK };
         title.draw(c, raster, &title.fit(&book.book.title, width), x, card.y + 140);
         let author = Label { face: f.sans, size: 30.0, ink: INK_SOFT };
@@ -401,10 +402,10 @@ fn grid_cell(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r
     match (book.status(), book.progress) {
         (Filter::Finished, _) => {
             let badge = Label { face: f.sans_bold, size: 22.0, ink: PAPER };
-            let w = badge.width("READ") as i32 + 28;
+            let w = badge.width(t().finished_badge) as i32 + 28;
             let b = Rect::new(drawn.x + 12, drawn.bottom() - 52, w, 40);
             rounded_rect(c, b, 20, INK);
-            badge.draw(c, raster, "READ", (b.x + 14) as f32, b.y + 29);
+            badge.draw(c, raster, t().finished_badge, (b.x + 14) as f32, b.y + 29);
         }
         (_, Some((p, _))) => {
             let bar = Rect::new(drawn.x, y - 4, drawn.w, 6);
@@ -432,7 +433,7 @@ fn list_row(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r:
     let right = r.right() as f32;
     let soft = Label { face: f.sans, size: 28.0, ink: INK_SOFT };
     let status = match (book.status(), book.progress) {
-        (Filter::Finished, _) => Some("Read".to_string()),
+        (Filter::Finished, _) => Some(t().finished.to_string()),
         (_, Some((p, _))) => Some(format!("{:.0}%", p * 100.0)),
         _ => None,
     };

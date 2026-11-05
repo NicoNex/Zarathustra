@@ -3,6 +3,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::i18n::{strings, Lang};
+
 /// Local wall-clock time now: (days since 1970-01-01, minutes since midnight).
 pub fn local_now() -> (i64, u32) {
     let utc = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
@@ -65,23 +67,9 @@ fn tzif_offset(data: &[u8], utc: i64) -> Option<i64> {
     Some(i32::from_be_bytes(body.get(info..info + 4)?.try_into().ok()?) as i64)
 }
 
-/// "Thursday 5 November" for a day count since 1970-01-01.
-pub fn date_text(days: i64) -> String {
-    const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    const MONTHS: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ];
+/// "Giovedì 5 novembre" / "Thursday 5 November" for a day count since 1970-01-01.
+pub fn date_text(lang: Lang, days: i64) -> String {
+    let names = strings(lang);
     // Civil-from-days (Howard Hinnant's algorithm), March-based years.
     let z = days + 719_468;
     let doe = z.rem_euclid(146_097);
@@ -90,7 +78,7 @@ pub fn date_text(days: i64) -> String {
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 2 } else { mp - 10 } as usize;
-    format!("{} {day} {}", WEEKDAYS[(days + 4).rem_euclid(7) as usize], MONTHS[month])
+    format!("{} {day} {}", names.weekdays[(days + 4).rem_euclid(7) as usize], names.months[month])
 }
 
 /// "07:05" for minutes since midnight.
@@ -133,10 +121,11 @@ mod tests {
 
     #[test]
     fn date_text_names_the_day() {
-        assert_eq!(date_text(0), "Thursday 1 January");
-        assert_eq!(date_text(20_762), "Thursday 5 November"); // 2026
-        assert_eq!(date_text(19_782), "Thursday 29 February"); // 2024
-        assert_eq!(date_text(11_017), "Wednesday 1 March"); // 2000
+        assert_eq!(date_text(Lang::En, 0), "Thursday 1 January");
+        assert_eq!(date_text(Lang::En, 20_762), "Thursday 5 November"); // 2026
+        assert_eq!(date_text(Lang::En, 19_782), "Thursday 29 February"); // 2024
+        assert_eq!(date_text(Lang::En, 11_017), "Wednesday 1 March"); // 2000
+        assert_eq!(date_text(Lang::It, 20_762), "Giovedì 5 novembre");
     }
 
     #[test]
