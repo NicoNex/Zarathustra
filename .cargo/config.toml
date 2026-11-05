@@ -7,3 +7,8 @@ rustflags = ["-C", "target-cpu=cortex-a53"]
 [env]
 CC_armv7_unknown_linux_musleabihf = "arm-linux-musleabihf-gcc"
 AR_armv7_unknown_linux_musleabihf = "arm-linux-musleabihf-ar"
+CXX_armv7_unknown_linux_musleabihf = "arm-linux-musleabihf-g++"
+# bindgen (mupdf-sys) parses MuPDF's headers with clang: point it at the musl sysroot, not /usr/include.
+BINDGEN_EXTRA_CLANG_ARGS_armv7_unknown_linux_musleabihf = "--sysroot=/usr/arm-linux-musleabihf"
+# MuPDF links its embedded fonts with $(LD); [env] is not per target, so dispatch on $TARGET.
+LD = { value = "scripts/target-ld.sh", relative = true }

@@ -15,8 +15,9 @@ pub const THUMB_W: u32 = 340;
 pub const THUMB_H: u32 = 510;
 
 const CACHE_FILE: &str = "library.tsv";
-// Bumped when entries gain data (2: AZW3/MOBI metadata and covers; 3: grid-size thumbs).
-const CACHE_HEADER: &str = "omero-library 3";
+// Bumped when entries gain data (2: AZW3/MOBI metadata and covers; 3: grid-size thumbs;
+// 4: PDF metadata and covers).
+const CACHE_HEADER: &str = "omero-library 4";
 const THUMB_DIR: &str = "thumbs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -301,24 +302,31 @@ fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, th
     entry.series = m.series;
     entry.series_index = m.series_index;
     // An undecodable cover (WebP, corrupt) is final; a failed write is not.
-    let Some(png) = cover.as_deref().and_then(thumb_png) else { return (entry, true) };
+    let Some(png) = cover.and_then(thumb_png) else { return (entry, true) };
     let dest = thumb_path(thumbs, &entry);
     entry.cover_thumb = write_atomic(&dest, &png).ok().map(|()| dest);
     let cacheable = entry.cover_thumb.is_some();
     (entry, cacheable)
 }
 
-/// Metadata and cover image bytes, or `None` when the book cannot be read.
-fn read_book(path: &Path, format: Format) -> Option<(Metadata, Option<Vec<u8>>)> {
+/// Metadata and the cover fitted into the thumbnail size (`None` when there is none or it
+/// does not decode), or `None` when the book cannot be read.
+fn read_book(path: &Path, format: Format) -> Option<(Metadata, Option<image::GrayImage>)> {
+    let decode = |bytes: Option<Vec<u8>>| bytes.and_then(|b| image::decode(&b, THUMB_W, THUMB_H));
     match format {
         Format::Epub | Format::Kepub => {
             let mut epub = Epub::open(BufReader::new(fs::File::open(path).ok()?)).ok()?;
             let cover = epub.cover.clone().and_then(|c| epub.read(&c).ok());
-            Some((std::mem::take(&mut epub.metadata), cover))
+            Some((std::mem::take(&mut epub.metadata), decode(cover)))
         }
-        Format::Azw3 | Format::Mobi => crate::mobi::Mobi::peek(path).ok(),
-        // ponytail: PDF and TXT keep the file stem as title until their readers land.
-        Format::Pdf | Format::Txt => None,
+        Format::Azw3 | Format::Mobi => crate::mobi::Mobi::peek(path).ok().map(|(m, c)| (m, decode(c))),
+        Format::Pdf => {
+            let pdf = crate::pdf::Pdf::open(path).ok()?;
+            let m = Metadata { title: pdf.title(), authors: pdf.author().into_iter().collect(), ..Metadata::default() };
+            Some((m, pdf.render(0, THUMB_W, THUMB_H, false).ok()))
+        }
+        // ponytail: TXT keeps the file stem as title until its reader lands.
+        Format::Txt => None,
     }
 }
 
@@ -333,9 +341,8 @@ fn thumb_path(thumbs: &Path, entry: &BookEntry) -> PathBuf {
     thumbs.join(format!("{h:016x}.png"))
 }
 
-/// The cover fitted, dithered to 16 grays and encoded as PNG; `None` if it does not decode.
-fn thumb_png(cover: &[u8]) -> Option<Vec<u8>> {
-    let mut img = image::decode(cover, THUMB_W, THUMB_H)?;
+/// The fitted cover dithered to 16 grays and encoded as PNG.
+fn thumb_png(mut img: image::GrayImage) -> Option<Vec<u8>> {
     image::quantize16(&mut img);
     let opts = zune_core::options::EncoderOptions::new(
         img.width as usize,
@@ -594,6 +601,21 @@ mod tests {
         assert_eq!((rosa.title.as_str(), rosa.cover_thumb.as_ref()), ("Rosa", None));
         assert!(!thumb.exists());
         assert!(changed.books[0].cover_thumb.as_ref().is_some_and(|t| t.is_file()));
+    }
+
+    #[test]
+    fn pdf_metadata_and_first_page_cover() {
+        let root = TempDir::new("libpdf");
+        let docs = root.0.join("documents");
+        fs::create_dir_all(&docs).expect("docs");
+        fs::write(docs.join("file.pdf"), crate::pdf::tests::sample_pdf()).expect("pdf");
+        let lib = Library::scan(&[&docs], &root.0.join("cache"));
+        let b = &lib.books[0];
+        assert_eq!((b.title.as_str(), b.authors.as_slice()), ("Sample", ["Ann Author".to_string()].as_slice()));
+        let thumb = fs::read(b.cover_thumb.as_ref().expect("thumb")).expect("read thumb");
+        let img = image::decode(&thumb, THUMB_W, THUMB_H).expect("png");
+        // US Letter fitted into the thumbnail box: full width, height by aspect.
+        assert_eq!((img.width, img.height), (THUMB_W, 440));
     }
 
     #[test]
