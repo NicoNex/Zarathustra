@@ -288,6 +288,8 @@ pub struct Highlights {
     spine: u32,
     selection: Option<Selection>,
     popup: Option<Popup>,
+    /// Table-of-contents title of the page shown, stored with new highlights for lists.
+    pub chapter_title: Option<String>,
 }
 
 impl Highlights {
@@ -319,7 +321,7 @@ impl Highlights {
         let saved =
             store.as_ref().and_then(|(s, id)| s.annotations(*id).map_err(|e| eprintln!("highlights: {e}")).ok());
         let saved = saved.unwrap_or_default().into_iter().filter(|a| is_drawn(a.data.kind)).collect();
-        Highlights { store, saved, resolved: Vec::new(), spine: 0, selection: None, popup: None }
+        Highlights { store, saved, resolved: Vec::new(), spine: 0, selection: None, popup: None, chapter_title: None }
     }
 
     /// Finds this chapter's highlights in its new layout; drops any selection.
@@ -447,6 +449,7 @@ impl Highlights {
             return;
         };
         data.page_hint = u32::try_from(page + 1).ok();
+        data.chapter = self.chapter_title.clone();
         let annotation = match &self.store {
             Some((store, book)) => match store.add_annotation(*book, &data) {
                 Ok(a) => a,
@@ -686,8 +689,15 @@ mod tests {
         let (dom, blocks) = chapter(CHAPTER);
         let page = page(&blocks);
         let chapter = Chapter { dom, blocks, pages: vec![page] };
-        let mut h =
-            Highlights { store: None, saved: Vec::new(), resolved: Vec::new(), spine: 0, selection: None, popup: None };
+        let mut h = Highlights {
+            store: None,
+            saved: Vec::new(),
+            resolved: Vec::new(),
+            spine: 0,
+            selection: None,
+            popup: None,
+            chapter_title: None,
+        };
         let store = Store::open_in_memory().expect("db");
         let entry = BookEntry {
             path: "x.epub".into(),

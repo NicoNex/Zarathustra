@@ -20,7 +20,7 @@ use omero_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Wavef
 const FLASH_EVERY: u32 = 8;
 
 enum Screen {
-    Home(Home),
+    Home(Box<Home>),
     Reader(Box<Reader>),
 }
 
@@ -88,7 +88,7 @@ fn main() -> Result<()> {
     let t = Instant::now();
     let mut ctx = Ctx::new();
     let home = |ctx: &Ctx| Home::scan(&library_dirs(), ctx);
-    let mut screen = Screen::Home(home(&ctx));
+    let mut screen = Screen::Home(Box::new(home(&ctx)));
     eprintln!("home ready in {:?}", t.elapsed());
     if let Some(path) = &book {
         match Reader::open(path, &mut ctx) {
@@ -124,6 +124,13 @@ fn main() -> Result<()> {
                 r.tap(centre(b), centre(b).0, &mut ctx);
             }
             snap(r, &mut ctx, "highlight.pgm")?;
+            if let Some(path) = &book {
+                let list = omero::notebook::load(&ctx.state_dir, path);
+                let nb = omero::notebook::Notebook::new(&ctx, r.title().unwrap_or(""), "", list);
+                let mut nb_px = vec![0u8; (W * H) as usize];
+                nb.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut nb_px }, &mut ctx);
+                write_pgm(dir.join("notebook.pgm"), &nb_px)?;
+            }
             r.tap((x, y), x, &mut ctx);
             snap(r, &mut ctx, "delete.pgm")?;
             if let Some(b) = r.popup_button(Button::Delete) {
@@ -227,21 +234,27 @@ fn main() -> Result<()> {
                     continue;
                 }
                 Phase::Move => {
-                    let (Screen::Reader(r), Some(start)) = (&mut screen, down) else { continue };
+                    let Some(start) = down else { continue };
                     if press.selecting {
-                        if let Some(rect) = r.drag((t.x, t.y)) {
-                            selection = Some(selection.map_or(rect, |s| s.union(&rect)));
+                        if let Screen::Reader(r) = &mut screen {
+                            if let Some(rect) = r.drag((t.x, t.y)) {
+                                selection = Some(selection.map_or(rect, |s| s.union(&rect)));
+                            }
                         }
                     } else if (t.x - start.0).abs() > SLOP || (t.y - start.1).abs() > SLOP {
                         press.at = None; // moving: a swipe or a tap, not a long press
-                    } else if press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) {
-                        press.fire(r, start, &mut selection);
+                    } else if let Screen::Reader(r) = &mut screen {
+                        if press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) {
+                            press.fire(r, start, &mut selection);
+                        }
                     }
                     continue;
                 }
                 Phase::Up => {}
             }
             let Some(start) = down.take() else { continue };
+            // ponytail: on the home a long press acts on lift, with no feedback while held.
+            let held = press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS);
             if std::mem::take(&mut press).fired {
                 // The end of a long press: show the actions for the selection, if any.
                 if let Screen::Reader(r) = &mut screen {
@@ -266,6 +279,7 @@ fn main() -> Result<()> {
                 continue;
             }
             let action = match &mut screen {
+                Screen::Home(h) if held => h.long_press(start, &ctx),
                 Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
                 Screen::Reader(r) => r.tap(start, t.x, &mut ctx),
             };
@@ -293,8 +307,19 @@ fn main() -> Result<()> {
                         continue;
                     }
                 },
+                Action::OpenAt(path, data) => match Reader::open(&path, &mut ctx) {
+                    Ok(mut r) => {
+                        r.goto(&data, &mut ctx);
+                        screen = Screen::Reader(Box::new(r));
+                        (None, true)
+                    }
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        continue;
+                    }
+                },
                 Action::Home => {
-                    screen = Screen::Home(home(&ctx));
+                    screen = Screen::Home(Box::new(home(&ctx)));
                     (None, true)
                 }
             };

@@ -4,6 +4,7 @@ pub mod clock;
 pub mod highlight;
 pub mod home;
 pub mod menu;
+pub mod notebook;
 pub mod pace;
 pub mod quick;
 pub mod reader;
@@ -126,6 +127,8 @@ pub enum Action {
     /// Redraw the screen but refresh only this area (popups, highlights).
     Region(omero_device::Rect),
     Open(PathBuf),
+    /// Open the book on a saved highlight.
+    OpenAt(PathBuf, Box<omero_store::AnnotationData>),
     Home,
     Quit,
 }

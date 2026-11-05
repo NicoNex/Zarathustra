@@ -12,8 +12,9 @@ use omero_engine::book::{Book, Chapter};
 use omero_engine::font::draw_glyph;
 use omero_engine::layout::page::Page;
 use omero_engine::style::cascade::Preferences;
+use omero_store::AnnotationData;
 
-use crate::highlight::{page_start, Highlights, Outcome, TextPos};
+use crate::highlight::{page_start, resolve, Highlights, Outcome, TextPos};
 use crate::menu::{self, Control, Typography};
 use crate::pace::Pace;
 use crate::toc::{self, Toc};
@@ -117,6 +118,24 @@ impl Reader {
             r.page = r.page_of(TextPos::new(p.block, p.offset));
         }
         Ok(r)
+    }
+
+    /// Goes to the page showing a saved highlight; stays put when its chapter doesn't load.
+    pub fn goto(&mut self, data: &AnnotationData, ctx: &mut Ctx) {
+        let Some(i) = self.book.spine.iter().position(|&s| u32::try_from(s) == Ok(data.start.spine)) else { return };
+        let (chapter, page) = (self.chapter_index, self.page);
+        match self.load(i, ctx) {
+            Ok(()) if !self.chapter.pages.is_empty() => {}
+            Ok(()) => return self.restore(chapter, page, ctx),
+            Err(e) => {
+                eprintln!("chapter {i}: {e:#}");
+                return self.restore(chapter, page, ctx);
+            }
+        }
+        let map = omero_engine::anchor::TextMap::new(&self.chapter.dom);
+        let range = resolve(&self.chapter.dom, &map, &self.chapter.blocks, data);
+        self.page = range.map_or(0, |r| self.page_of(r.start));
+        self.save();
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -244,6 +263,11 @@ impl Reader {
             return self.menu_tap((x0, y0), ctx);
         }
         if (x - x0).abs() <= SWIPE {
+            if self.hl.is_active() {
+                // A highlight may be saved: file it under the chapter being read.
+                let entry = self.current_entry().and_then(|i| self.contents.get(i));
+                self.hl.chapter_title = entry.map(|e| e.title.clone());
+            }
             if let Outcome::Redraw(rect) = self.hl.tap(&self.chapter, self.page, self.origin(), (x0, y0)) {
                 return Action::Region(rect);
             }

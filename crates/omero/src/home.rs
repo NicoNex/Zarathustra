@@ -9,6 +9,7 @@ use omero_engine::font::{Face, Rasterizer};
 use omero_engine::image::{self, GrayImage};
 use omero_engine::library::{BookEntry, Library, SortBy};
 
+use crate::notebook::{self, Notebook};
 use crate::reader::Position;
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
 use crate::{Action, Ctx, H, W};
@@ -78,6 +79,8 @@ pub struct Home {
     shown: Vec<usize>,
     page: usize,
     view_file: PathBuf,
+    /// A book's highlights over the library: index into `books`, the list.
+    notebook: Option<(usize, Notebook)>,
 }
 
 fn cover(thumb: Option<&Path>, (w, h): (i32, i32)) -> Option<GrayImage> {
@@ -109,7 +112,8 @@ impl Home {
             .map(|(i, b)| (i, cover(b.book.cover_thumb.as_deref(), CARD_COVER)));
         let view_file = ctx.state_dir.join("home_view.txt");
         let grid = std::fs::read_to_string(&view_file).map_or(true, |v| v.trim() != "list");
-        let mut home = Home { books, current, filter: Filter::All, grid, shown: Vec::new(), page: 0, view_file };
+        let mut home =
+            Home { books, current, filter: Filter::All, grid, shown: Vec::new(), page: 0, view_file, notebook: None };
         home.set_filter(Filter::All);
         home
     }
@@ -193,6 +197,9 @@ impl Home {
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        if let Some((_, nb)) = &self.notebook {
+            return nb.render(c, ctx);
+        }
         c.fill(c.bounds(), PAPER);
         let Ctx { fonts, raster, .. } = ctx;
         let (Some(serif), Some(serif_bold), Some(sans), Some(sans_bold)) = (
@@ -289,8 +296,46 @@ impl Home {
         crate::write_atomic(&self.view_file, if grid { "grid\n" } else { "list\n" }).ok();
     }
 
+    /// The book under `(x, y)`: a cover, a list row or the "continue reading" card.
+    fn book_at(&self, (x, y): (i32, i32)) -> Option<usize> {
+        if let (true, Some((i, _))) = (self.card(self.page), &self.current) {
+            if Rect::new(PAD, HEADER, W - 2 * PAD, CARD_H).contains(x, y) {
+                return Some(*i);
+            }
+        }
+        self.items().into_iter().find(|(_, r)| r.contains(x, y)).map(|(i, _)| i)
+    }
+
+    /// A long press: a book's highlights.
+    pub fn long_press(&mut self, at: (i32, i32), ctx: &Ctx) -> Action {
+        if self.notebook.is_some() {
+            return Action::None;
+        }
+        let Some(i) = self.book_at(at) else { return Action::None };
+        let b = &self.books[i];
+        let highlights = notebook::load(&ctx.state_dir, &b.book.path);
+        self.notebook = Some((i, Notebook::new(ctx, &b.book.title, &b.author(), highlights)));
+        Action::Redraw { turn: None }
+    }
+
     /// Handles a completed touch from `(x0, y0)` to `(x, y)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), (x, y): (i32, i32), ctx: &Ctx) -> Action {
+        if let Some((i, nb)) = &mut self.notebook {
+            return match nb.tap((x0, y0), x) {
+                notebook::Tap::None => Action::None,
+                notebook::Tap::Redraw => Action::Redraw { turn: None },
+                notebook::Tap::Back => {
+                    self.notebook = None;
+                    Action::Redraw { turn: None }
+                }
+                notebook::Tap::Open(n) => {
+                    let path = self.books[*i].book.path.clone();
+                    let data = nb.highlights[n].data.clone();
+                    self.notebook = None;
+                    Action::OpenAt(path, Box::new(data))
+                }
+            };
+        }
         let (dx, dy) = (x - x0, y - y0);
         let pages = self.pages();
         let turn = |page: &mut usize, forward: bool| {
@@ -322,11 +367,6 @@ impl Home {
         if y0 > H - FOOTER {
             return turn(&mut self.page, x0 > W / 2);
         }
-        if let (true, Some((i, _))) = (self.card(self.page), &self.current) {
-            if inside(Rect::new(PAD, HEADER, W - 2 * PAD, CARD_H)) {
-                return Action::Open(self.books[*i].book.path.clone());
-            }
-        }
         if let Some(sans) = ctx.sans(false) {
             let hit = self.chips(&Label { face: sans, size: 28.0, ink: INK }).into_iter().find(|c| inside(c.2));
             if let Some((f, _, _)) = hit {
@@ -337,8 +377,8 @@ impl Home {
                 return Action::Redraw { turn: None };
             }
         }
-        match self.items().into_iter().find(|(_, r)| inside(*r)) {
-            Some((i, _)) => Action::Open(self.books[i].book.path.clone()),
+        match self.book_at((x0, y0)) {
+            Some(i) => Action::Open(self.books[i].book.path.clone()),
             None => Action::None,
         }
     }

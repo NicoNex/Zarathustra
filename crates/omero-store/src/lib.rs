@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use omero_engine::anchor::{Anchor, TextQuote};
 use omero_engine::library::{BookEntry, Format};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -179,6 +179,16 @@ impl Store {
             ],
         )?;
         Ok(BookId(self.conn.query_row("SELECT id FROM books WHERE hash = ?1", [key], |r| r.get(0))?))
+    }
+
+    /// The book registered at `path` (by the reader, when it was opened), if any.
+    pub fn book_by_path(&self, path: &Path) -> Result<Option<BookId>> {
+        let id = self.conn.query_row(
+            "SELECT id FROM books WHERE path = ?1 ORDER BY id DESC LIMIT 1",
+            [path.to_string_lossy()],
+            |r| r.get(0),
+        );
+        Ok(id.optional()?.map(BookId))
     }
 
     pub fn add_annotation(&self, book: BookId, data: &AnnotationData) -> Result<Annotation> {
@@ -469,6 +479,8 @@ mod tests {
         let mut moved = entry("Inferno");
         moved.path = PathBuf::from("/mnt/us/elsewhere/inferno.epub");
         assert_eq!(store.ensure_book("id:a", &moved).expect("moved"), a);
+        assert_eq!(store.book_by_path(&moved.path).expect("query"), Some(a));
+        assert_eq!(store.book_by_path(&entry("Inferno").path).expect("query"), None, "follows the move");
         assert_eq!(events(&store, 0), [ev("book", "1", "insert"), ev("book", "1", "update")]);
         // Page turns do not hit the feed.
         store.conn.execute("UPDATE books SET progress = 0.5, position = 'x'", []).expect("progress");
