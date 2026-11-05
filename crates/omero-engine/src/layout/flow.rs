@@ -14,12 +14,25 @@ pub struct Span {
     pub node: NodeId,
 }
 
+/// Where a stretch of a block's text came from: from block byte `at` on, the text continues
+/// text node `node` from its byte `offset`, until the next entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Source {
+    pub at: u32,
+    pub node: NodeId,
+    pub offset: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     /// Element whose style sets alignment, indent and line height.
     pub node: NodeId,
     pub text: String,
     pub spans: Vec<Span>,
+    /// Map from `text` back to the DOM text nodes, in block order. A new entry starts at
+    /// every text node and wherever whitespace collapsing or a case change broke the
+    /// byte-for-byte correspondence; generated text (list markers) has none.
+    pub sources: Vec<Source>,
     pub lang: Option<String>,
     /// Collapsed margin above, device pixels.
     pub space_before: f32,
@@ -55,6 +68,24 @@ impl Block {
         let end = self.spans.get(i + 1).map_or(self.text.len(), |s| s.start);
         &self.text[self.spans[i].start..end]
     }
+
+    /// DOM text node and byte offset of block byte `pos`. Generated text before the first
+    /// source maps to its start.
+    pub fn source_at(&self, pos: usize) -> Option<(NodeId, usize)> {
+        let i = self.sources.partition_point(|s| s.at as usize <= pos);
+        let s = self.sources.get(i.saturating_sub(1))?;
+        Some((s.node, s.offset as usize + pos.saturating_sub(s.at as usize)))
+    }
+
+    /// Block byte of byte `offset` in text node `node`, if the node's text is in this block.
+    /// An offset inside collapsed whitespace maps to where the collapsed run ends.
+    pub fn position_of(&self, node: NodeId, offset: usize) -> Option<usize> {
+        let first = self.sources.iter().position(|s| s.node == node)?;
+        let i = (self.sources.iter().rposition(|s| s.node == node && s.offset as usize <= offset)).unwrap_or(first);
+        let s = self.sources[i];
+        let end = self.sources.get(i + 1).map_or(self.text.len(), |n| n.at as usize);
+        Some((s.at as usize + offset.saturating_sub(s.offset as usize)).min(end))
+    }
 }
 
 struct Builder<'a> {
@@ -64,6 +95,7 @@ struct Builder<'a> {
     /// The paragraph being filled.
     text: String,
     spans: Vec<Span>,
+    sources: Vec<Source>,
     /// The last character pushed was collapsible space (or the paragraph is empty).
     space: bool,
     /// Largest margin since the last block (adjacent margins collapse).
@@ -83,6 +115,7 @@ pub fn blocks(dom: &Dom, styles: &[Option<ComputedStyle>], lang: Option<&str>) -
         blocks: Vec::new(),
         text: String::new(),
         spans: Vec::new(),
+        sources: Vec::new(),
         space: true,
         margin: 0.0,
         break_pending: false,
@@ -129,7 +162,7 @@ impl<'a> Builder<'a> {
             match self.dom.kind(c) {
                 NodeKind::Text { text, .. } => {
                     self.push_span(id);
-                    self.push_text(text, s);
+                    self.push_text(c, text, s);
                 }
                 NodeKind::Element { .. } => {
                     let Some(cs) = self.style(c) else { continue };
@@ -174,7 +207,7 @@ impl<'a> Builder<'a> {
             match self.dom.kind(c) {
                 NodeKind::Text { text, .. } => {
                     self.push_span(id);
-                    self.push_text(text, s);
+                    self.push_text(c, text, s);
                 }
                 NodeKind::Element { .. } if self.style(c).is_some_and(|cs| cs.display != Display::None) => {
                     self.inline(c)
@@ -227,11 +260,12 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Appends text per `white-space` and `text-transform`.
-    fn push_text(&mut self, text: &str, s: &ComputedStyle) {
+    /// Appends text node `node`'s `text` per `white-space` and `text-transform`.
+    fn push_text(&mut self, node: NodeId, text: &str, s: &ComputedStyle) {
         let upper = s.text_transform == TextTransform::Uppercase;
         let lower = s.text_transform == TextTransform::Lowercase;
-        for c in text.chars() {
+        for (i, c) in text.char_indices() {
+            self.map_source(node, i);
             if s.white_space == WhiteSpace::Pre {
                 if c != '\r' {
                     self.text.push(c);
@@ -255,11 +289,29 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Starts a source entry for byte `offset` of `node` unless the text about to be pushed
+    /// continues the last entry byte for byte.
+    fn map_source(&mut self, node: NodeId, offset: usize) {
+        let at = self.text.len();
+        let continues =
+            self.sources.last().is_some_and(|s| s.node == node && s.offset as usize + (at - s.at as usize) == offset);
+        if continues {
+            return;
+        }
+        let (at, offset) = (u32::try_from(at).unwrap_or(u32::MAX), u32::try_from(offset).unwrap_or(u32::MAX));
+        match self.sources.last_mut() {
+            // Nothing was pushed since the last entry (its text collapsed away): replace it.
+            Some(last) if last.at == at => *last = Source { at, node, offset },
+            _ => self.sources.push(Source { at, node, offset }),
+        }
+    }
+
     /// Ends the current paragraph (if it has content) as a block styled by `node`.
     fn flush(&mut self, node: NodeId, x: f32, lang: Option<&str>) {
         let trimmed = self.text.trim_end_matches(' ').len();
         self.text.truncate(trimmed);
         self.spans.retain(|s| s.start < trimmed);
+        self.sources.retain(|s| (s.at as usize) < trimmed);
         let s = self.style(node);
         let width = s.map_or(0.0, |s| s.content_width);
         let avoid_break_inside = s.is_some_and(|s| s.break_inside_avoid);
@@ -273,6 +325,7 @@ impl<'a> Builder<'a> {
                 node,
                 text: String::new(),
                 spans: Vec::new(),
+                sources: Vec::new(),
                 lang: None,
                 space_before: std::mem::take(&mut self.margin),
                 x,
@@ -290,6 +343,7 @@ impl<'a> Builder<'a> {
                 node,
                 text: std::mem::take(&mut self.text),
                 spans: std::mem::take(&mut self.spans),
+                sources: std::mem::take(&mut self.sources),
                 lang: lang.map(str::to_string),
                 space_before: std::mem::take(&mut self.margin),
                 x,
@@ -302,6 +356,7 @@ impl<'a> Builder<'a> {
         }
         self.text.clear();
         self.spans.clear();
+        self.sources.clear();
         self.space = true;
     }
 
@@ -390,6 +445,40 @@ mod tests {
         assert!((b[1].space_before - 26.8).abs() < 0.01, "{}", b[1].space_before);
         assert!(b[3].x > 0.0, "list padding indents");
         assert_eq!(roman(1994), "MCMXCIV");
+    }
+
+    #[test]
+    fn block_text_maps_back_to_the_dom() {
+        let (dom, b) = build(
+            "<html><body><p>\n   Some <em>very\n  emphatic</em>   text. </p>\
+             <ol><li>one  two</li></ol><p style='text-transform: uppercase'>ﬁne x</p></body></html>",
+        );
+        let node_text = |n: NodeId| match dom.kind(n) {
+            NodeKind::Text { text, .. } => text.as_str(),
+            _ => "",
+        };
+        // Every non-space character comes from the same character in its text node, and the
+        // DOM position maps back to it.
+        for block in &b[..2] {
+            for (pos, c) in block.text.char_indices().filter(|&(_, c)| c != ' ') {
+                let (node, off) = block.source_at(pos).expect("mapped");
+                if block.text.starts_with('1') && pos < "1.\u{a0}".len() {
+                    continue; // the list marker is generated
+                }
+                assert_eq!(node_text(node)[off..].chars().next(), Some(c), "{:?} at {pos}", block.text);
+                assert_eq!(block.position_of(node, off), Some(pos));
+            }
+        }
+        // A space collapsed away maps to the end of its run.
+        let (node, _) = b[0].source_at(0).expect("mapped");
+        assert_eq!(b[0].position_of(node, 1), Some(0));
+        let em = b[0].text.find("emphatic").expect("x");
+        let (node, off) = b[0].source_at(em).expect("mapped");
+        assert_eq!(&node_text(node)[off..], "emphatic");
+        // Uppercase changes lengths ("ﬁ" → "FI"): the text after it is mapped again.
+        assert_eq!(b[2].text, "FINE X");
+        let (node, off) = b[2].source_at(b[2].text.find('X').expect("x")).expect("mapped");
+        assert_eq!(&node_text(node)[off..], "x");
     }
 
     #[test]

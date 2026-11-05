@@ -74,7 +74,7 @@ impl Reader {
             prefs,
             typo,
             menu: false,
-            chapter: Chapter { blocks: Vec::new(), pages: Vec::new() },
+            chapter: Chapter::default(),
             page: 0,
             state_file,
             images: Default::default(),

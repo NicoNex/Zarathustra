@@ -60,6 +60,13 @@ pub struct ParseError {
     pub message: String,
 }
 
+/// An empty document (just the document node).
+impl Default for Dom {
+    fn default() -> Dom {
+        Dom::new()
+    }
+}
+
 impl Dom {
     pub const ROOT: NodeId = NodeId(0);
 

@@ -40,7 +40,10 @@ pub struct Book {
     pub chapters: Vec<String>,
 }
 
+#[derive(Default)]
 pub struct Chapter {
+    /// The chapter document, kept to anchor highlights and positions (see [`crate::anchor`]).
+    pub dom: Dom,
     pub blocks: Vec<Block>,
     pub pages: Vec<Page>,
 }
@@ -124,7 +127,7 @@ impl Book {
             img.intrinsic = self.resource(&img.src).and_then(|b| image::dimensions(&b));
         }
         let pages = page::layout(&blocks, &styles, fonts, ts, height);
-        Ok(Chapter { blocks, pages })
+        Ok(Chapter { dom, blocks, pages })
     }
 
     /// The chapter's `<link rel=stylesheet>` and `<style>` sheets, in document order.
