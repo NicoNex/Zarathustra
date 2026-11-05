@@ -32,6 +32,8 @@ pub enum BookError {
 enum Source {
     Epub(Epub<BufReader<File>>),
     Mobi(Mobi),
+    /// A plain-text file's synthetic XHTML chapters (paths in [`crate::txt::chapter_path`] order).
+    Txt(Vec<String>),
 }
 
 pub struct Book {
@@ -56,8 +58,16 @@ pub struct Chapter {
 }
 
 impl Book {
-    /// Opens an EPUB, or an AZW3/MOBI/AZW file by extension.
+    /// Opens an EPUB (or kepub), or an AZW3/MOBI/AZW or TXT file by extension.
     pub fn open(path: &Path) -> Result<Book, BookError> {
+        if Format::from_path(path) == Some(Format::Txt) {
+            let (xhtml, toc) = crate::txt::chapters(&std::fs::read(path).map_err(EpubError::from)?);
+            let chapters = (0..xhtml.len()).map(crate::txt::chapter_path).collect();
+            let spine = (0..xhtml.len()).collect();
+            let title = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+            let metadata = Metadata { title, ..Metadata::default() };
+            return Ok(Book { source: RefCell::new(Source::Txt(xhtml)), metadata, chapters, spine, toc });
+        }
         if matches!(Format::from_path(path), Some(Format::Azw3 | Format::Mobi)) {
             let mut mobi = Mobi::open(path)?;
             let (chapters, metadata, toc) = (take(&mut mobi.chapters), take(&mut mobi.metadata), take(&mut mobi.toc));
@@ -86,6 +96,7 @@ impl Book {
         match &mut *self.source.borrow_mut() {
             Source::Epub(e) => e.read(path).ok(),
             Source::Mobi(m) => m.read(path).ok(),
+            Source::Txt(_) => None,
         }
     }
 
@@ -95,6 +106,7 @@ impl Book {
             // ponytail: the whole entry is inflated for its header; read a prefix if it shows up.
             Source::Epub(e) => image::dimensions(&e.read(path).ok()?),
             Source::Mobi(m) => m.image_size(path),
+            Source::Txt(_) => None,
         }
     }
 
@@ -105,6 +117,11 @@ impl Book {
                 let bytes = m.read(path)?;
                 let text = String::from_utf8_lossy(&bytes);
                 Dom::parse_xml(&text).map_err(|source| BookError::Xml { path: path.into(), source })
+            }
+            Source::Txt(xhtml) => {
+                let text = (self.chapters.iter().position(|c| c == path)).and_then(|i| xhtml.get(i));
+                let text = text.ok_or(EpubError::Missing("chapter"))?;
+                Dom::parse_xml(text).map_err(|source| BookError::Xml { path: path.into(), source })
             }
         }
     }
@@ -122,6 +139,7 @@ impl Book {
                 e.read(&path).ok()
             }
             Source::Mobi(m) => m.cover(),
+            Source::Txt(_) => None,
         }
     }
 
@@ -189,6 +207,62 @@ impl Book {
 mod tests {
     use super::*;
     use crate::layout::hyphen::Hyphenators;
+
+    fn layout_env() -> (FontLibrary, Typesetter, Preferences) {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let ts = Typesetter::new(Hyphenators::new(root.join("assets/hyphenation")));
+        let prefs = Preferences {
+            font_size: 40.0,
+            font_family: None,
+            line_height: None,
+            align: None,
+            hyphenate: false,
+            page_width: 1000.0,
+        };
+        (FontLibrary::new("Bookerly"), ts, prefs)
+    }
+
+    /// Writes `bytes` to a fresh temp file named `name` and opens it as a book.
+    fn open_temp(name: &str, bytes: &[u8]) -> Book {
+        let dir = std::env::temp_dir().join(format!("omero-book-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).expect("write book");
+        let book = Book::open(&path).expect("opens");
+        std::fs::remove_dir_all(&dir).expect("clean up");
+        book
+    }
+
+    #[test]
+    fn opens_txt_as_chapters() {
+        let mut book = open_temp("Moby Dick.txt", b"Call me\nIshmael.\n\nChapter 1\n\nLoomings.");
+        assert_eq!(book.title(), Some("Moby Dick"));
+        assert_eq!(book.chapters, ["text0000.xhtml", "text0001.xhtml"]);
+        assert_eq!(book.spine, [0, 1]);
+        assert_eq!(book.toc[0].target, "text0001.xhtml");
+        let (fonts, mut ts, prefs) = layout_env();
+        let ch = book.chapter(0, &prefs, &fonts, &mut ts, 1400.0).expect("lays out");
+        assert_eq!(ch.blocks[0].text, "Call me Ishmael.");
+    }
+
+    /// Kobo's kepubs wrap every sentence in `<span class="koboSpan">`; the text flows as usual.
+    #[test]
+    fn opens_kepub_with_kobo_spans() {
+        let container = r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>
+            <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/>
+            <manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest>
+            <spine><itemref idref="c"/></spine></package>"#;
+        let xhtml = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div id="book-columns"><div id="book-inner">
+            <p><span class="koboSpan" id="kobo.1.1">Call me Ishmael. </span><span class="koboSpan" id="kobo.1.2">Some years ago.</span></p>
+            </div></div></body></html>"#;
+        let files = [("META-INF/container.xml", container), ("content.opf", opf), ("c.xhtml", xhtml)];
+        let mut book = open_temp("moby.kepub.epub", crate::epub::tests::epub(&files).get_ref());
+        let (fonts, mut ts, prefs) = layout_env();
+        let ch = book.chapter(0, &prefs, &fonts, &mut ts, 1400.0).expect("lays out");
+        let text: Vec<_> = ch.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(text, ["Call me Ishmael. Some years ago."]);
+    }
 
     #[test]
     fn lays_out_a_real_book() {

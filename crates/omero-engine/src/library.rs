@@ -317,8 +317,10 @@ fn read_book(path: &Path, format: Format) -> Option<(Metadata, Option<Vec<u8>>)>
             Some((std::mem::take(&mut epub.metadata), cover))
         }
         Format::Azw3 | Format::Mobi => crate::mobi::Mobi::peek(path).ok(),
-        // ponytail: PDF and TXT keep the file stem as title until their readers land.
-        Format::Pdf | Format::Txt => None,
+        // TXT has no metadata: the file stem is its title.
+        Format::Txt => None,
+        // ponytail: PDF keeps the file stem as title until its reader lands.
+        Format::Pdf => None,
     }
 }
 
@@ -542,6 +544,7 @@ mod tests {
         let f = |p: &str| Format::from_path(Path::new(p));
         assert_eq!(f("a/B.EPUB"), Some(Format::Epub));
         assert_eq!(f("b.kepub.epub"), Some(Format::Kepub));
+        assert_eq!(f("b.KePub"), Some(Format::Kepub));
         assert_eq!(f("c.azw3"), Some(Format::Azw3));
         assert_eq!(f("d.mobi"), Some(Format::Mobi));
         assert_eq!(f("e.pdf"), Some(Format::Pdf));
