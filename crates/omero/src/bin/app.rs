@@ -91,7 +91,10 @@ fn main() -> Result<()> {
                 Event::Quit => return Ok(()),
             };
             match t.phase {
-                Phase::Down => down = Some((t.x, t.y)),
+                Phase::Down => {
+                    down = Some((t.x, t.y));
+                    continue;
+                }
                 Phase::Move => continue,
                 Phase::Up => {}
             }
