@@ -203,11 +203,13 @@ fn main() -> Result<()> {
             dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
         } else if let Some((rect, waveform)) = panel.filter(|_| quick.is_open()) {
-            quick.render(&mut dev.canvas(), &mut ctx);
-            // Wait even between drag frames: overlapping DU updates collide on the MTK panel
-            // (offset gray blocks). Batching already keeps the drag from lagging behind.
+            // Wait before drawing: the MTK driver reads the framebuffer while an update runs,
+            // so drawing into a region still refreshing shows half-drawn gray blocks.
             dev.wait_refresh(marker)?;
+            let t0 = Instant::now();
+            quick.render(&mut dev.canvas(), &mut ctx);
             marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;
+            eprintln!("panel drawn in {:?}", t0.elapsed());
         }
     }
 }
