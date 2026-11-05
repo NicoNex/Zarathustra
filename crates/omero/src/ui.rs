@@ -57,6 +57,22 @@ pub fn rounded_rect(c: &mut Canvas, r: Rect, radius: i32, color: u8) {
     }
 }
 
+/// Rounds the corners of whatever is drawn in `r` by blending the outside of each arc
+/// with what lies behind it: `bg` per corner (top-left, top-right, bottom-left, bottom-right).
+/// For images, which are drawn square.
+pub fn clip_corners(c: &mut Canvas, r: Rect, radius: i32, bg: [u8; 4]) {
+    let radius = radius.min(r.w / 2).min(r.h / 2).max(0);
+    let corners =
+        [(r.x, r.y), (r.right() - radius, r.y), (r.x, r.bottom() - radius), (r.right() - radius, r.bottom() - radius)];
+    for ((cx, cy), bg) in corners.into_iter().zip(bg) {
+        for y in cy..cy + radius {
+            for x in cx..cx + radius {
+                blend(c, x, y, bg, 255 - coverage(r, radius as f32, x, y));
+            }
+        }
+    }
+}
+
 /// A rounded outline `width` pixels thick.
 pub fn rounded_outline(c: &mut Canvas, r: Rect, radius: i32, width: i32, color: u8, inside: u8) {
     rounded_rect(c, r, radius, color);

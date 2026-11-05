@@ -11,12 +11,12 @@ use crate::epub::Epub;
 use crate::image;
 
 /// Size the cover thumbnails are fitted into.
-pub const THUMB_W: u32 = 300;
-pub const THUMB_H: u32 = 450;
+pub const THUMB_W: u32 = 340;
+pub const THUMB_H: u32 = 510;
 
 const CACHE_FILE: &str = "library.tsv";
-// Bumped when entries gain data (2: AZW3/MOBI metadata and covers).
-const CACHE_HEADER: &str = "omero-library 2";
+// Bumped when entries gain data (2: AZW3/MOBI metadata and covers; 3: grid-size thumbs).
+const CACHE_HEADER: &str = "omero-library 3";
 const THUMB_DIR: &str = "thumbs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
