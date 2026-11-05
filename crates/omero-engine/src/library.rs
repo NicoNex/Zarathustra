@@ -15,7 +15,8 @@ pub const THUMB_W: u32 = 300;
 pub const THUMB_H: u32 = 450;
 
 const CACHE_FILE: &str = "library.tsv";
-const CACHE_HEADER: &str = "omero-library 1";
+// Bumped when entries gain data (2: AZW3/MOBI metadata and covers).
+const CACHE_HEADER: &str = "omero-library 2";
 const THUMB_DIR: &str = "thumbs";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -290,9 +291,9 @@ fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, th
     };
     match format {
         Format::Epub | Format::Kepub => read_epub(&mut entry, thumbs),
-        // ponytail: AZW3/MOBI metadata and covers come from `crate::mobi` once it lands; PDF and
-        // TXT keep the file stem as title. Hook those parsers in here.
-        Format::Azw3 | Format::Mobi | Format::Pdf | Format::Txt => {}
+        Format::Azw3 | Format::Mobi => read_mobi(&mut entry, thumbs),
+        // ponytail: PDF and TXT keep the file stem as title until their readers land.
+        Format::Pdf | Format::Txt => {}
     }
     entry
 }
@@ -310,6 +311,20 @@ fn read_epub(entry: &mut BookEntry, thumbs: &Path) {
     entry.series_index = m.series_index;
     let Some(cover) = epub.cover.clone() else { return };
     let Ok(bytes) = epub.read(&cover) else { return };
+    entry.cover_thumb = make_thumb(&bytes, &thumb_path(thumbs, entry));
+}
+
+fn read_mobi(entry: &mut BookEntry, thumbs: &Path) {
+    let Ok(mut mobi) = crate::mobi::Mobi::open(&entry.path) else { return };
+    let m = std::mem::take(&mut mobi.metadata);
+    if let Some(title) = m.title.filter(|t| !t.trim().is_empty()) {
+        entry.title = title;
+    }
+    entry.authors = m.authors;
+    entry.language = m.language;
+    entry.series = m.series;
+    entry.series_index = m.series_index;
+    let Some(bytes) = mobi.cover() else { return };
     entry.cover_thumb = make_thumb(&bytes, &thumb_path(thumbs, entry));
 }
 
