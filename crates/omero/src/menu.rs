@@ -8,6 +8,7 @@ use omero_device::{Canvas, Rect};
 use omero_engine::font::{Face, Rasterizer};
 use omero_engine::style::css::TextAlign;
 
+use crate::i18n::t;
 use crate::ui::{button, rounded_rect, segmented, segments, Label, INK, INK_SOFT, PAPER};
 use crate::{Ctx, H, W};
 
@@ -29,8 +30,10 @@ const MAX_FONTS: usize = 9;
 
 /// Text sizes in device pixels (300 dpi: 40 px ≈ 9.6 pt).
 pub const SIZES: [f32; 10] = [28.0, 32.0, 36.0, 40.0, 44.0, 48.0, 54.0, 60.0, 68.0, 76.0];
-pub const SPACINGS: [(f32, &str); 3] = [(1.3, "Tight"), (1.45, "Normal"), (1.65, "Loose")];
-pub const MARGINS: [(i32, &str); 3] = [(56, "Narrow"), (96, "Normal"), (150, "Wide")];
+/// Line heights; the menu names them with `Strings::spacings`.
+pub const SPACINGS: [f32; 3] = [1.3, 1.45, 1.65];
+/// Side margins in pixels; named by `Strings::margin_names`.
+pub const MARGINS: [i32; 3] = [56, 96, 150];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Typography {
@@ -44,9 +47,8 @@ pub struct Typography {
     pub align: usize,
 }
 
-/// Body text alignment choices, as the menu shows them.
-pub const ALIGNS: [(TextAlign, &str); 3] =
-    [(TextAlign::Justify, "Justified"), (TextAlign::Start, "Left"), (TextAlign::Center, "Center")];
+/// Body text alignment choices, in menu order; named by `Strings::aligns`.
+pub const ALIGNS: [TextAlign; 3] = [TextAlign::Justify, TextAlign::Start, TextAlign::Center];
 
 impl Default for Typography {
     fn default() -> Self {
@@ -94,15 +96,15 @@ impl Typography {
     }
 
     pub fn text_align(&self) -> TextAlign {
-        ALIGNS[self.align].0
+        ALIGNS[self.align]
     }
 
     pub fn line_height(&self) -> f32 {
-        SPACINGS[self.spacing].0
+        SPACINGS[self.spacing]
     }
 
     pub fn margin_x(&self) -> i32 {
-        MARGINS[self.margin].0
+        MARGINS[self.margin]
     }
 }
 
@@ -183,13 +185,13 @@ impl Layout {
         Layout {
             top,
             contents,
-            headers: [("Text", text_header), ("Layout", layout_header)],
+            headers: [(t().text, text_header), (t().layout, layout_header)],
             labels: [
-                ("Size", size),
-                ("Font", Rect::new(x, font_top, w, ROW_H)),
-                ("Spacing", spacing),
-                ("Margins", margin),
-                ("Alignment", align),
+                (t().size, size),
+                (t().font, Rect::new(x, font_top, w, ROW_H)),
+                (t().spacing, spacing),
+                (t().margins, margin),
+                (t().alignment, align),
             ],
             size,
             fonts,
@@ -233,7 +235,7 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
         return;
     };
 
-    topbar(c, raster, sans, serif_bold, "‹  Library", title);
+    topbar(c, raster, sans, serif_bold, t().back_library, title);
 
     // Sheet: rounded top corners over a black edge, like the quick panel.
     rounded_rect(c, Rect::new(0, l.top - 3, W, H - l.top + 40), 32, INK);
@@ -245,12 +247,12 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     let ink = if chapter.is_some() { INK } else { INK_SOFT };
     let head = Label { face: sans_bold, size: 32.0, ink };
     let mut x = r.x as f32 + 36.0;
-    x += head.draw(c, raster, "Contents", x, head.baseline(r)) + 32.0;
+    x += head.draw(c, raster, t().contents, x, head.baseline(r)) + 32.0;
     let chevron = Label { face: sans_bold, size: 44.0, ink };
     let chevron_x = (r.right() - 36) as f32 - chevron.width("›");
     chevron.draw(c, raster, "›", chevron_x, chevron.baseline(r));
     let sub = Label { face: sans, size: 30.0, ink: INK_SOFT };
-    let text = sub.fit(chapter.unwrap_or("No table of contents"), chevron_x - 32.0 - x);
+    let text = sub.fit(chapter.unwrap_or(t().no_contents), chevron_x - 32.0 - x);
     sub.draw(c, raster, &text, x, sub.baseline(r));
 
     let header = Label { face: sans_bold, size: 30.0, ink: INK };
@@ -274,7 +276,7 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
         let on = *f == typo.family;
         button(c, *r, on);
         let face = f.as_ref().and_then(|f| fonts.pick(std::slice::from_ref(f), 400, false)).unwrap_or(sans);
-        let name = f.as_deref().map_or("Original".into(), title_case);
+        let name = f.as_deref().map_or(t().original_font.into(), title_case);
         Label { face, size: 32.0, ink: if on { PAPER } else { INK } }.centered(c, raster, &name, *r);
     }
 
@@ -284,9 +286,9 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
             Label { face: sans, size: 30.0, ink: if i == on { PAPER } else { INK } }.centered(c, raster, name, s);
         }
     };
-    choice(c, l.spacing, &SPACINGS.map(|s| s.1), typo.spacing);
-    choice(c, l.margin, &MARGINS.map(|m| m.1), typo.margin);
-    choice(c, l.align, &ALIGNS.map(|a| a.1), typo.align);
+    choice(c, l.spacing, &t().spacings, typo.spacing);
+    choice(c, l.margin, &t().margin_names, typo.margin);
+    choice(c, l.align, &t().aligns, typo.align);
 }
 
 /// The menu's top bar: a back link on the left and a centred title, over a black rule.

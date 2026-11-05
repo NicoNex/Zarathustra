@@ -231,9 +231,9 @@ pub enum Button {
 impl Button {
     fn label(self) -> &'static str {
         match self {
-            Button::Highlight => "Highlight",
-            Button::Delete => "Delete",
-            Button::Cancel => "Cancel",
+            Button::Highlight => crate::i18n::t().highlight,
+            Button::Delete => crate::i18n::t().delete,
+            Button::Cancel => crate::i18n::t().cancel,
         }
     }
 }
