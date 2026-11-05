@@ -11,8 +11,9 @@ use anyhow::{Context, Result};
 use omero::home::Home;
 use omero::quick::{QuickPanel, QuickResult, PANEL};
 use omero::reader::Reader;
+use omero::sleep::render_sleep;
 use omero::{first_existing, Action, Ctx, H, W};
-use omero_device::{Canvas, Event, Phase, Rect, Refresh, Swipe, Waveform};
+use omero_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
 
 /// A full flashing refresh every this many page turns clears e-ink ghosting.
 const FLASH_EVERY: u32 = 8;
@@ -91,11 +92,26 @@ fn main() -> Result<()> {
         events.clear();
         // Wake every few minutes so automatic warmth follows the clock.
         dev.wait_events(Some(Duration::from_secs(300)), &mut events)?;
-        if let Some(rect) = quick.tick(dev.as_mut()) {
-            quick.render(&mut dev.canvas(), &mut ctx);
+        while let Some(ev) = dev.power_event() {
+            match ev {
+                PowerEvent::Sleep => {
+                    quick.close();
+                    let battery = dev.battery();
+                    match &mut screen {
+                        Screen::Reader(r) => r.render_sleep(&mut dev.canvas(), &mut ctx, battery),
+                        Screen::Home(_) => render_sleep(&mut dev.canvas(), &mut ctx, None, "", "", battery),
+                    }
+                }
+                PowerEvent::Wake => screen.render(&mut dev.canvas(), &mut ctx),
+                PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
+            }
             dev.wait_refresh(marker)?;
-            marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
+            marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
+            down = None;
         }
+        // Panel changes from the whole batch, drawn once: a drag queues many moves per frame.
+        let mut panel: Option<(Rect, Waveform)> = quick.tick(dev.as_mut()).map(|r| (r, Waveform::Text));
+        let mut closed = false;
         for e in &events {
             let t = match e {
                 Event::Touch(t) => t,
@@ -105,15 +121,16 @@ fn main() -> Result<()> {
                 match quick.touch(t, dev.as_mut()) {
                     QuickResult::None => {}
                     QuickResult::Redraw { rect, waveform } => {
-                        quick.render(&mut dev.canvas(), &mut ctx);
-                        dev.wait_refresh(marker)?;
-                        marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;
+                        panel = Some(match panel {
+                            // Any settled (non-drag) change in the batch needs the gray waveform.
+                            Some((r, w)) => (r.union(&rect), if w == Waveform::Fast { waveform } else { w }),
+                            None => (rect, waveform),
+                        });
                     }
-                    QuickResult::Close | QuickResult::Sleep => {
-                        screen.render(&mut dev.canvas(), &mut ctx);
-                        dev.wait_refresh(marker)?;
-                        marker =
-                            dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
+                    QuickResult::Close => closed = true,
+                    QuickResult::Sleep => {
+                        closed = true;
+                        dev.sleep()?;
                     }
                 }
                 down = None;
@@ -180,6 +197,18 @@ fn main() -> Result<()> {
                 }),
             })?;
             eprintln!("drawn in {drawn:?}");
+        }
+        if closed {
+            screen.render(&mut dev.canvas(), &mut ctx);
+            dev.wait_refresh(marker)?;
+            marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
+        } else if let Some((rect, waveform)) = panel.filter(|_| quick.is_open()) {
+            quick.render(&mut dev.canvas(), &mut ctx);
+            // A drag frame doesn't wait for the previous one: the controller merges them.
+            if waveform != Waveform::Fast {
+                dev.wait_refresh(marker)?;
+            }
+            marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;
         }
     }
 }

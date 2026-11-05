@@ -465,8 +465,15 @@ impl QuickPanel {
         num.draw(c, raster, &text, (W - PAD) as f32 - num.width(&text), y);
 
         let (fill, knob) = if enabled { (INK, INK) } else { (150, 150) };
+        // While dragging, the fast waveform shows only black and white: light grays would
+        // snap to white and pop back on release, so outline in ink instead.
+        let mono = self.drag == Some(s);
         for (r, plus) in [(s.minus(), false), (s.plus(), true)] {
-            rounded_rect(c, r, r.w / 2, FILL);
+            if mono {
+                rounded_outline(c, r, r.w / 2, 3, INK, PAPER);
+            } else {
+                rounded_rect(c, r, r.w / 2, FILL);
+            }
             let (cx, cy) = (r.x + r.w / 2, r.y + r.h / 2);
             c.fill(Rect::new(cx - 15, cy - 2, 30, 5), fill);
             if plus {
@@ -476,7 +483,11 @@ impl QuickPanel {
         let row = s.row();
         let cy = row.y + row.h / 2;
         let track = Rect::new(TRACK_X0, cy - TRACK_H / 2, TRACK_X1 - TRACK_X0, TRACK_H);
-        rounded_rect(c, track, TRACK_H / 2, if enabled { LINE } else { FILL });
+        if mono {
+            rounded_outline(c, track, TRACK_H / 2, 3, INK, PAPER);
+        } else {
+            rounded_rect(c, track, TRACK_H / 2, if enabled { LINE } else { FILL });
+        }
         let kx = knob_x(value);
         rounded_rect(c, Rect { w: kx - track.x, ..track }, TRACK_H / 2, fill);
         rounded_outline(c, Rect::new(kx - KNOB_R, cy - KNOB_R, 2 * KNOB_R, 2 * KNOB_R), KNOB_R, 5, knob, PAPER);
