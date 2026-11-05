@@ -5,6 +5,7 @@ pub mod menu;
 pub mod quick;
 pub mod reader;
 pub mod settings;
+pub mod sleep;
 pub mod ui;
 
 use std::path::{Path, PathBuf};

@@ -93,6 +93,13 @@ impl Reader {
         self.book.title()
     }
 
+    /// Draws the sleep screen for this book: its cover, or its title page without one.
+    pub fn render_sleep(&mut self, c: &mut Canvas, ctx: &mut Ctx, battery: Option<omero_device::Battery>) {
+        let cover = self.book.cover();
+        let title = self.book.title().filter(|t| !t.is_empty()).unwrap_or("Untitled");
+        crate::sleep::render_sleep(c, ctx, cover.as_deref(), title, self.book.author().unwrap_or(""), battery);
+    }
+
     pub fn load(&mut self, i: usize, ctx: &mut Ctx) -> Result<()> {
         let t = Instant::now();
         let height = (H - MARGIN_TOP - MARGIN_BOTTOM) as f32;

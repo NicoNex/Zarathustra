@@ -88,6 +88,17 @@ impl Book {
         }
     }
 
+    /// The first listed author.
+    pub fn author(&self) -> Option<&str> {
+        self.epub.metadata.authors.first().map(String::as_str)
+    }
+
+    /// The cover image file's bytes, at full resolution (for the sleep screen).
+    pub fn cover(&mut self) -> Option<Vec<u8>> {
+        let path = self.epub.cover.clone()?;
+        self.epub.read(&path).ok()
+    }
+
     /// Lays out chapter `i` into pages of `height` pixels; `prefs.page_width` is the column width.
     pub fn chapter(
         &mut self,
