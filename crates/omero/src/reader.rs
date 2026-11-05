@@ -30,6 +30,8 @@ pub struct Reader {
     chapter_index: usize,
     pub page: usize,
     state_file: PathBuf,
+    /// Decoded images of the pages around the current one (`render` takes `&self`).
+    images: std::cell::RefCell<omero_engine::image::ImageCache>,
 }
 
 /// A saved reading position: chapter, first block on the page, progress through the book.
@@ -74,6 +76,7 @@ impl Reader {
             chapter: Chapter { blocks: Vec::new(), pages: Vec::new() },
             page: 0,
             state_file,
+            images: Default::default(),
         };
         r.load(r.chapter_index, ctx)?;
         if let Some(block) = saved.map(|p| p.block) {
@@ -161,6 +164,18 @@ impl Reader {
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
         c.fill(c.bounds(), 255);
         if let Some(page) = self.chapter.pages.get(self.page) {
+            let mut images = self.images.borrow_mut();
+            for im in &page.images {
+                let block = self.chapter.blocks.get(im.block as usize);
+                let Some(src) = block.and_then(|b| b.image.as_ref()).map(|i| i.src.as_str()) else { continue };
+                let (w, h) = (im.width.round() as u32, im.height.round() as u32);
+                if let Some(img) = images.get(src, w, h, || self.book.resource(src)) {
+                    // Centred in the laid-out box, which may be a pixel off the decoded size.
+                    let x = MARGIN_X as f32 + im.x + (im.width - img.width as f32) / 2.0;
+                    let y = MARGIN_TOP as f32 + im.y + (im.height - img.height as f32) / 2.0;
+                    omero_engine::image::draw(c, img, x.round() as i32, y.round() as i32);
+                }
+            }
             for line in &page.lines {
                 for g in &line.glyphs {
                     let Some(face) = ctx.fonts.face(g.face) else { continue };

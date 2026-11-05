@@ -1,5 +1,6 @@
 //! An open EPUB laid out chapter by chapter.
 
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -7,13 +8,17 @@ use std::path::Path;
 use crate::dom::{Dom, NodeKind};
 use crate::epub::{resolve, Epub, EpubError};
 use crate::fonts::FontLibrary;
+use crate::image;
 use crate::layout::flow::{self, Block};
 use crate::layout::page::{self, Page};
 use crate::layout::paragraph::Typesetter;
 use crate::style::cascade::{compute, Preferences, Stylesheets};
 
 pub struct Book {
-    epub: Epub<BufReader<File>>,
+    /// Behind a `RefCell` so drawing (which holds `&Book`) can read images from the archive.
+    epub: RefCell<Epub<BufReader<File>>>,
+    title: Option<String>,
+    language: Option<String>,
     /// Archive paths of the linear XHTML chapters, in reading order.
     pub chapters: Vec<String>,
 }
@@ -28,11 +33,17 @@ impl Book {
         let epub = Epub::open(BufReader::new(File::open(path)?))?;
         let chapters =
             (epub.spine.iter()).filter(|s| s.linear && s.media_type.contains("html")).map(|s| s.path.clone()).collect();
-        Ok(Book { epub, chapters })
+        let (title, language) = (epub.metadata.title.clone(), epub.metadata.language.clone());
+        Ok(Book { epub: RefCell::new(epub), title, language, chapters })
     }
 
     pub fn title(&self) -> Option<&str> {
-        self.epub.metadata.title.as_deref()
+        self.title.as_deref()
+    }
+
+    /// The bytes of the archive entry at `path` (an image's resolved `src`, say).
+    pub fn resource(&self, path: &str) -> Option<Vec<u8>> {
+        self.epub.borrow_mut().read(path).ok()
     }
 
     /// Lays out chapter `i` into pages of `height` pixels; `prefs.page_width` is the column width.
@@ -45,11 +56,15 @@ impl Book {
         height: f32,
     ) -> Result<Chapter, EpubError> {
         let path = self.chapters.get(i).ok_or(EpubError::Missing("chapter"))?.clone();
-        let dom = self.epub.read_dom(&path)?;
+        let dom = self.epub.get_mut().read_dom(&path)?;
         let sheets = self.stylesheets(&dom, &path);
         let styles = compute(&dom, &sheets, prefs);
-        let lang = self.epub.metadata.language.clone();
-        let blocks = flow::blocks(&dom, &styles, lang.as_deref());
+        let mut blocks = flow::blocks(&dom, &styles, self.language.as_deref());
+        for img in blocks.iter_mut().filter_map(|b| b.image.as_mut()) {
+            img.src = resolve(&path, &img.src);
+            // ponytail: the whole entry is inflated for its header; read a prefix if it shows up.
+            img.intrinsic = self.epub.get_mut().read(&img.src).ok().and_then(|b| image::dimensions(&b));
+        }
         let pages = page::layout(&blocks, &styles, fonts, ts, height);
         Ok(Chapter { blocks, pages })
     }
@@ -65,7 +80,7 @@ impl Book {
                 {
                     let Some(href) = dom.attr(id, "href") else { continue };
                     let path = resolve(chapter, href);
-                    if let Ok(bytes) = self.epub.read(&path) {
+                    if let Ok(bytes) = self.epub.get_mut().read(&path) {
                         sheets.add_author(&String::from_utf8_lossy(&bytes));
                     }
                 }
@@ -109,5 +124,45 @@ mod tests {
             .map(|i| book.chapter(i, &prefs, &fonts, &mut ts, 1420.0).expect("chapter lays out").pages.len())
             .sum();
         assert!(total > 200, "{total} pages");
+    }
+
+    /// Every chapter of every local book lays out, and the images in them land on pages.
+    #[test]
+    fn dev_books_images_reach_pages() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let Ok(dir) = std::fs::read_dir(root.join("dev-books")) else { return };
+        let mut fonts = FontLibrary::new("Bookerly");
+        fonts.add_dir(&root.join("dev-fonts"));
+        let mut ts = Typesetter::new(Hyphenators::new(root.join("assets/hyphenation")));
+        let prefs = Preferences {
+            font_size: 40.0,
+            font_family: None,
+            line_height: Some(1.4),
+            justify: Some(true),
+            hyphenate: true,
+            page_width: 1044.0,
+        };
+        let height = 1408.0;
+        for entry in dir.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "epub") {
+                continue;
+            }
+            let Ok(mut book) = Book::open(&path) else { continue };
+            let (mut sized, mut placed) = (0, 0);
+            for i in 0..book.chapters.len() {
+                let ch = book.chapter(i, &prefs, &fonts, &mut ts, height).expect("chapter lays out");
+                sized += ch.blocks.iter().filter(|b| b.image.as_ref().is_some_and(|i| i.intrinsic.is_some())).count();
+                for img in ch.pages.iter().flat_map(|p| &p.images) {
+                    placed += 1;
+                    let src = &ch.blocks[img.block as usize].image.as_ref().expect("image block").src;
+                    assert!(book.resource(src).is_some(), "{src} readable");
+                    assert!(img.width <= prefs.page_width + 0.5 && img.y + img.height <= height + 0.5, "{img:?}");
+                    assert!(img.x >= -0.5 && img.x + img.width <= prefs.page_width + 0.5, "{img:?}");
+                }
+            }
+            assert_eq!(sized, placed, "{}: every sized image is placed", path.display());
+            eprintln!("{}: {placed} images", path.display());
+        }
     }
 }

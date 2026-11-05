@@ -50,6 +50,48 @@ pub fn decode(bytes: &[u8], max_w: u32, max_h: u32) -> Option<GrayImage> {
     Some(resample(&src, w, h))
 }
 
+/// Pixel size of a JPEG, PNG or GIF read from its header, without decoding. `None` for other
+/// formats, truncated headers, or sizes [`decode`] would refuse.
+pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |i: usize| Some(u32::from(u16::from_be_bytes(bytes.get(i..i + 2)?.try_into().ok()?)));
+    let (w, h) = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.get(12..16) == Some(b"IHDR") {
+        let be32 = |i: usize| Some(u32::from_be_bytes(bytes.get(i..i + 4)?.try_into().ok()?));
+        (be32(16)?, be32(20)?)
+    } else if bytes.starts_with(b"GIF8") {
+        let le16 = |i: usize| Some(u32::from(u16::from_le_bytes(bytes.get(i..i + 2)?.try_into().ok()?)));
+        (le16(6)?, le16(8)?)
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        jpeg_frame(bytes, be16)?
+    } else {
+        return None;
+    };
+    within_limits(w as usize, h as usize).then_some((w, h))
+}
+
+/// Width and height from a JPEG's start-of-frame segment.
+fn jpeg_frame(bytes: &[u8], be16: impl Fn(usize) -> Option<u32>) -> Option<(u32, u32)> {
+    let mut i = 2;
+    loop {
+        // Markers may be preceded by any number of 0xFF fill bytes.
+        while *bytes.get(i)? == 0xFF && *bytes.get(i + 1)? == 0xFF {
+            i += 1;
+        }
+        if *bytes.get(i)? != 0xFF {
+            return None;
+        }
+        let marker = *bytes.get(i + 1)?;
+        match marker {
+            // Standalone markers: TEM, RSTn.
+            0x01 | 0xD0..=0xD7 => i += 2,
+            // SOF0–SOF15, except DHT (C4), JPG (C8) and DAC (CC): length, precision, height, width.
+            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => return Some((be16(i + 7)?, be16(i + 5)?)),
+            // End of image or start of scan before any frame header.
+            0xD9 | 0xDA => return None,
+            _ => i += 2 + usize::try_from(be16(i + 2)?).ok()?,
+        }
+    }
+}
+
 /// Output size of a `w`×`h` image fitted inside `max_w`×`max_h`.
 fn fit(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     let scale = (max_w as f32 / w as f32).min(max_h as f32 / h as f32).min(MAX_UPSCALE);
@@ -297,6 +339,39 @@ pub fn draw(canvas: &mut Canvas, img: &GrayImage, x: i32, y: i32) {
     }
 }
 
+/// Decoded, dithered images by (archive path, size), most recent last; holds the few the
+/// screen around the current page needs.
+#[derive(Debug, Default)]
+pub struct ImageCache {
+    entries: Vec<(String, u32, u32, Option<GrayImage>)>,
+}
+
+impl ImageCache {
+    /// How many decoded images are kept: a page rarely shows more than two.
+    const CAPACITY: usize = 4;
+
+    /// The image `src` fitted to `w`×`h` and dithered to 16 grays, decoding the bytes from
+    /// `read` on a miss. Failures are cached too, so a broken image is read only once.
+    pub fn get(&mut self, src: &str, w: u32, h: u32, read: impl FnOnce() -> Option<Vec<u8>>) -> Option<&GrayImage> {
+        let hit = self.entries.iter().position(|(s, ew, eh, _)| s == src && *ew == w && *eh == h);
+        let entry = match hit {
+            Some(i) => self.entries.remove(i),
+            None => {
+                let img = read().and_then(|bytes| decode(&bytes, w, h)).map(|mut img| {
+                    quantize16(&mut img);
+                    img
+                });
+                if self.entries.len() >= Self::CAPACITY {
+                    self.entries.remove(0);
+                }
+                (src.to_string(), w, h, img)
+            }
+        };
+        self.entries.push(entry);
+        self.entries.last().and_then(|e| e.3.as_ref())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,6 +453,34 @@ mod tests {
         }
         let img = decode(&out, 4, 2).expect("decode");
         assert_eq!(img.pixels, vec![255, 255, 255, 255, 255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn dimensions_from_headers() {
+        assert_eq!(dimensions(&jpeg(37, 21, &[128; 37 * 21 * 3])), Some((37, 21)));
+        assert_eq!(dimensions(&png(5, 9, ColorSpace::RGB, &[0; 5 * 9 * 3])), Some((5, 9)));
+        let mut gif = Vec::new();
+        gif::Encoder::new(&mut gif, 300, 2, &[0, 0, 0]).expect("encoder");
+        assert_eq!(dimensions(&gif), Some((300, 2)));
+        assert_eq!(dimensions(b"<svg/>"), None);
+        let full = jpeg(16, 16, &[128; 16 * 16 * 3]);
+        for n in 0..full.len() {
+            let _ = dimensions(&full[..n]);
+        }
+    }
+
+    #[test]
+    fn cache_keeps_recent_and_remembers_failures() {
+        let bytes = png(4, 4, ColorSpace::Luma, &[0; 16]);
+        let mut cache = ImageCache::default();
+        assert_eq!(cache.get("a", 2, 2, || Some(bytes.clone())).map(|i| i.width), Some(2));
+        assert!(cache.get("a", 2, 2, || panic!("cached")).is_some());
+        assert!(cache.get("bad", 2, 2, || Some(b"junk".to_vec())).is_none());
+        assert!(cache.get("bad", 2, 2, || panic!("failure cached")).is_none());
+        for i in 0..ImageCache::CAPACITY {
+            cache.get(&i.to_string(), 2, 2, || None);
+        }
+        assert!(cache.get("a", 2, 2, || None).is_none(), "evicted");
     }
 
     #[test]
