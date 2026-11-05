@@ -11,11 +11,15 @@ mod kf8;
 mod mobi6;
 mod xhtml;
 
-use std::io::Read;
+use std::cell::{OnceCell, RefCell};
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::path::Path;
 
+use memchr::memmem;
+
 use crate::epub::{Metadata, TocEntry};
+use crate::image;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MobiError {
@@ -71,72 +75,20 @@ impl Mobi {
         Mobi::from_bytes(data)
     }
 
+    /// Metadata and cover image of a book, without decompressing its text: only the PalmDB
+    /// header, the header records and the cover are read from disk. For the library scan.
+    pub fn peek(path: &Path) -> Result<(Metadata, Option<Vec<u8>>), MobiError> {
+        let file = LazyFile::open(path)?;
+        let head = Head::parse(&file.header, &|i| file.record(i))?;
+        let cover = head.cover.and_then(|c| resource(file.record(head.first_resource?.checked_add(c)?)?).ok());
+        Ok((head.metadata, cover))
+    }
+
     pub fn from_bytes(data: Vec<u8>) -> Result<Mobi, MobiError> {
-        if data.get(60..68) != Some(b"BOOKMOBI") {
-            return Err(MobiError::NotMobi);
-        }
-        let records = palmdb_records(&data)?;
+        let records = palmdb_records(&data, data.len())?;
         let rec = |i: usize| records.get(i).map(|r| &data[r.clone()]);
-
-        let r0 = rec(0).ok_or(MobiError::Malformed("no records"))?;
-        let h0 = Header::parse(r0)?;
-        if h0.encryption != 0 {
-            return Err(MobiError::Drm);
-        }
-        let exth = exth(r0, &h0);
-        let exth_str =
-            |t: u32| exth.iter().find(|(k, _)| *k == t).map(|(_, v)| decode(v, h0.encoding).trim().to_string());
-        let exth_u32 = |t: u32| exth.iter().find(|(k, _)| *k == t).and_then(|(_, v)| be_u32(v, 0).ok());
-
-        // Combination files carry a MOBI6 book and, after a BOUNDARY record, a KF8 one whose
-        // record indices are relative to its own header record.
-        let (base, h) = match exth_u32(121).filter(|_| h0.version < 8).map(|k| k as usize) {
-            Some(k) => match rec(k).map(Header::parse) {
-                Some(Ok(h)) if h.version >= 8 => (k, h),
-                _ => (0, h0.clone()),
-            },
-            None => (0, h0.clone()),
-        };
-        if h.encryption != 0 {
-            return Err(MobiError::Drm);
-        }
+        let Head { metadata, publisher, asin, base, h, first_resource, cover } = Head::parse(&data, &rec)?;
         let text = text(&rec, base, &h)?;
-
-        let full_name =
-            r0.get(h0.full_name.0..h0.full_name.0.saturating_add(h0.full_name.1)).map(|n| decode(n, h0.encoding));
-        let palm_name = || decode(data[..32].split(|&b| b == 0).next().unwrap_or_default(), h0.encoding);
-        let metadata = Metadata {
-            title: exth_str(503).or(full_name).or_else(|| Some(palm_name())).filter(|t| !t.is_empty()),
-            authors: exth
-                .iter()
-                .filter(|(k, _)| *k == 100)
-                .map(|(_, v)| decode(v, h0.encoding).trim().to_string())
-                .collect(),
-            language: exth_str(524),
-            identifier: exth_str(104).or_else(|| exth_str(113)),
-            series: None,
-            series_index: None,
-            description: exth_str(103),
-        };
-
-        // ponytail: in combination files the KF8 header's first resource may be absolute
-        // (resources are shared and live before the boundary); we take whichever index lands on
-        // a plausible resource. Ceiling: a combination file where both do. Upgrade: confirm on
-        // a real combination file.
-        let resource_like = |i: usize| rec(i).is_some_and(|r| !r.is_empty() && !is_meta_record(r));
-        let first_resource = (h.first_resource != NULL).then(|| {
-            let rel = base.saturating_add(h.first_resource as usize);
-            if !resource_like(rel) && resource_like(h.first_resource as usize) {
-                h.first_resource as usize
-            } else {
-                rel
-            }
-        });
-        let cover = exth_u32(201)
-            .or_else(|| exth_u32(202))
-            .filter(|&c| c != NULL)
-            .map(|c| c as usize)
-            .filter(|&c| first_resource.is_some_and(|f| resource_like(f.saturating_add(c))));
 
         let ncx = (h.ncx != NULL).then(|| index::read(rec, base.saturating_add(h.ncx as usize)).ok()).flatten();
         let (content, toc) = if h.version >= 8 {
@@ -170,8 +122,8 @@ impl Mobi {
 
         Ok(Mobi {
             metadata,
-            publisher: exth_str(101),
-            asin: exth_str(113),
+            publisher,
+            asin,
             kf8: h.version >= 8,
             chapters: (0..parts).map(part_path).collect(),
             toc: toc.unwrap_or_default(),
@@ -203,12 +155,7 @@ impl Mobi {
 
     /// Resource `i` (images, fonts), 0-based as in `kindle:embed` minus one.
     pub fn resource(&self, i: usize) -> Result<Vec<u8>, MobiError> {
-        let r = self.resource_record(i).ok_or_else(|| MobiError::NotFound(format!("resource {i}")))?;
-        if r.starts_with(b"FONT") {
-            font(r)
-        } else {
-            Ok(r.to_vec())
-        }
+        resource(self.resource_record(i).ok_or_else(|| MobiError::NotFound(format!("resource {i}")))?)
     }
 
     pub fn cover(&self) -> Option<Vec<u8>> {
@@ -217,18 +164,20 @@ impl Mobi {
 
     /// Bytes behind a synthetic path (`#fragment` ignored): a part, a flow or a resource.
     pub fn read(&self, path: &str) -> Result<Vec<u8>, MobiError> {
-        let name = path.split('#').next().unwrap_or_default();
-        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
-        let num = |prefix: &str| stem.strip_prefix(prefix).and_then(|n| n.parse::<usize>().ok());
-        if let Some(n) = num("part") {
+        if let Some(n) = numbered(path, "part") {
             Ok(self.read_part(n)?.into_bytes())
-        } else if let Some(n) = num("flow") {
+        } else if let Some(n) = numbered(path, "flow") {
             Ok(self.flow(n)?.into_bytes())
-        } else if let Some(n) = num("res") {
+        } else if let Some(n) = numbered(path, "res") {
             self.resource(n)
         } else {
             Err(MobiError::NotFound(path.to_string()))
         }
+    }
+
+    /// Pixel size of the image behind a synthetic resource path, read in place from its header.
+    pub fn image_size(&self, path: &str) -> Option<(u32, u32)> {
+        image::dimensions(self.resource_record(numbered(path, "res")?)?)
     }
 
     fn resource_record(&self, i: usize) -> Option<&[u8]> {
@@ -237,35 +186,170 @@ impl Mobi {
     }
 
     fn resource_path(&self, i: usize) -> String {
-        let ext = match self.resource_record(i) {
-            Some([0xff, 0xd8, 0xff, ..]) => "jpg",
-            Some([0x89, b'P', b'N', b'G', ..]) => "png",
-            Some([b'G', b'I', b'F', b'8', ..]) => "gif",
-            Some([b'B', b'M', ..]) => "bmp",
-            Some([b'F', b'O', b'N', b'T', ..]) => "ttf",
-            _ => "bin",
+        let record = self.resource_record(i);
+        let ext = match record.and_then(image::kind) {
+            Some(kind) => kind.extension(),
+            None if record.is_some_and(|r| r.starts_with(b"FONT")) => "ttf",
+            None => "bin",
         };
         format!("res{i:05}.{ext}")
     }
+}
+
+/// `N` from a synthetic path `{prefix}N.ext#fragment`.
+fn numbered(path: &str, prefix: &str) -> Option<usize> {
+    let name = path.split('#').next().unwrap_or_default();
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    stem.strip_prefix(prefix)?.parse().ok()
 }
 
 pub(crate) fn part_path(i: usize) -> String {
     format!("part{i:04}.xhtml")
 }
 
-/// Record byte ranges from the PalmDB header: 78 bytes, then 8 bytes per record.
-fn palmdb_records(data: &[u8]) -> Result<Vec<Range<usize>>, MobiError> {
-    let n = usize::from(be_u16(data, 76)?);
-    let offsets = (0..n).map(|i| be_u32(data, 78 + 8 * i).map(|o| o as usize)).collect::<Result<Vec<_>, _>>()?;
+/// Record byte ranges from the PalmDB header (`header`, the file's start: 78 bytes, then 8
+/// bytes per record) of a file `len` bytes long.
+fn palmdb_records(header: &[u8], len: usize) -> Result<Vec<Range<usize>>, MobiError> {
+    if header.get(60..68) != Some(b"BOOKMOBI") {
+        return Err(MobiError::NotMobi);
+    }
+    let n = usize::from(be_u16(header, 76)?);
+    let offsets = (0..n).map(|i| be_u32(header, 78 + 8 * i).map(|o| o as usize)).collect::<Result<Vec<_>, _>>()?;
     let mut records = Vec::with_capacity(n);
     for (i, &start) in offsets.iter().enumerate() {
-        let end = offsets.get(i + 1).copied().unwrap_or(data.len());
-        if start > end || end > data.len() {
+        let end = offsets.get(i + 1).copied().unwrap_or(len);
+        if start > end || end > len {
             return Err(MobiError::Malformed("record offsets"));
         }
         records.push(start..end);
     }
     Ok(records)
+}
+
+/// The header stage: what the PalmDB header, record 0 and EXTH say, before any text.
+struct Head {
+    metadata: Metadata,
+    publisher: Option<String>,
+    asin: Option<String>,
+    /// Record holding the header the content is read with (the KF8 half of a combination file).
+    base: usize,
+    h: Header,
+    /// Absolute record index of resource 0.
+    first_resource: Option<usize>,
+    /// Resource index of the cover image.
+    cover: Option<usize>,
+}
+
+impl Head {
+    /// `palmdb`: the start of the file (its first 32 bytes are the PalmDB name); `rec`: record
+    /// bytes by index.
+    fn parse<'a>(palmdb: &[u8], rec: &dyn Fn(usize) -> Option<&'a [u8]>) -> Result<Head, MobiError> {
+        let r0 = rec(0).ok_or(MobiError::Malformed("no records"))?;
+        let h0 = Header::parse(r0)?;
+        if h0.encryption != 0 {
+            return Err(MobiError::Drm);
+        }
+        let exth = exth(r0, &h0);
+        let string = |v: &[u8]| decode(v, h0.encoding).trim().to_string();
+        let exth_str = |t: u32| exth.iter().find(|(k, _)| *k == t).map(|(_, v)| string(v));
+        let exth_u32 = |t: u32| exth.iter().find(|(k, _)| *k == t).and_then(|(_, v)| be_u32(v, 0).ok());
+
+        // Combination files carry a MOBI6 book and, after a BOUNDARY record, a KF8 one whose
+        // record indices are relative to its own header record.
+        let (base, h) = match exth_u32(121).filter(|_| h0.version < 8).map(|k| k as usize) {
+            Some(k) => match rec(k).map(Header::parse) {
+                Some(Ok(h)) if h.version >= 8 => (k, h),
+                _ => (0, h0.clone()),
+            },
+            None => (0, h0.clone()),
+        };
+        if h.encryption != 0 {
+            return Err(MobiError::Drm);
+        }
+
+        let full_name =
+            r0.get(h0.full_name.0..h0.full_name.0.saturating_add(h0.full_name.1)).map(|n| decode(n, h0.encoding));
+        let palm_name =
+            || decode(palmdb[..32.min(palmdb.len())].split(|&b| b == 0).next().unwrap_or_default(), h0.encoding);
+        let asin = exth_str(113);
+        let metadata = Metadata {
+            title: exth_str(503).or(full_name).or_else(|| Some(palm_name())).filter(|t| !t.is_empty()),
+            authors: exth.iter().filter(|(k, _)| *k == 100).map(|(_, v)| string(v)).collect(),
+            language: exth_str(524),
+            identifier: exth_str(104).or_else(|| asin.clone()),
+            series: None,
+            series_index: None,
+            description: exth_str(103),
+        };
+
+        // ponytail: in combination files the KF8 header's first resource may be absolute
+        // (resources are shared and live before the boundary); we take whichever index lands on
+        // a plausible resource. Ceiling: a combination file where both do. Upgrade: confirm on
+        // a real combination file.
+        let resource_like = |i: usize| rec(i).is_some_and(|r| !r.is_empty() && !is_meta_record(r));
+        let first_resource = (h.first_resource != NULL).then(|| {
+            let rel = base.saturating_add(h.first_resource as usize);
+            if !resource_like(rel) && resource_like(h.first_resource as usize) {
+                h.first_resource as usize
+            } else {
+                rel
+            }
+        });
+        let cover = exth_u32(201)
+            .or_else(|| exth_u32(202))
+            .filter(|&c| c != NULL)
+            .map(|c| c as usize)
+            .filter(|&c| first_resource.is_some_and(|f| resource_like(f.saturating_add(c))));
+        Ok(Head { metadata, publisher: exth_str(101), asin, base, h, first_resource, cover })
+    }
+}
+
+/// A book file whose records are read from disk one by one, on first use.
+struct LazyFile {
+    file: RefCell<std::fs::File>,
+    /// The PalmDB header and record table.
+    header: Vec<u8>,
+    records: Vec<Range<usize>>,
+    loaded: Vec<OnceCell<Option<Vec<u8>>>>,
+}
+
+impl LazyFile {
+    fn open(path: &Path) -> Result<LazyFile, MobiError> {
+        let mut file = std::fs::File::open(path)?;
+        // As `Mobi::open`: what lies past `MAX_FILE` does not exist.
+        let len = file.metadata()?.len().min(MAX_FILE) as usize;
+        let mut header = Vec::with_capacity(78);
+        (&mut file).take(78).read_to_end(&mut header)?;
+        if header.len() == 78 && header[60..68] == *b"BOOKMOBI" {
+            let n = usize::from(be_u16(&header, 76)?);
+            header.resize(78 + 8 * n, 0);
+            file.read_exact(&mut header[78..])?;
+        }
+        let records = palmdb_records(&header, len)?;
+        let loaded = records.iter().map(|_| OnceCell::new()).collect();
+        Ok(LazyFile { file: RefCell::new(file), header, records, loaded })
+    }
+
+    fn record(&self, i: usize) -> Option<&[u8]> {
+        let load = || {
+            let r = self.records[i].clone();
+            let mut buf = vec![0; r.len()];
+            let mut file = self.file.borrow_mut();
+            file.seek(SeekFrom::Start(r.start as u64)).ok()?;
+            file.read_exact(&mut buf).ok()?;
+            Some(buf)
+        };
+        self.loaded.get(i)?.get_or_init(load).as_deref()
+    }
+}
+
+/// A resource record's bytes: fonts unpacked, images as they are.
+fn resource(r: &[u8]) -> Result<Vec<u8>, MobiError> {
+    if r.starts_with(b"FONT") {
+        font(r)
+    } else {
+        Ok(r.to_vec())
+    }
 }
 
 /// Records that sit among the resources but are not images or fonts.
@@ -438,18 +522,26 @@ pub(crate) fn be_u32(b: &[u8], at: usize) -> Result<u32, MobiError> {
     Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
-pub(crate) fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).position(|w| w == needle)
+/// First match of `needle` (non-empty) in `hay` at or after `from`, ignoring ASCII case.
+pub(crate) fn find_ci(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    let (&first, rest) = needle.split_first()?;
+    let hay = hay.get(from..)?;
+    let rest_at = |p: usize| hay.get(p + 1..p + needle.len()).is_some_and(|w| w.eq_ignore_ascii_case(rest));
+    let p = memchr::memchr2_iter(first.to_ascii_lowercase(), first.to_ascii_uppercase(), hay).find(|&p| rest_at(p))?;
+    Some(from + p)
 }
 
-pub(crate) fn find_ci(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    hay.get(from..)?.windows(needle.len()).position(|w| w.eq_ignore_ascii_case(needle)).map(|p| from + p)
+/// Last match of `needle` (non-empty) in `hay`, ignoring ASCII case.
+pub(crate) fn rfind_ci(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    let (&first, rest) = needle.split_first()?;
+    let rest_at = |p: usize| hay.get(p + 1..p + needle.len()).is_some_and(|w| w.eq_ignore_ascii_case(rest));
+    memchr::memrchr2_iter(first.to_ascii_lowercase(), first.to_ascii_uppercase(), hay).find(|&p| rest_at(p))
 }
 
 /// Value of attribute `name` inside a tag's bytes (between `<` and `>`), quoted or not.
 pub(crate) fn attr_value<'a>(tag: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
     let mut from = 0;
-    while let Some(p) = find(&tag[from..], name) {
+    while let Some(p) = memmem::find(&tag[from..], name) {
         let at = from + p;
         from = at + 1;
         if at == 0 || !tag[at - 1].is_ascii_whitespace() {
@@ -538,7 +630,12 @@ mod tests {
         let exth: &[(u32, &[u8])] =
             &[(100, b"Ann"), (100, b"Bob"), (503, b"Title"), (524, b"it"), (201, &0u32.to_be_bytes()), (113, b"B00X")];
         let file = palmdb(&[record0(text.len(), 1, 0, exth), text, jpeg.clone()]);
+        let tmp = std::env::temp_dir().join(format!("omero-peek-{}.mobi", std::process::id()));
+        std::fs::write(&tmp, &file).expect("write");
+        let peeked = Mobi::peek(&tmp);
+        let _ = std::fs::remove_file(&tmp);
         let book = Mobi::from_bytes(file).expect("opens");
+        assert_eq!(peeked.expect("peeks"), (book.metadata.clone(), Some(jpeg.clone())));
         assert!(!book.kf8);
         assert_eq!(book.metadata.title.as_deref(), Some("Title"));
         assert_eq!(book.metadata.authors, ["Ann", "Bob"]);
@@ -601,6 +698,13 @@ mod tests {
         assert_eq!(attr_value(br#"a href="x y" id=z/"#, b"id"), Some(&b"z"[..]));
         assert_eq!(attr_value(br#"a xid="1" id = '2'"#, b"id"), Some(&b"2"[..]));
         assert_eq!(attr_value(b"a", b"id"), None);
+        let hay = b"<BODY x><body><Body";
+        assert_eq!(find_ci(hay, b"<body", 0), Some(0));
+        assert_eq!(find_ci(hay, b"<body", 1), Some(8));
+        assert_eq!(find_ci(hay, b"<body>", 15), None, "truncated match");
+        assert_eq!(rfind_ci(hay, b"<body"), Some(14));
+        assert_eq!(rfind_ci(hay, b"<body>"), Some(8));
+        assert_eq!(find_ci(hay, b"x", 99), None);
     }
 
     /// Opens every AZW3/MOBI in `dev-books/` (local only, not in the repo): metadata is read and
@@ -622,6 +726,9 @@ mod tests {
             };
             assert!(book.metadata.title.is_some(), "{name}: no title");
             assert!(!book.chapters.is_empty(), "{name}: no chapters");
+            let (metadata, cover) = Mobi::peek(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(metadata, book.metadata, "{name}: peek metadata");
+            assert!(cover == book.cover(), "{name}: peek cover");
             for (i, _) in book.chapters.iter().enumerate() {
                 let xhtml = book.read_part(i).unwrap_or_else(|e| panic!("{name} part {i}: {e}"));
                 Dom::parse_xml(&xhtml).unwrap_or_else(|e| panic!("{name} part {i}: {e:?}"));

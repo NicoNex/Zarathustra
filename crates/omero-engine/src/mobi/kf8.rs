@@ -6,8 +6,10 @@ use std::cell::OnceCell;
 use std::collections::VecDeque;
 use std::ops::Range;
 
+use memchr::{memchr, memmem};
+
 use super::index::Index;
-use super::{attr_value, be_u32, find, part_path, MobiError};
+use super::{attr_value, be_u32, part_path, MobiError};
 
 pub struct Kf8 {
     text: Vec<u8>,
@@ -139,7 +141,8 @@ impl Kf8 {
     fn rewrite(&self, src: &[u8], res: &dyn Fn(usize) -> String) -> Vec<u8> {
         let mut out = Vec::with_capacity(src.len());
         let mut i = 0;
-        while let Some(k) = find(&src[i..], b"kindle:") {
+        let finder = memmem::Finder::new(b"kindle:");
+        while let Some(k) = finder.find(&src[i..]) {
             let at = i + k;
             out.extend_from_slice(&src[i..at]);
             let end = src[at..]
@@ -215,9 +218,9 @@ fn flows(fdst: &[u8], text_len: usize) -> Option<Vec<Range<usize>>> {
 fn anchors(part: &[u8]) -> Anchors {
     let mut out = Vec::new();
     let mut i = 0;
-    while let Some(l) = find(&part[i..], b"<") {
+    while let Some(l) = memchr(b'<', &part[i..]) {
         let start = i + l;
-        let Some(g) = find(&part[start..], b">") else { break };
+        let Some(g) = memchr(b'>', &part[start..]) else { break };
         let tag = &part[start + 1..start + g];
         if !tag.starts_with(b"/") {
             // `name` anchors only on <a>: <meta name=…> is not a link target.

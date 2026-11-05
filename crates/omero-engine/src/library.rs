@@ -316,11 +316,7 @@ fn read_book(path: &Path, format: Format) -> Option<(Metadata, Option<Vec<u8>>)>
             let cover = epub.cover.clone().and_then(|c| epub.read(&c).ok());
             Some((std::mem::take(&mut epub.metadata), cover))
         }
-        Format::Azw3 | Format::Mobi => {
-            let mut mobi = crate::mobi::Mobi::open(path).ok()?;
-            let cover = mobi.cover();
-            Some((std::mem::take(&mut mobi.metadata), cover))
-        }
+        Format::Azw3 | Format::Mobi => crate::mobi::Mobi::peek(path).ok(),
         // ponytail: PDF and TXT keep the file stem as title until their readers land.
         Format::Pdf | Format::Txt => None,
     }

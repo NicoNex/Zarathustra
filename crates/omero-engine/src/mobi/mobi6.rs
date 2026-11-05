@@ -5,8 +5,10 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
+use memchr::{memchr, memrchr};
+
 use super::xhtml;
-use super::{decode, find, find_ci, part_path, MobiError};
+use super::{decode, find_ci, part_path, rfind_ci, MobiError};
 
 pub struct Mobi6 {
     /// Body text with the anchors inserted.
@@ -31,7 +33,7 @@ impl Mobi6 {
         for &t in &targets {
             let mut pos = t as usize;
             // Inside a tag: anchor before it instead.
-            if let Some(lt) = raw[..pos].iter().rposition(|&b| b == b'<') {
+            if let Some(lt) = memrchr(b'<', &raw[..pos]) {
                 if !raw[lt..pos].contains(&b'>') {
                     pos = lt;
                 }
@@ -45,13 +47,13 @@ impl Mobi6 {
         text.extend_from_slice(&raw[copied..]);
 
         // ponytail: everything outside <body> (head, guide) is dropped; MOBI6 rarely has CSS there.
-        let body = find_ci(&text, b"<body", 0).and_then(|b| find(&text[b..], b">").map(|g| b + g + 1)).unwrap_or(0);
+        let body = find_ci(&text, b"<body", 0).and_then(|b| memchr(b'>', &text[b..]).map(|g| b + g + 1)).unwrap_or(0);
         let end = rfind_ci(&text, b"</body").filter(|&e| e >= body).unwrap_or(text.len());
         let mut chunks = Vec::new();
         let mut cur = body;
         while let Some(p) = find_ci(&text[..end], b"<mbp:pagebreak", cur) {
             chunks.push(cur..p);
-            cur = find(&text[p..end], b">").map_or(end, |g| p + g + 1);
+            cur = memchr(b'>', &text[p..end]).map_or(end, |g| p + g + 1);
         }
         chunks.push(cur..end);
         chunks.retain(|r| has_content(&text[r.clone()]));
@@ -61,7 +63,8 @@ impl Mobi6 {
 
         let anchors = at
             .into_iter()
-            .map(|(t, pos)| (t, chunks.iter().position(|r| pos < r.end).unwrap_or(chunks.len() - 1)))
+            // Chunks are in text order, so their ends are sorted.
+            .map(|(t, pos)| (t, chunks.partition_point(|r| r.end <= pos).min(chunks.len() - 1)))
             .collect();
         Mobi6 { text, chunks, anchors, encoding }
     }
@@ -131,10 +134,6 @@ fn has_content(chunk: &[u8]) -> bool {
         }
     }
     false
-}
-
-fn rfind_ci(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).rposition(|w| w.eq_ignore_ascii_case(needle))
 }
 
 #[cfg(test)]
