@@ -10,11 +10,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use omero::highlight::{Button, LONG_PRESS, SLOP};
 use omero::home::Home;
+use omero::pdfview::PdfView;
 use omero::quick::{QuickPanel, QuickResult, PANEL};
 use omero::reader::{Reader, HEADER};
 use omero::sleep::render_sleep;
 use omero::{first_existing, Action, Ctx, H, W};
 use omero_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
+use omero_engine::library::Format;
 
 /// A full flashing refresh every this many page turns clears e-ink ghosting.
 const FLASH_EVERY: u32 = 8;
@@ -22,6 +24,7 @@ const FLASH_EVERY: u32 = 8;
 enum Screen {
     Home(Box<Home>),
     Reader(Box<Reader>),
+    Pdf(Box<PdfView>),
 }
 
 impl Screen {
@@ -33,7 +36,19 @@ impl Screen {
                 r.clock = clock;
                 r.render(c, ctx)
             }
+            Screen::Pdf(p) => {
+                p.clock = clock;
+                p.render(c, ctx)
+            }
         }
+    }
+
+    /// The reading screen for the book at `path`: PDFs as pages, everything else reflowed.
+    fn open(path: &std::path::Path, ctx: &mut Ctx) -> Result<Screen> {
+        Ok(match Format::from_path(path) {
+            Some(Format::Pdf) => Screen::Pdf(Box::new(PdfView::open(path, ctx)?)),
+            _ => Screen::Reader(Box::new(Reader::open(path, ctx)?)),
+        })
     }
 }
 
@@ -91,8 +106,8 @@ fn main() -> Result<()> {
     let mut screen = Screen::Home(Box::new(home(&ctx)));
     eprintln!("home ready in {:?}", t.elapsed());
     if let Some(path) = &book {
-        match Reader::open(path, &mut ctx) {
-            Ok(r) => screen = Screen::Reader(Box::new(r)),
+        match Screen::open(path, &mut ctx) {
+            Ok(s) => screen = s,
             Err(e) => eprintln!("{e:#}"),
         }
     }
@@ -103,6 +118,16 @@ fn main() -> Result<()> {
         let home = home(&ctx);
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("home.pgm"), &px)?;
+        if let Screen::Pdf(p) = &mut screen {
+            for n in 0..3 {
+                p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+                write_pgm(dir.join(format!("page{n}.pgm")), &px)?;
+                p.turn(true);
+            }
+            p.menu = true;
+            p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_pgm(dir.join("menu.pgm"), &px)?;
+        }
         if let Screen::Reader(r) = &mut screen {
             for n in 0..3 {
                 r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -175,6 +200,7 @@ fn main() -> Result<()> {
                     let battery = dev.battery();
                     match &mut screen {
                         Screen::Reader(r) => r.render_sleep(&mut dev.canvas(), &mut ctx, battery),
+                        Screen::Pdf(p) => p.render_sleep(&mut dev.canvas(), &mut ctx, battery),
                         Screen::Home(_) => render_sleep(&mut dev.canvas(), &mut ctx, None, "", "", battery),
                     }
                 }
@@ -192,7 +218,7 @@ fn main() -> Result<()> {
         // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
         let periodic = events.is_empty() && long_press.is_none() && !power;
         if periodic && !asleep && !quick.is_open() && quick.settings().clock {
-            if let Screen::Reader(_) = screen {
+            if let Screen::Reader(_) | Screen::Pdf(_) = screen {
                 screen.render(&mut dev.canvas(), &mut ctx, true);
                 dev.wait_refresh(marker)?;
                 marker = dev.refresh(&Refresh { rect: HEADER, waveform: Waveform::Text, flash: false, swipe: None })?;
@@ -282,6 +308,7 @@ fn main() -> Result<()> {
                 Screen::Home(h) if held => h.long_press(start, &ctx),
                 Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
                 Screen::Reader(r) => r.tap(start, t.x, &mut ctx),
+                Screen::Pdf(p) => p.tap(start, t.x, &mut ctx),
             };
             // Screen changes flash (clean slate); page turns animate and flash now and then.
             let (turn, flash) = match action {
@@ -297,9 +324,9 @@ fn main() -> Result<()> {
                     turns += 1;
                     (turn, turns.is_multiple_of(FLASH_EVERY))
                 }
-                Action::Open(path) => match Reader::open(&path, &mut ctx) {
-                    Ok(r) => {
-                        screen = Screen::Reader(Box::new(r));
+                Action::Open(path) => match Screen::open(&path, &mut ctx) {
+                    Ok(s) => {
+                        screen = s;
                         (None, true)
                     }
                     Err(e) => {
