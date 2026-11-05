@@ -69,21 +69,21 @@ pub fn read<'a>(rec: impl Fn(usize) -> Option<&'a [u8]>, idx: usize) -> Result<I
 
     let mut index = Index::default();
     for i in 0..ncncx {
-        index.cncx.push(rec(idx + count + 1 + i).ok_or(bad("CNCX record"))?.to_vec());
+        index.cncx.push(rec(idx.saturating_add(count).saturating_add(1 + i)).ok_or(bad("CNCX record"))?.to_vec());
     }
     for i in 0..count {
-        let data = rec(idx + 1 + i).ok_or(bad("index entry record"))?;
+        let data = rec(idx.saturating_add(1 + i)).ok_or(bad("index entry record"))?;
         if !data.starts_with(b"INDX") {
             return Err(bad("INDX magic"));
         }
         let idxt = be_u32(data, 20)? as usize;
         let n = be_u32(data, 24)? as usize;
-        if data.get(idxt..idxt + 4) != Some(b"IDXT") {
+        if data.get(idxt..idxt.saturating_add(4)) != Some(b"IDXT") {
             return Err(bad("IDXT magic"));
         }
         let mut starts = Vec::with_capacity(n.min(data.len()) + 1);
         for j in 0..n {
-            starts.push(usize::from(be_u16(data, idxt + 4 + 2 * j)?));
+            starts.push(usize::from(be_u16(data, idxt.saturating_add(4 + 2 * j))?));
         }
         // The last entry ends where the IDXT begins.
         starts.push(idxt);

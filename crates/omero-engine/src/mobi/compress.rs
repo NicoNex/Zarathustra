@@ -88,6 +88,8 @@ enum Phrase {
 
 /// Recursion bound for phrases that reference other compressed phrases.
 const MAX_DEPTH: u32 = 32;
+/// Output bound per record (records hold 4 KiB of text): stops decompression bombs.
+const MAX_OUT: usize = 1 << 20;
 
 impl Huff {
     pub fn new(huff: &[u8], cdics: &[&[u8]]) -> Result<Huff, MobiError> {
@@ -99,7 +101,7 @@ impl Huff {
         let off2 = be_u32(huff, 12)? as usize;
         let mut dict1 = Vec::with_capacity(256);
         for i in 0..256 {
-            let v = be_u32(huff, off1 + 4 * i)?;
+            let v = be_u32(huff, off1.saturating_add(4 * i))?;
             let codelen = v & 0x1f;
             if codelen == 0 {
                 return Err(bad);
@@ -109,7 +111,7 @@ impl Huff {
         }
         let (mut mincode, mut maxcode) = ([0u64; 33], [0u64; 33]);
         for len in 1..=32u32 {
-            let i = off2 + 8 * (len as usize - 1);
+            let i = off2.saturating_add(8 * (len as usize - 1));
             mincode[len as usize] = u64::from(be_u32(huff, i)?) << (32 - len);
             maxcode[len as usize] = ((u64::from(be_u32(huff, i + 4)?) + 1) << (32 - len)) - 1;
         }
@@ -152,6 +154,7 @@ impl Huff {
             b.copy_from_slice(&padded[pos..pos + 8]);
             u64::from_be_bytes(b)
         };
+        let start = out.len();
         let mut bits_left = data.len() as i64 * 8;
         let mut pos = 0;
         let mut x = window(pos);
@@ -193,6 +196,9 @@ impl Huff {
                     self.phrases[r] = Phrase::Plain(plain);
                 }
                 Phrase::Busy => return Err(MobiError::Malformed("HUFF phrase cycle")),
+            }
+            if out.len() - start > MAX_OUT {
+                return Err(MobiError::Malformed("HUFF output too large"));
             }
         }
     }

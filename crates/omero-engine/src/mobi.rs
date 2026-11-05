@@ -123,7 +123,7 @@ impl Mobi {
         // a real combination file.
         let resource_like = |i: usize| rec(i).is_some_and(|r| !r.is_empty() && !is_meta_record(r));
         let first_resource = (h.first_resource != NULL).then(|| {
-            let rel = base + h.first_resource as usize;
+            let rel = base.saturating_add(h.first_resource as usize);
             if !resource_like(rel) && resource_like(h.first_resource as usize) {
                 h.first_resource as usize
             } else {
@@ -134,19 +134,19 @@ impl Mobi {
             .or_else(|| exth_u32(202))
             .filter(|&c| c != NULL)
             .map(|c| c as usize)
-            .filter(|&c| first_resource.is_some_and(|f| resource_like(f + c)));
+            .filter(|&c| first_resource.is_some_and(|f| resource_like(f.saturating_add(c))));
 
-        let ncx = (h.ncx != NULL).then(|| index::read(rec, base + h.ncx as usize).ok()).flatten();
+        let ncx = (h.ncx != NULL).then(|| index::read(rec, base.saturating_add(h.ncx as usize)).ok()).flatten();
         let (content, toc) = if h.version >= 8 {
             let idx = |i: u32, what| {
                 if i == NULL {
                     return Err(MobiError::Malformed(what));
                 }
-                index::read(rec, base + i as usize)
+                index::read(rec, base.saturating_add(i as usize))
             };
             let skel = idx(h.skel, "no SKEL index")?;
             let frag = idx(h.frag, "no FRAG index")?;
-            let fdst = (h.fdst != NULL).then(|| rec(base + h.fdst as usize)).flatten();
+            let fdst = (h.fdst != NULL).then(|| rec(base.saturating_add(h.fdst as usize))).flatten();
             let kf8 = kf8::Kf8::new(text, fdst, &skel, &frag)?;
             let toc = ncx.map(|n| {
                 toc(&n, h.encoding, |e| {
@@ -300,7 +300,8 @@ impl Header {
         if r.get(16..20) != Some(b"MOBI") {
             return Err(MobiError::Malformed("MOBI header"));
         }
-        let mobi_len = be_u32(r, 20)? as usize;
+        // Clamped so offsets derived from it cannot overflow.
+        let mobi_len = (be_u32(r, 20)? as usize).min(r.len());
         // Fields past the declared header length are absent (older, shorter headers).
         let field = |off: usize| if off + 4 <= 16 + mobi_len { be_u32(r, off).ok() } else { None };
         let version = field(0x24).unwrap_or(0);
@@ -347,10 +348,10 @@ fn exth<'a>(r0: &'a [u8], h: &Header) -> Vec<(u32, &'a [u8])> {
 /// Decompressed text of records 1..=text_records after `base`, trailing entries stripped.
 fn text<'a>(rec: &impl Fn(usize) -> Option<&'a [u8]>, base: usize, h: &Header) -> Result<Vec<u8>, MobiError> {
     let mut huff = if h.compression == 17480 {
-        let first = base + h.huff.0 as usize;
+        let first = base.saturating_add(h.huff.0 as usize);
         let huff = rec(first).ok_or(MobiError::Malformed("HUFF record"))?;
         let cdics = (1..h.huff.1 as usize)
-            .map(|i| rec(first + i).ok_or(MobiError::Malformed("CDIC record")))
+            .map(|i| rec(first.saturating_add(i)).ok_or(MobiError::Malformed("CDIC record")))
             .collect::<Result<Vec<_>, _>>()?;
         Some(compress::Huff::new(huff, &cdics)?)
     } else {
@@ -417,12 +418,12 @@ fn font(r: &[u8]) -> Result<Vec<u8>, MobiError> {
 }
 
 pub(crate) fn be_u16(b: &[u8], at: usize) -> Result<u16, MobiError> {
-    let s = b.get(at..at + 2).ok_or(MobiError::Malformed("truncated"))?;
+    let s = b.get(at..at.saturating_add(2)).ok_or(MobiError::Malformed("truncated"))?;
     Ok(u16::from_be_bytes([s[0], s[1]]))
 }
 
 pub(crate) fn be_u32(b: &[u8], at: usize) -> Result<u32, MobiError> {
-    let s = b.get(at..at + 4).ok_or(MobiError::Malformed("truncated"))?;
+    let s = b.get(at..at.saturating_add(4)).ok_or(MobiError::Malformed("truncated"))?;
     Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
 }
 
