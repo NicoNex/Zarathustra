@@ -73,6 +73,21 @@ pub struct Battery {
     pub charging: bool,
 }
 
+/// Power-button and suspend notifications, from [`Device::power_event`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerEvent {
+    /// The user pressed the power button (or the sleep timer fired): draw the sleep screen
+    /// now; the device suspends on its own a few seconds later. Touch is ignored and the
+    /// light is off until [`PowerEvent::Wake`].
+    Sleep,
+    /// Back from sleep: redraw the screen that was showing. Light and touch are restored.
+    Wake,
+    /// The device suspends in `delay` seconds (informational).
+    Suspend { delay: u32 },
+    /// Woke from suspend but still in the sleep screen, e.g. a timer (informational).
+    Resumed,
+}
+
 #[derive(Debug)]
 pub enum Event {
     Touch(Touch),
@@ -95,6 +110,15 @@ pub trait Device {
     fn light(&self) -> Option<Light>;
     fn set_light(&mut self, light: Light) -> io::Result<()>;
     fn battery(&self) -> Option<Battery>;
+    /// Next pending power event, if any. [`Device::wait_events`] returns early when one
+    /// arrives, so poll this after every wait.
+    fn power_event(&mut self) -> Option<PowerEvent> {
+        None
+    }
+    /// Asks the device to go to sleep, as a power-button press would (sleep timer).
+    fn sleep(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The backend this build targets: the desktop emulator with the `emulator` feature, else the Kindle.

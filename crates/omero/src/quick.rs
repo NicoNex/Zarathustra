@@ -551,7 +551,7 @@ fn tzif_offset(data: &[u8], utc: i64) -> Option<i64> {
 }
 
 /// "Thursday 5 November" for a day count since 1970-01-01.
-fn date_text(days: i64) -> String {
+pub fn date_text(days: i64) -> String {
     const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const MONTHS: [&str; 12] = [
         "January",

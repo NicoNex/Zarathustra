@@ -1,14 +1,16 @@
 //! Jailbroken Kindles with the MediaTek e-ink controller.
 
 mod mtk;
+mod power;
 
+use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 use crate::input::{Touch, TouchPanel, Transform};
 use crate::sysfs::{self, Led, SysfsLight};
-use crate::{Battery, Canvas, Device, Event, Light, Refresh};
+use crate::{Battery, Canvas, Device, Event, Light, PowerEvent, Refresh};
 
 /// Per-model hardware facts. Adding a model = adding an entry to [`MODELS`].
 struct Model {
@@ -37,6 +39,11 @@ pub struct Kindle {
     light: Option<SysfsLight>,
     /// Reused across `wait_events` calls.
     touches: Vec<Touch>,
+    /// `None` when powerd can't be reached; the device then just never sleeps.
+    powerd: Option<power::Powerd>,
+    power_events: VecDeque<PowerEvent>,
+    /// Set while the sleep screen shows: the light to restore on wake.
+    asleep: Option<Option<Light>>,
 }
 
 impl Kindle {
@@ -52,7 +59,44 @@ impl Kindle {
             .map(|white| SysfsLight { white, warm: model.warm_led.and_then(|p| Led::open(p).ok()) });
         // ponytail: one-time bring-up log; drop once more models are verified.
         eprintln!("{} {}x{} rotate={}", model.name, fb.width, fb.height, fb.rotate);
-        Ok(Kindle { model, fb, touch, light, touches: Vec::new() })
+        let powerd = power::Powerd::spawn().map_err(|e| eprintln!("powerd events unavailable: {e}")).ok();
+        Ok(Kindle { model, fb, touch, light, touches: Vec::new(), powerd, power_events: VecDeque::new(), asleep: None })
+    }
+
+    fn read_power(&mut self) {
+        let Some(powerd) = &mut self.powerd else { return };
+        let mut events = Vec::new();
+        if let Err(e) = powerd.read(&mut events) {
+            eprintln!("powerd events lost: {e}");
+            self.powerd = None;
+        }
+        for ev in events {
+            self.on_power(ev);
+            self.power_events.push_back(ev);
+        }
+    }
+
+    /// Light off and touch muted while asleep; both restored on wake.
+    fn on_power(&mut self, ev: PowerEvent) {
+        match ev {
+            PowerEvent::Sleep if self.asleep.is_none() => {
+                let saved = self.light();
+                if let Some(l) = saved {
+                    self.set_light(Light { brightness: 0, ..l }).ok();
+                }
+                self.asleep = Some(saved);
+            }
+            PowerEvent::Wake => {
+                if let Some(Some(l)) = self.asleep.take() {
+                    self.set_light(l).ok();
+                }
+                // Drop what the panel queued while asleep. A contact begun asleep then ends
+                // with an Up whose Down was never delivered, which callers already ignore.
+                self.touches.clear();
+                self.touch.read(&mut self.touches).ok();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -82,17 +126,27 @@ impl Device for Kindle {
     }
 
     fn wait_events(&mut self, timeout: Option<Duration>, out: &mut Vec<Event>) -> io::Result<()> {
-        let mut pfd = libc::pollfd { fd: self.touch.fd(), events: libc::POLLIN, revents: 0 };
+        if !self.power_events.is_empty() {
+            return Ok(());
+        }
+        let pfd = |fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        // A negative fd makes poll skip the slot once the powerd listener is gone.
+        let mut fds = [pfd(self.touch.fd()), pfd(self.powerd.as_ref().map_or(-1, |p| p.fd()))];
         // Round up so a sub-millisecond remainder doesn't become a busy-spinning 0.
         let ms = timeout.map_or(-1, |t| t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32);
-        // SAFETY: one valid pollfd.
-        if unsafe { libc::poll(&mut pfd, 1, ms) } < 0 {
+        // SAFETY: `fds` is a valid array of `fds.len()` pollfds.
+        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) } < 0 {
             let e = io::Error::last_os_error();
             return if e.kind() == io::ErrorKind::Interrupted { Ok(()) } else { Err(e) };
         }
+        if fds[1].revents != 0 {
+            self.read_power();
+        }
         self.touches.clear();
         self.touch.read(&mut self.touches)?;
-        out.extend(self.touches.iter().copied().map(Event::Touch));
+        if self.asleep.is_none() {
+            out.extend(self.touches.iter().copied().map(Event::Touch));
+        }
         Ok(())
     }
 
@@ -109,5 +163,13 @@ impl Device for Kindle {
 
     fn battery(&self) -> Option<Battery> {
         sysfs::battery(Path::new(self.model.battery))
+    }
+
+    fn power_event(&mut self) -> Option<PowerEvent> {
+        self.power_events.pop_front()
+    }
+
+    fn sleep(&mut self) -> io::Result<()> {
+        power::set_prop("powerButton", 1)
     }
 }

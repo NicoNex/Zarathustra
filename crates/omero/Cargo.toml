@@ -23,3 +23,7 @@ path = "src/bin/textprobe.rs"
 [[bin]]
 name = "omero"
 path = "src/bin/app.rs"
+
+[[bin]]
+name = "powerprobe"
+path = "src/bin/powerprobe.rs"
