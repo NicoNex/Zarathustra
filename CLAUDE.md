@@ -7,7 +7,7 @@ Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 
 - **Language**: talk to the user in Italian. Code, comments and commits in English.
 - **Process**: brainstorm → spec → plan → implement for each sub-project. Small, verifiable steps.
 - **Rust**: load the `fullstack-dev-skills:rust-engineer` skill before writing Rust. Before every commit: `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features` with zero warnings, `cargo test --workspace`. Document every `unsafe`. No `unwrap()` outside tests.
-- **Commits**: checkpoint commits as work progresses (Conventional Commits, body explains why). After each commit, run `/code-review` on its diff and the `/simplify` angles (reuse, simplification, efficiency, altitude). Apply the real findings, note the skipped ones, and commit the fixes.
+- **Commits**: checkpoint commits as work progresses (Conventional Commits, body explains why). At milestones (a usable feature, not every commit), run `/code-review` and the `/simplify` angles (reuse, simplification, efficiency, altitude) on the diff since the last review. Apply the real findings, note the skipped ones, and commit the fixes. Speed toward something usable on the device matters more than per-commit polish.
 - **Agents**: subagents only for those reviews (code-review fork + simplify reviewers, which may run in parallel in the background). Everything else stays inline.
 - **Plato** (`plato/`, gitignored): a reference to learn from and surpass. Never copy its code.
 - **Libraries**: state of the art. Prefer pure Rust; C only when it is clearly best (SQLite, MuPDF). Check licenses are GPL-3.0 compatible.
