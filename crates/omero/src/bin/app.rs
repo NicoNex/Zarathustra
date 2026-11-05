@@ -100,9 +100,12 @@ fn main() -> Result<()> {
     if let Some(dir) = pgm {
         std::fs::create_dir_all(&dir)?;
         let mut px = vec![0u8; (W * H) as usize];
-        let home = home(&ctx);
+        let mut home = home(&ctx);
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("home.pgm"), &px)?;
+        home.tap((900, 800), (300, 800), &ctx); // swipe to the second page
+        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        write_pgm(dir.join("home2.pgm"), &px)?;
         if let Screen::Reader(r) = &mut screen {
             for n in 0..3 {
                 r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);

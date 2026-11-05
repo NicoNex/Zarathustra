@@ -22,10 +22,12 @@ const CHIPS_H: i32 = 64;
 const FOOTER: i32 = 110;
 /// Grid: three columns of covers at the books' usual 2:3 ratio, title and author below.
 const COLS: i32 = 3;
-const GUTTER: i32 = 48;
-const CELL_W: i32 = (W - 2 * PAD - (COLS - 1) * GUTTER) / COLS;
-const COVER_H: i32 = CELL_W * 3 / 2;
-const CELL_H: i32 = COVER_H + 150;
+/// Cell height sized so pages without the "continue reading" card hold two rows.
+const CELL_H: i32 = (H - FOOTER - HEADER - CHIPS_H - 36) / 2;
+const COVER_H: i32 = CELL_H - 150;
+const CELL_W: i32 = COVER_H * 2 / 3;
+const GUTTER: i32 = (W - 2 * PAD - COLS * CELL_W) / (COLS - 1);
+const _: () = assert!(GUTTER >= 48, "covers keep their breathing room");
 /// List: one book per row.
 const ROW_H: i32 = 190;
 const ROW_COVER: (i32, i32) = (100, 150);
