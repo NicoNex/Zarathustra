@@ -19,6 +19,8 @@ bundle() { tar -cf - -C "$STAGE" omero extensions; }
 
 if [ -n "$KINDLE_HOST" ]; then
 	k() { ssh -p "${KINDLE_PORT:-2222}" -o BatchMode=yes "root@$KINDLE_HOST" "$@"; }
+	# A running instance would keep the old binary and fight the new one for the screen.
+	k 'killall omero 2>/dev/null; true'
 	bundle | k 'tar -xf - -C /mnt/us'
 	echo "Deployed to $KINDLE_HOST."
 	[ -z "$1" ] || k "/mnt/us/extensions/omero/run.sh $*; cat /mnt/us/omero/$1.log"
