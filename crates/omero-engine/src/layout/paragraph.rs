@@ -60,7 +60,9 @@ const MIN_HYPHEN_WORD: usize = 5;
 /// Long-lived typesetting state: the UAX #14 segmenter and loaded hyphenation dictionaries.
 pub struct Typesetter {
     segmenter: LineSegmenterBorrowed<'static>,
-    pub hyphenators: Hyphenators,
+    hyphenators: Hyphenators,
+    /// Shaped hyphen per (face, size), kept across paragraphs.
+    hyphens: HashMap<(u32, u32), Vec<ShapedGlyph>>,
 }
 
 /// One shaped glyph in paragraph order; `advance` includes letter-spacing.
@@ -72,6 +74,19 @@ struct G {
     advance: f32,
     x_offset: f32,
     y_offset: f32,
+}
+
+impl G {
+    fn new(run: u32, r: &Run, g: &ShapedGlyph) -> Self {
+        G {
+            run,
+            offset: g.cluster,
+            gid: g.gid,
+            advance: g.x_advance + r.style.letter_spacing,
+            x_offset: g.x_offset,
+            y_offset: g.y_offset,
+        }
+    }
 }
 
 /// What a Knuth–Plass item stands for, aligned with the item list.
@@ -95,7 +110,6 @@ struct Para<'a, 'r> {
     glyphs: Vec<G>,
     items: Vec<Item>,
     pieces: Vec<Piece>,
-    /// Shaped hyphen per (face, size).
     hyphens: HashMap<(u32, u32), Vec<ShapedGlyph>>,
 }
 
@@ -105,13 +119,15 @@ impl Para<'_, '_> {
         self.pieces.push(piece);
     }
 
-    fn hyphen(&mut self, run: u32) -> &[ShapedGlyph] {
+    /// The run's hyphen glyphs, shaped once per (face, size).
+    fn hyphen(&mut self, run: u32) -> impl Iterator<Item = G> + '_ {
         let r = &self.runs[run as usize];
-        self.hyphens.entry((r.face.id, r.style.font_size.to_bits())).or_insert_with(|| {
+        let shaped = self.hyphens.entry((r.face.id, r.style.font_size.to_bits())).or_insert_with(|| {
             let mut g = Vec::new();
             r.face.shape("-", r.style.font_size, r.lang, &mut g);
             g
-        })
+        });
+        shaped.iter().map(move |g| G::new(run, r, g))
     }
 
     /// Glyphs within `run_glyphs` whose cluster lies in byte range `[a, b)` of their run.
@@ -125,7 +141,7 @@ impl Para<'_, '_> {
 
 impl Typesetter {
     pub fn new(hyphenators: Hyphenators) -> Self {
-        Typesetter { segmenter: LineSegmenter::new_auto(Default::default()), hyphenators }
+        Typesetter { segmenter: LineSegmenter::new_auto(Default::default()), hyphenators, hyphens: HashMap::new() }
     }
 
     pub fn layout(&mut self, runs: &[Run], p: &LayoutParams) -> Vec<Line> {
@@ -141,22 +157,15 @@ impl Typesetter {
         let run_at = |pos: usize| starts.partition_point(|&s| s <= pos).saturating_sub(1);
 
         // Shape each run once: kerning and ligatures across words and punctuation stay intact.
-        let mut para =
-            Para { runs, glyphs: Vec::new(), items: Vec::new(), pieces: Vec::new(), hyphens: HashMap::new() };
+        let hyphens = std::mem::take(&mut self.hyphens);
+        let mut para = Para { runs, glyphs: Vec::new(), items: Vec::new(), pieces: Vec::new(), hyphens };
         let mut run_glyphs = Vec::with_capacity(runs.len());
         let mut shaped = Vec::new();
         for (ri, r) in runs.iter().enumerate() {
             shaped.clear();
             r.face.shape(r.text, r.style.font_size, r.lang, &mut shaped);
             let first = para.glyphs.len();
-            para.glyphs.extend(shaped.iter().map(|g| G {
-                run: ri as u32,
-                offset: g.cluster,
-                gid: g.gid,
-                advance: g.x_advance + r.style.letter_spacing,
-                x_offset: g.x_offset,
-                y_offset: g.y_offset,
-            }));
+            para.glyphs.extend(shaped.iter().map(|g| G::new(ri as u32, r, g)));
             run_glyphs.push((first, para.glyphs.len()));
         }
 
@@ -216,6 +225,7 @@ impl Typesetter {
             lines.push(set_line(&mut para, start, b, p, justify));
             start = b.next;
         }
+        self.hyphens = para.hyphens;
         lines
     }
 
@@ -242,7 +252,7 @@ impl Typesetter {
             let width = para.glyphs[from..cut].iter().map(|g| g.advance).sum();
             para.push(Item::Box { width }, Piece::Glyphs(from, cut));
             if cut != last {
-                let hw = para.hyphen(ri as u32).iter().map(|g| g.x_advance).sum();
+                let hw = para.hyphen(ri as u32).map(|g| g.advance).sum();
                 let item = Item::Penalty { width: hw, cost: HYPHEN_PENALTY, flagged: true };
                 para.push(item, Piece::Hyphen { run: ri as u32 });
             }
@@ -319,19 +329,18 @@ fn set_line(para: &mut Para, start: usize, b: &Break, p: &LayoutParams, justify:
     let mut placed: Vec<Placed> = Vec::new();
     let mut glues: Vec<LineGlue> = Vec::new();
     let mut x = 0.0f32;
-    // (gid, advance, x offset, y offset)
-    let place = |placed: &mut Vec<Placed>, x: &mut f32, run: u32, offset: u32, g: (u32, f32, f32, f32), inserted| {
-        let r = &runs[run as usize];
-        let (gid, advance, dx, dy) = g;
-        let size = r.style.font_size;
-        placed.push(Placed { run, offset, face: r.face.id, gid, size, x: *x + dx, y: -dy, advance, inserted });
+    let place = |placed: &mut Vec<Placed>, x: &mut f32, g: G, offset: u32, inserted| {
+        let r = &runs[g.run as usize];
+        let (face, size) = (r.face.id, r.style.font_size);
+        let (run, gid, advance) = (g.run, g.gid, g.advance);
+        placed.push(Placed { run, offset, face, gid, size, x: *x + g.x_offset, y: -g.y_offset, advance, inserted });
         *x += advance;
     };
     for k in start..b.index {
         match (para.items[k], para.pieces[k]) {
             (_, Piece::Glyphs(lo, hi)) => {
-                for g in &para.glyphs[lo..hi] {
-                    place(&mut placed, &mut x, g.run, g.offset, (g.gid, g.advance, g.x_offset, g.y_offset), false);
+                for &g in &para.glyphs[lo..hi] {
+                    place(&mut placed, &mut x, g, g.offset, false);
                 }
             }
             (Item::Glue { width, stretch, shrink }, _) => {
@@ -343,8 +352,8 @@ fn set_line(para: &mut Para, start: usize, b: &Break, p: &LayoutParams, justify:
     }
     if let Piece::Hyphen { run } = para.pieces[b.index] {
         let offset = placed.last().map_or(0, |g| g.offset);
-        for s in para.hyphen(run).to_vec() {
-            place(&mut placed, &mut x, run, offset, (s.gid, s.x_advance, s.x_offset, s.y_offset), true);
+        for g in para.hyphen(run) {
+            place(&mut placed, &mut x, g, offset, true);
         }
     }
 
