@@ -44,16 +44,18 @@ impl Pace {
     }
 
     /// A forward turn at `now`: the time on the page just left becomes a sample, unless it
-    /// was a skim or the reader was away. Saves when the average changed.
-    pub fn turned(&mut self, now: Instant) {
+    /// was a skim or the reader was away. Saves when the average changed. Returns the sample,
+    /// the time actually spent reading that page.
+    pub fn turned(&mut self, now: Instant) -> Option<Duration> {
         let sample = self.since.map(|t| now.saturating_duration_since(t));
         self.since = Some(now);
-        let Some(d) = sample.filter(|d| (SKIM..=AWAY).contains(d)) else { return };
+        let d = sample.filter(|d| (SKIM..=AWAY).contains(d))?;
         self.samples = self.samples.saturating_add(1);
         // A plain mean over the first samples, so the default doesn't linger; then an EWMA.
         let alpha = (1.0 / self.samples as f32).max(ALPHA);
         self.secs_per_page += alpha * (d.as_secs_f32() - self.secs_per_page);
         crate::write_atomic(&self.path, format!("{:.2} {}\n", self.secs_per_page, self.samples)).ok();
+        Some(d)
     }
 
     /// Seconds per page: measured, or the default until there are enough samples.

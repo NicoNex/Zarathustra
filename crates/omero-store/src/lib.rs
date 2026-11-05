@@ -127,6 +127,15 @@ pub struct Event {
     pub op: String,
 }
 
+/// Time and pages read on one local day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reading {
+    /// Days since 1970-01-01, local time.
+    pub day: i64,
+    pub seconds: i64,
+    pub pages: i64,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -314,6 +323,29 @@ impl Store {
             }
         }
         Ok(md)
+    }
+
+    /// Adds `seconds` of reading and `pages` turned to `book` on local day `day` (days since
+    /// 1970-01-01).
+    pub fn add_reading(&self, book: BookId, day: i64, seconds: u32, pages: u32) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO reading_stats(book_id, day, seconds, pages, words) VALUES (?1, ?2, ?3, ?4, 0)
+             ON CONFLICT(book_id, day) DO UPDATE SET seconds = seconds + excluded.seconds,
+               pages = pages + excluded.pages",
+            params![book.0, day, seconds, pages],
+        )?;
+        Ok(())
+    }
+
+    /// Reading per day, oldest first, for one book or all of them.
+    pub fn reading_days(&self, book: Option<BookId>) -> Result<Vec<Reading>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT day, SUM(seconds), SUM(pages) FROM reading_stats
+             WHERE ?1 IS NULL OR book_id = ?1 GROUP BY day ORDER BY day",
+        )?;
+        let rows = stmt
+            .query_map([book.map(|b| b.0)], |r| Ok(Reading { day: r.get(0)?, seconds: r.get(1)?, pages: r.get(2)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Change-feed entries after `seq` (0 for all), oldest first.
@@ -526,6 +558,20 @@ mod tests {
         let recent = store.recent_annotations(2).expect("recent");
         let recent: Vec<_> = recent.iter().map(|(a, t)| (a.id.as_str(), t.as_deref())).collect();
         assert_eq!(recent, [(newest.id.as_str(), Some("Purgatorio")), (mid.id.as_str(), Some("Inferno"))]);
+    }
+
+    #[test]
+    fn reading_adds_up_per_day_and_book() {
+        let store = Store::open_in_memory().expect("open");
+        let a = store.ensure_book("id:a", &entry("Inferno")).expect("book");
+        let b = store.ensure_book("id:b", &entry("Purgatorio")).expect("book");
+        store.add_reading(a, 10, 30, 1).expect("add");
+        store.add_reading(a, 10, 45, 1).expect("add");
+        store.add_reading(b, 10, 20, 1).expect("add");
+        store.add_reading(a, 12, 60, 2).expect("add");
+        let day = |day, seconds, pages| Reading { day, seconds, pages };
+        assert_eq!(store.reading_days(Some(a)).expect("a"), [day(10, 75, 2), day(12, 60, 2)]);
+        assert_eq!(store.reading_days(None).expect("all"), [day(10, 95, 3), day(12, 60, 2)]);
     }
 
     #[test]

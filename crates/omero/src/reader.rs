@@ -287,7 +287,9 @@ impl Reader {
             return if active && !self.hl.is_active() { Action::Redraw { turn: None } } else { Action::None };
         }
         if forward {
-            self.pace.turned(Instant::now());
+            if let Some(d) = self.pace.turned(Instant::now()) {
+                self.hl.log_page(u32::try_from(d.as_secs()).unwrap_or(u32::MAX));
+            }
         } else {
             self.pace.restart(Instant::now()); // re-reading a page isn't reading speed
         }

@@ -336,6 +336,14 @@ impl Highlights {
             .collect();
     }
 
+    /// Logs `secs` of reading and one page for today in the reading statistics.
+    pub fn log_page(&self, secs: u32) {
+        let Some((store, book)) = &self.store else { return };
+        if let Err(e) = store.add_reading(*book, crate::clock::local_now().0, secs, 1) {
+            eprintln!("stats: {e}");
+        }
+    }
+
     /// A selection or its popup is showing: page turns wait.
     pub fn is_active(&self) -> bool {
         self.selection.is_some() || self.popup.is_some()

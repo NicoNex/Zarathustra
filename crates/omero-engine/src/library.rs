@@ -308,6 +308,37 @@ fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, th
     (entry, cacheable)
 }
 
+/// A book's full metadata (with the description), read from the file on demand: the scan
+/// cache keeps only what the home lists.
+pub fn details(path: &Path) -> Option<Metadata> {
+    let mut meta = read_book(path, Format::from_path(path)?)?.0;
+    meta.description = meta.description.as_deref().map(plain_text).filter(|d| !d.is_empty());
+    Some(meta)
+}
+
+/// Text of an HTML fragment (descriptions are often HTML): tags dropped, block ends and `<br>`
+/// as line breaks, entities decoded, runs of spaces collapsed.
+pub fn plain_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        text.push_str(&rest[..lt]);
+        let Some(gt) = rest[lt..].find('>') else { break };
+        let tag = rest[lt + 1..lt + gt].trim_start_matches('/').to_ascii_lowercase();
+        let name = tag.split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
+        if matches!(name, "br" | "p" | "div" | "li" | "h1" | "h2" | "h3" | "h4" | "blockquote") {
+            text.push('\n');
+        }
+        rest = &rest[lt + gt + 1..];
+    }
+    if !rest.contains('<') {
+        text.push_str(rest);
+    }
+    let text = quick_xml::escape::unescape(&text).map_or_else(|_| text.clone(), |t| t.into_owned());
+    let lines = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "));
+    lines.filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
+}
+
 /// Metadata and cover image bytes, or `None` when the book cannot be read.
 fn read_book(path: &Path, format: Format) -> Option<(Metadata, Option<Vec<u8>>)> {
     match format {
@@ -471,6 +502,13 @@ fn parse_line(line: &str) -> Option<BookEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptions_lose_their_markup() {
+        let html = "<div><p>Un <b>libro</b> &amp; altro.</p><p>Secondo&nbsp;paragrafo<br/>riga</p></div>";
+        assert_eq!(plain_text(html), "Un libro & altro.\nSecondo paragrafo\nriga");
+        assert_eq!(plain_text("Just text, no tags"), "Just text, no tags");
+    }
     use std::io::{Cursor, Write};
 
     /// A fresh, empty temp directory removed on drop.
