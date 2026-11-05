@@ -21,18 +21,18 @@ use crate::toc::{self, Toc};
 use crate::ui::{Label, INK_SOFT, LINE};
 use crate::{Action, Ctx, H, W};
 
-const MARGIN_TOP: i32 = 110;
-const MARGIN_BOTTOM: i32 = 130;
+pub(crate) const MARGIN_TOP: i32 = 110;
+pub(crate) const MARGIN_BOTTOM: i32 = 130;
 /// Clock baseline, well clear of the text starting at `MARGIN_TOP`.
 const HEADER_BASELINE: i32 = 66;
 /// The band the clock is drawn in, for refreshing it alone.
 pub const HEADER: Rect = Rect { x: 0, y: 0, w: W, h: MARGIN_TOP };
 /// Taps above this open the reader menu, as on the Kindle.
-const TOP_BAND: i32 = 150;
+pub(crate) const TOP_BAND: i32 = 150;
 /// Taps left of this go back a page (the Kindle's narrow left strip); elsewhere forward.
-const BACK_ZONE: i32 = W / 4;
+pub(crate) const BACK_ZONE: i32 = W / 4;
 /// Horizontal travel that makes a touch a swipe.
-const SWIPE: i32 = 100;
+pub(crate) const SWIPE: i32 = 100;
 /// Swipes starting this close to the bottom edge open the menu.
 const BOTTOM_EDGE: i32 = 120;
 
@@ -467,36 +467,48 @@ impl Reader {
     // ponytail: the time is drawn when the page is (turns, plus the app's 5-minute tick), so
     // it can lag a few minutes while a page stays up. Wake on the minute if that matters.
     fn header(&self, c: &mut Canvas, ctx: &mut Ctx) {
-        if !self.clock {
-            return;
+        if self.clock {
+            header(c, ctx);
         }
-        let Ctx { fonts, raster, .. } = ctx;
-        let Some(face) = crate::sans(fonts, false) else { return };
-        let label = Label { face, size: 24.0, ink: INK_SOFT };
-        let text = crate::clock::hhmm(crate::clock::local_now().1);
-        label.draw_centred(c, raster, &text, W as f32 / 2.0, HEADER_BASELINE);
     }
 
     /// Page count and time left in the chapter, and a thin progress bar through the book.
     fn footer(&self, c: &mut Canvas, ctx: &mut Ctx) {
         let y = H - MARGIN_BOTTOM / 2;
         let margin = self.margin_x();
-        let width = W - 2 * margin;
-        c.fill(Rect::new(margin, y, width, 2), LINE);
-        c.fill(Rect::new(margin, y - 1, (width as f32 * self.progress()) as i32, 4), 60);
+        footer(c, ctx, margin, self.progress(), (self.page, self.chapter.pages.len()));
 
         let Ctx { fonts, raster, .. } = ctx;
-        let Some(face) = crate::serif(fonts, false) else { return };
-        let label = Label { face, size: 26.0, ink: INK_SOFT };
-        let text = format!("{} / {}", self.page + 1, self.chapter.pages.len());
-        let x = (W - margin) as f32 - label.width(&text);
-        label.draw(c, raster, &text, x, y + 44);
-
         let Some(face) = crate::sans(fonts, false) else { return };
         let label = Label { face, size: 24.0, ink: INK_SOFT };
         let left = self.pace.minutes(self.chapter.pages.len().saturating_sub(self.page));
         label.draw(c, raster, &crate::i18n::lang().minutes_left(left), margin as f32, y + 44);
     }
+}
+
+/// A thin progress bar through the book (`progress` 0–1) and "page / pages" under its right
+/// end, `margin` in from the screen edges (also the PDF view's).
+pub(crate) fn footer(c: &mut Canvas, ctx: &mut Ctx, margin: i32, progress: f32, (page, pages): (usize, usize)) {
+    let y = H - MARGIN_BOTTOM / 2;
+    let width = W - 2 * margin;
+    c.fill(Rect::new(margin, y, width, 2), LINE);
+    c.fill(Rect::new(margin, y - 1, (width as f32 * progress) as i32, 4), 60);
+
+    let Ctx { fonts, raster, .. } = ctx;
+    let Some(face) = crate::serif(fonts, false) else { return };
+    let label = Label { face, size: 26.0, ink: INK_SOFT };
+    let text = format!("{} / {}", page + 1, pages);
+    let x = (W - margin) as f32 - label.width(&text);
+    label.draw(c, raster, &text, x, y + 44);
+}
+
+/// The clock, centred above the page (also the PDF view's).
+pub(crate) fn header(c: &mut Canvas, ctx: &mut Ctx) {
+    let Ctx { fonts, raster, .. } = ctx;
+    let Some(face) = crate::sans(fonts, false) else { return };
+    let label = Label { face, size: 24.0, ink: INK_SOFT };
+    let text = crate::clock::hhmm(crate::clock::local_now().1);
+    label.draw_centred(c, raster, &text, W as f32 / 2.0, HEADER_BASELINE);
 }
 
 fn outcome_rect(o: Outcome) -> Option<Rect> {

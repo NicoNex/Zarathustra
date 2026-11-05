@@ -7,6 +7,7 @@ pub mod i18n;
 pub mod menu;
 pub mod notebook;
 pub mod pace;
+pub mod pdfview;
 pub mod quick;
 pub mod reader;
 pub mod settings;

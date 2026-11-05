@@ -78,7 +78,7 @@ pub fn date_text(lang: Lang, days: i64) -> String {
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 2 } else { mp - 10 } as usize;
-    format!("{} {day} {}", names.weekdays[(days + 4).rem_euclid(7) as usize], names.months[month])
+    format!("{} {day} {}", names.weekdays[(days + 3).rem_euclid(7) as usize], names.months[month])
 }
 
 /// "07:05" for minutes since midnight.

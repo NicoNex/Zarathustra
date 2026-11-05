@@ -102,7 +102,7 @@ pub struct Strings {
     pub brightness: &'static str,
     pub warmth: &'static str,
     pub auto: &'static str,
-    /// Sunday first.
+    /// Weekday names, Monday first (the Italian week ends on Sunday).
     pub weekdays: [&'static str; 7],
     pub months: [&'static str; 12],
 }
@@ -168,7 +168,7 @@ const IT: Strings = Strings {
     brightness: "Luminosità",
     warmth: "Calore",
     auto: "AUTO",
-    weekdays: ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"],
+    weekdays: ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"],
     months: [
         "gennaio",
         "febbraio",
@@ -246,7 +246,7 @@ const EN: Strings = Strings {
     brightness: "Brightness",
     warmth: "Warmth",
     auto: "AUTO",
-    weekdays: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+    weekdays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
     months: [
         "January",
         "February",
