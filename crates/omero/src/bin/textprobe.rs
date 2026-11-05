@@ -27,7 +27,7 @@ fn paragraph(c: &mut Canvas, r: &mut Rasterizer, face: &Face, size: f32, top: i3
         font_size: size,
         font_family: None,
         line_height: Some(1.5),
-        justify: Some(true),
+        align: Some(omero_engine::style::css::TextAlign::Justify),
         hyphenate: true,
         page_width: (c.width - 2 * MARGIN) as f32,
     };

@@ -421,7 +421,7 @@ fn preferences(t: &Typography) -> Preferences {
         font_size: t.font_size(),
         font_family: t.family.clone(),
         line_height: Some(t.line_height()),
-        justify: Some(t.justify),
+        align: Some(t.text_align()),
         hyphenate: true,
         page_width: (W - 2 * t.margin_x()) as f32,
     }

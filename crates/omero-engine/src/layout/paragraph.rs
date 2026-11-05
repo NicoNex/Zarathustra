@@ -458,7 +458,7 @@ mod tests {
             font_size: 38.0,
             font_family: None,
             line_height: Some(1.5),
-            justify: Some(true),
+            align: Some(crate::style::css::TextAlign::Justify),
             hyphenate: true,
             page_width: 1000.0,
         };

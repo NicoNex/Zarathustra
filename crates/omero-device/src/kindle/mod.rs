@@ -19,6 +19,8 @@ struct Model {
     /// Detected by the presence of this white-LED backlight node.
     white_led: &'static str,
     warm_led: Option<&'static str>,
+    /// The vendor's measured LED mix ([`sysfs::Mix`]), when known.
+    light_mix: Option<&'static str>,
     battery: &'static str,
     touch: Transform,
 }
@@ -28,6 +30,7 @@ const MODELS: &[Model] = &[Model {
     dpi: 300,
     white_led: "/sys/class/backlight/fp9966-bl1",
     warm_led: Some("/sys/class/backlight/fp9966-bl0"),
+    light_mix: Some(include_str!("pw5-light.txt")),
     battery: "/sys/class/power_supply/bd71827_bat",
     touch: Transform { swap_xy: false, mirror_x: false, mirror_y: false },
 }];
@@ -54,9 +57,11 @@ impl Kindle {
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "unknown Kindle model"))?;
         let fb = mtk::MtkFb::open("/dev/fb0")?;
         let touch = TouchPanel::find(Path::new("/dev/input"), (fb.width, fb.height), model.touch)?;
-        let light = Led::open(model.white_led)
-            .ok()
-            .map(|white| SysfsLight { white, warm: model.warm_led.and_then(|p| Led::open(p).ok()) });
+        let light = Led::open(model.white_led).ok().map(|white| SysfsLight {
+            white,
+            warm: model.warm_led.and_then(|p| Led::open(p).ok()),
+            mix: model.light_mix.and_then(sysfs::Mix::parse),
+        });
         // ponytail: one-time bring-up log; drop once more models are verified.
         eprintln!("{} {}x{} rotate={}", model.name, fb.width, fb.height, fb.rotate);
         let powerd = power::Powerd::spawn().map_err(|e| eprintln!("powerd events unavailable: {e}")).ok();

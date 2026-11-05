@@ -439,7 +439,7 @@ mod tests {
             font_size: 20.0,
             font_family: None,
             line_height: None,
-            justify: None,
+            align: None,
             hyphenate: true,
             page_width: 500.0,
         };

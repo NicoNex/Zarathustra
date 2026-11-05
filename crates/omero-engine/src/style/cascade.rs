@@ -52,8 +52,9 @@ pub struct Preferences {
     pub font_family: Option<String>,
     /// Line height as a multiple of the font size; `None` keeps the publisher's.
     pub line_height: Option<f32>,
-    /// `Some(true)` justifies body text, `Some(false)` ragged-right, `None` as published.
-    pub justify: Option<bool>,
+    /// Alignment of body text (paragraphs set start, left or justified); `None` as published.
+    /// Text the publisher centred or set right keeps its alignment.
+    pub align: Option<TextAlign>,
     pub hyphenate: bool,
     /// Width of the text area in device pixels.
     pub page_width: f32,
@@ -346,10 +347,10 @@ fn apply_preferences(s: &mut ComputedStyle, prefs: &Preferences) {
     if let Some(factor) = prefs.line_height {
         s.line_spec = LineSpec::Factor(factor);
     }
-    match prefs.justify {
-        Some(true) if matches!(s.text_align, TextAlign::Start | TextAlign::Left) => s.text_align = TextAlign::Justify,
-        Some(false) if s.text_align == TextAlign::Justify => s.text_align = TextAlign::Start,
-        _ => {}
+    if let Some(align) = prefs.align {
+        if matches!(s.text_align, TextAlign::Start | TextAlign::Left | TextAlign::Justify) {
+            s.text_align = align;
+        }
     }
     s.hyphens &= prefs.hyphenate;
 }
@@ -363,7 +364,7 @@ mod tests {
             font_size: 40.0,
             font_family: Some("Bookerly".into()),
             line_height: None,
-            justify: Some(true),
+            align: Some(TextAlign::Justify),
             hyphenate: true,
             page_width: 1000.0,
         }
@@ -480,7 +481,7 @@ mod real_books {
             font_size: 38.0,
             font_family: Some("Bookerly".into()),
             line_height: Some(1.5),
-            justify: Some(true),
+            align: Some(TextAlign::Justify),
             hyphenate: true,
             page_width: 1056.0,
         };

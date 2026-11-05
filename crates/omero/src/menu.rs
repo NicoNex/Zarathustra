@@ -6,6 +6,7 @@ use std::path::Path;
 
 use omero_device::{Canvas, Rect};
 use omero_engine::font::{Face, Rasterizer};
+use omero_engine::style::css::TextAlign;
 
 use crate::ui::{button, rounded_rect, segmented, segments, Label, INK, INK_SOFT, PAPER};
 use crate::{Ctx, H, W};
@@ -39,12 +40,17 @@ pub struct Typography {
     pub family: Option<String>,
     pub spacing: usize,
     pub margin: usize,
-    pub justify: bool,
+    /// Index into [`ALIGNS`].
+    pub align: usize,
 }
+
+/// Body text alignment choices, as the menu shows them.
+pub const ALIGNS: [(TextAlign, &str); 3] =
+    [(TextAlign::Justify, "Justified"), (TextAlign::Start, "Left"), (TextAlign::Center, "Center")];
 
 impl Default for Typography {
     fn default() -> Self {
-        Typography { size: 3, family: Some("bookerly".into()), spacing: 1, margin: 1, justify: true }
+        Typography { size: 3, family: Some("bookerly".into()), spacing: 1, margin: 1, align: 0 }
     }
 }
 
@@ -62,7 +68,9 @@ impl Typography {
                 "size" => t.size = index(SIZES.len()).unwrap_or(t.size),
                 "spacing" => t.spacing = index(SPACINGS.len()).unwrap_or(t.spacing),
                 "margin" => t.margin = index(MARGINS.len()).unwrap_or(t.margin),
-                "justify" => t.justify = v.trim() != "false",
+                "align" => t.align = index(ALIGNS.len()).unwrap_or(t.align),
+                // Before center alignment: justify=false meant left.
+                "justify" => t.align = usize::from(v.trim() == "false"),
                 "family" => t.family = Some(v.trim().to_lowercase()).filter(|f| !f.is_empty()),
                 _ => {}
             }
@@ -73,14 +81,18 @@ impl Typography {
     pub fn save(&self, state_dir: &Path) {
         let family = self.family.as_deref().unwrap_or("");
         let text = format!(
-            "size={}\nfamily={family}\nspacing={}\nmargin={}\njustify={}\n",
-            self.size, self.spacing, self.margin, self.justify
+            "size={}\nfamily={family}\nspacing={}\nmargin={}\nalign={}\n",
+            self.size, self.spacing, self.margin, self.align
         );
-        std::fs::write(Self::path(state_dir), text).ok();
+        crate::write_atomic(&Self::path(state_dir), text).ok();
     }
 
     pub fn font_size(&self) -> f32 {
         SIZES[self.size]
+    }
+
+    pub fn text_align(&self) -> TextAlign {
+        ALIGNS[self.align].0
     }
 
     pub fn line_height(&self) -> f32 {
@@ -102,7 +114,7 @@ pub enum Control {
     Family(Option<String>),
     Spacing(usize),
     Margin(usize),
-    Justify(bool),
+    Align(usize),
 }
 
 /// The fonts offered: the publisher's, then the installed reading families.
@@ -199,7 +211,7 @@ pub fn controls(ctx: &Ctx) -> Vec<(Control, Rect)> {
     out.extend(l.fonts.into_iter().map(|(f, r)| (Control::Family(f), r)));
     out.extend(segments(l.spacing, SPACINGS.len()).into_iter().enumerate().map(|(i, r)| (Control::Spacing(i), r)));
     out.extend(segments(l.margin, MARGINS.len()).into_iter().enumerate().map(|(i, r)| (Control::Margin(i), r)));
-    out.extend(segments(l.align, 2).into_iter().enumerate().map(|(i, r)| (Control::Justify(i == 0), r)));
+    out.extend(segments(l.align, ALIGNS.len()).into_iter().enumerate().map(|(i, r)| (Control::Align(i), r)));
     out
 }
 
@@ -274,7 +286,7 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     };
     choice(c, l.spacing, &SPACINGS.map(|s| s.1), typo.spacing);
     choice(c, l.margin, &MARGINS.map(|m| m.1), typo.margin);
-    choice(c, l.align, &["Justified", "Left"], usize::from(!typo.justify));
+    choice(c, l.align, &ALIGNS.map(|a| a.1), typo.align);
 }
 
 /// The menu's top bar: a back link on the left and a centred title, over a black rule.
@@ -307,7 +319,7 @@ pub fn apply(typo: &mut Typography, ctl: &Control) -> bool {
         Control::Family(f) => typo.family = f.clone(),
         Control::Spacing(i) => typo.spacing = *i,
         Control::Margin(i) => typo.margin = *i,
-        Control::Justify(j) => typo.justify = *j,
+        Control::Align(i) => typo.align = *i,
         Control::Library | Control::Contents => {}
     }
     *typo != before
@@ -321,7 +333,7 @@ mod tests {
     fn typography_round_trips_and_clamps() {
         let dir = std::env::temp_dir().join(format!("omero-typo-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let t = Typography { size: 5, family: None, spacing: 2, margin: 0, justify: false };
+        let t = Typography { size: 5, family: None, spacing: 2, margin: 0, align: 2 };
         t.save(&dir);
         assert_eq!(Typography::load(&dir), t);
         std::fs::write(dir.join("typography.txt"), "size=99\nfamily=Baskerville\n").expect("write");

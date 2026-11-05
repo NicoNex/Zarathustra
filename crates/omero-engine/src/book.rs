@@ -186,7 +186,7 @@ mod tests {
             font_size: 40.0,
             font_family: None,
             line_height: Some(1.4),
-            justify: Some(true),
+            align: Some(crate::style::css::TextAlign::Justify),
             hyphenate: true,
             page_width: 1044.0,
         };
@@ -207,7 +207,7 @@ mod tests {
             font_size: 40.0,
             font_family: None,
             line_height: None,
-            justify: None,
+            align: None,
             hyphenate: false,
             page_width: 1000.0,
         };
@@ -250,7 +250,7 @@ mod tests {
             font_size: 40.0,
             font_family: None,
             line_height: Some(1.4),
-            justify: Some(true),
+            align: Some(crate::style::css::TextAlign::Justify),
             hyphenate: true,
             page_width: 1044.0,
         };

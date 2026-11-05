@@ -31,24 +31,84 @@ impl Led {
     }
 
     pub fn set(&self, frac: f32) -> io::Result<()> {
-        let raw = (frac.clamp(0.0, 1.0) * self.max as f32).round() as i64;
-        fs::write(self.dir.join("brightness"), raw.to_string())
+        self.set_raw(frac.clamp(0.0, 1.0) * self.max as f32)
+    }
+
+    fn get_raw(&self) -> io::Result<f32> {
+        Ok(read_int(&self.dir.join("brightness"))? as f32)
+    }
+
+    fn set_raw(&self, raw: f32) -> io::Result<()> {
+        fs::write(self.dir.join("brightness"), (raw.round() as i64).clamp(0, self.max).to_string())
     }
 }
 
-/// White LED plus an optional warm LED. Like the Kindle's own powerd, the two are mixed:
-/// brightness sets the total output through a perceptual curve and warmth the share of it
-/// the warm LED gives, so moving one slider doesn't change the other.
-// ponytail: quadratic curve and equal LED efficiency assumed; per-model gamma and a warm-LED
-// gain go here if a calibrated meter says brightness shifts with warmth.
+/// The vendor's own frontlight mix: the raw (white, warm) levels its power daemon writes for
+/// each of `steps`×`steps` (intensity, warmth) settings, measured on the device. The raw
+/// scale isn't linear in light, so blending by hand dims the light while warming it; this
+/// interpolates the table instead, so a slider matches the stock firmware exactly.
+#[derive(Debug, Clone)]
+pub struct Mix {
+    steps: usize,
+    /// Row-major by intensity, then warmth.
+    raw: Vec<[f32; 2]>,
+}
+
+impl Mix {
+    /// Lines `intensity warmth white warm`, `#` comments; a full square grid from 0.
+    pub fn parse(text: &str) -> Option<Mix> {
+        let rows: Vec<[f32; 4]> = (text.lines())
+            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+            .map(|l| {
+                let mut it = l.split_whitespace().map(|v| v.parse::<f32>().ok());
+                Some([it.next()??, it.next()??, it.next()??, it.next()??])
+            })
+            .collect::<Option<_>>()?;
+        let steps = (rows.len() as f64).sqrt() as usize;
+        let in_order = |(n, r): (usize, &[f32; 4])| r[0] as usize == n / steps && r[1] as usize == n % steps;
+        (steps >= 2 && steps * steps == rows.len() && rows.iter().enumerate().all(in_order))
+            .then(|| Mix { steps, raw: rows.iter().map(|r| [r[2], r[3]]).collect() })
+    }
+
+    /// Raw (white, warm) for brightness and warmth in 0–1, bilinear between grid points.
+    fn at(&self, b: f32, w: f32) -> [f32; 2] {
+        let last = (self.steps - 1) as f32;
+        let (x, y) = (b.clamp(0.0, 1.0) * last, w.clamp(0.0, 1.0) * last);
+        let (x0, y0) = ((x as usize).min(self.steps - 2), (y as usize).min(self.steps - 2));
+        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+        let p = |i: usize, j: usize| self.raw[i * self.steps + j];
+        let lerp = |a: [f32; 2], b: [f32; 2], t: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        lerp(lerp(p(x0, y0), p(x0, y0 + 1), fy), lerp(p(x0 + 1, y0), p(x0 + 1, y0 + 1), fy), fx)
+    }
+
+    /// The setting whose mix is closest to `raw` (reading back what is on the LEDs).
+    fn inverse(&self, raw: [f32; 2]) -> (u8, u8) {
+        let err = |(b, w): (u8, u8)| {
+            let m = self.at(b as f32 / 100.0, w as f32 / 100.0);
+            (m[0] - raw[0]).powi(2) + (m[1] - raw[1]).powi(2)
+        };
+        // ponytail: brute force over 101² settings (~10k lerps), only on startup and sleep.
+        let all = (0..=100u8).flat_map(|b| (0..=100u8).map(move |w| (b, w)));
+        all.min_by(|a, b| err(*a).total_cmp(&err(*b))).unwrap_or((0, 0))
+    }
+}
+
+/// White LED plus an optional warm LED. With a measured [`Mix`] the two follow the vendor's
+/// table; without one, brightness sets the total output on a quadratic curve and warmth the
+/// warm LED's share of it.
 #[derive(Debug, Clone)]
 pub struct SysfsLight {
     pub white: Led,
     pub warm: Option<Led>,
+    pub mix: Option<Mix>,
 }
 
 impl SysfsLight {
     pub fn get(&self) -> Option<Light> {
+        if let (Some(mix), Some(warm)) = (&self.mix, &self.warm) {
+            let (b, w) = mix.inverse([self.white.get_raw().ok()?, warm.get_raw().ok()?]);
+            return Some(Light { brightness: b, warmth: Some(w) });
+        }
         let white = self.white.get().ok()?;
         let warm = self.warm.as_ref().and_then(|w| w.get().ok());
         let total = (white + warm.unwrap_or(0.0)).min(1.0);
@@ -60,9 +120,14 @@ impl SysfsLight {
     }
 
     pub fn set(&self, light: Light) -> io::Result<()> {
+        let w = light.warmth.map_or(0.0, |w| w.min(100) as f32 / 100.0);
+        if let (Some(mix), Some(warm)) = (&self.mix, &self.warm) {
+            let [white_raw, warm_raw] = mix.at(light.brightness.min(100) as f32 / 100.0, w);
+            self.white.set_raw(white_raw)?;
+            return warm.set_raw(warm_raw);
+        }
         let total = (light.brightness.min(100) as f32 / 100.0).powi(2);
         let Some(led) = &self.warm else { return self.white.set(total) };
-        let w = light.warmth.map_or(0.0, |w| w.min(100) as f32 / 100.0);
         self.white.set(total * (1.0 - w))?;
         led.set(total * w)
     }
@@ -88,7 +153,7 @@ mod tests {
     #[test]
     fn warmth_mixes_leds_without_changing_brightness() {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let light = SysfsLight { white: led(a.path()), warm: Some(led(b.path())) };
+        let light = SysfsLight { white: led(a.path()), warm: Some(led(b.path())), mix: None };
         let raw = |d: &tempfile::TempDir| fs::read_to_string(d.path().join("brightness")).unwrap();
         for warmth in [0, 30, 100] {
             let l = Light { brightness: 50, warmth: Some(warmth) };
@@ -109,5 +174,21 @@ mod tests {
         fs::write(dir.path().join("capacity"), "86\n").unwrap();
         fs::write(dir.path().join("status"), "Discharging\n").unwrap();
         assert_eq!(battery(dir.path()), Some(Battery { percent: 86, charging: false }));
+    }
+
+    #[test]
+    fn pw5_mix_matches_powerd_and_reads_back() {
+        let mix = Mix::parse(include_str!("kindle/pw5-light.txt")).expect("table parses");
+        // Grid points are powerd's own values: intensity 24 / amber 12 and 4 / 0.
+        assert_eq!(mix.at(1.0, 0.5), [1730.0, 1642.0]);
+        assert_eq!(mix.at(4.0 / 24.0, 0.0), [549.0, 0.0]);
+        assert_eq!(mix.at(0.0, 0.7), [0.0, 0.0]);
+        // Raising warmth never dims the white LED below what powerd itself does.
+        let w0 = mix.at(0.5, 0.0)[0];
+        assert!(mix.at(0.5, 0.1)[0] <= w0 && mix.at(0.5, 0.1)[0] > w0 * 0.9);
+        for (b, w) in [(50, 30), (100, 0), (10, 90)] {
+            let (rb, rw) = mix.inverse(mix.at(b as f32 / 100.0, w as f32 / 100.0));
+            assert!(rb.abs_diff(b) <= 1 && rw.abs_diff(w) <= 1, "{b},{w} read back as {rb},{rw}");
+        }
     }
 }
