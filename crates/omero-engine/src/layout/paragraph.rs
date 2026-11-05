@@ -77,12 +77,12 @@ struct G {
 }
 
 impl G {
-    fn new(run: u32, r: &Run, g: &ShapedGlyph) -> Self {
+    fn new(run: u32, g: &ShapedGlyph, spacing: f32) -> Self {
         G {
             run,
             offset: g.cluster,
             gid: g.gid,
-            advance: g.x_advance + r.style.letter_spacing,
+            advance: g.x_advance + spacing,
             x_offset: g.x_offset,
             y_offset: g.y_offset,
         }
@@ -127,7 +127,7 @@ impl Para<'_, '_> {
             r.face.shape("-", r.style.font_size, r.lang, &mut g);
             g
         });
-        shaped.iter().map(move |g| G::new(run, r, g))
+        shaped.iter().map(move |g| G::new(run, g, r.style.letter_spacing))
     }
 
     /// Glyphs within `run_glyphs` whose cluster lies in byte range `[a, b)` of their run.
@@ -145,7 +145,8 @@ impl Typesetter {
     }
 
     pub fn layout(&mut self, runs: &[Run], p: &LayoutParams) -> Vec<Line> {
-        if runs.iter().all(|r| r.text.trim().is_empty()) {
+        // Only collapsible whitespace counts as blank: a `<p>&nbsp;</p>` spacer still gets its line.
+        if runs.iter().all(|r| r.text.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '\r'))) {
             return Vec::new();
         }
         let mut text = String::new();
@@ -157,6 +158,8 @@ impl Typesetter {
         let run_at = |pos: usize| starts.partition_point(|&s| s <= pos).saturating_sub(1);
 
         // Shape each run once: kerning and ligatures across words and punctuation stay intact.
+        // ponytail: one script guess per run; a Greek or Arabic word inside a Latin run is shaped
+        // as Latin. Itemize runs by script when the block builder splits them.
         let hyphens = std::mem::take(&mut self.hyphens);
         let mut para = Para { runs, glyphs: Vec::new(), items: Vec::new(), pieces: Vec::new(), hyphens };
         let mut run_glyphs = Vec::with_capacity(runs.len());
@@ -165,13 +168,30 @@ impl Typesetter {
             shaped.clear();
             r.face.shape(r.text, r.style.font_size, r.lang, &mut shaped);
             let first = para.glyphs.len();
-            para.glyphs.extend(shaped.iter().map(|g| G::new(ri as u32, r, g)));
+            // Letter-spacing goes after each cluster, not on marks or inside multi-glyph clusters.
+            let ls = r.style.letter_spacing;
+            para.glyphs.extend(shaped.iter().enumerate().map(|(i, g)| {
+                let cluster_end = shaped.get(i + 1).is_none_or(|n| n.cluster != g.cluster);
+                G::new(ri as u32, g, if cluster_end { ls } else { 0.0 })
+            }));
             run_glyphs.push((first, para.glyphs.len()));
         }
 
         if p.indent > 0.0 {
             para.push(Item::Box { width: p.indent }, Piece::Indent);
         }
+        // Advance of text bytes `[from, to)`, which may span runs.
+        let span_width = |para: &Para, from: usize, to: usize| {
+            let (mut width, mut pos) = (0.0f32, from);
+            while pos < to {
+                let ri = run_at(pos);
+                let end = (starts[ri] + runs[ri].text.len()).min(to);
+                let (lo, hi) = para.glyph_range(run_glyphs[ri], pos - starts[ri], end - starts[ri]);
+                width += para.glyphs[lo..hi].iter().map(|g| g.advance).sum::<f32>();
+                pos = end;
+            }
+            width
+        };
         let opportunities: Vec<usize> = self.segmenter.segment_str(&text).collect();
         for w in opportunities.windows(2) {
             let seg = &text[w[0]..w[1]];
@@ -192,13 +212,15 @@ impl Typesetter {
             }
             let trailing = &text[word_end..w[1]];
             if trailing.contains('\n') {
-                para.push(Item::Glue { width: 0.0, stretch: INFINITY, shrink: 0.0 }, Piece::Other);
-                para.push(Item::Penalty { width: 0.0, cost: -INFINITY, flagged: false }, Piece::Other);
+                // One forced break per newline; the empty box keeps a blank line a real line (TeX's \hbox{}).
+                for _ in trailing.matches('\n') {
+                    para.push(Item::Box { width: 0.0 }, Piece::Other);
+                    para.push(Item::Glue { width: 0.0, stretch: INFINITY, shrink: 0.0 }, Piece::Other);
+                    para.push(Item::Penalty { width: 0.0, cost: -INFINITY, flagged: false }, Piece::Other);
+                }
             } else if !trailing.is_empty() {
                 // Inter-word space at TeX proportions: stretch ½, shrink ⅓.
-                let ri = run_at(word_end);
-                let (lo, hi) = para.glyph_range(run_glyphs[ri], word_end - starts[ri], w[1] - starts[ri]);
-                let sw: f32 = para.glyphs[lo..hi].iter().map(|g| g.advance).sum();
+                let sw = span_width(&para, word_end, w[1]);
                 para.push(Item::Glue { width: sw, stretch: sw / 2.0, shrink: sw / 3.0 }, Piece::Space);
             } else {
                 // A break opportunity without a space (after an em dash, between CJK ideographs).
@@ -218,11 +240,15 @@ impl Typesetter {
             })
             .unwrap_or_else(|| greedy(&para.items, p.measure));
 
-        let mut lines = Vec::with_capacity(breaks.len());
-        let mut start = 0;
-        for (n, b) in breaks.iter().enumerate() {
-            let justify = p.align == TextAlign::Justify && n + 1 < breaks.len();
-            lines.push(set_line(&mut para, start, b, p, justify));
+        let mut lines: Vec<Line> = Vec::with_capacity(breaks.len());
+        let (mut start, mut last_run) = (0, 0);
+        for b in &breaks {
+            // Lines ending at a forced break (paragraph end, newline) stay ragged.
+            let forced = matches!(para.items[b.index], Item::Penalty { cost, .. } if cost <= -INFINITY);
+            let justify = p.align == TextAlign::Justify && !forced;
+            let line = set_line(&mut para, start, b, p, justify, last_run);
+            last_run = line.glyphs.last().map_or(last_run, |g| g.run);
+            lines.push(line);
             start = b.next;
         }
         self.hyphens = para.hyphens;
@@ -286,7 +312,8 @@ fn greedy(items: &[Item], measure: f32) -> Vec<Break> {
                 width = 0.0;
                 last_break = None;
             }
-            Item::Penalty { cost, .. } if cost < INFINITY => last_break = Some(i),
+            // Hyphenation points are skipped: their hyphen would overflow a line greedy filled.
+            Item::Penalty { cost, flagged: false, .. } if cost < INFINITY => last_break = Some(i),
             Item::Penalty { .. } => {}
         }
     }
@@ -324,7 +351,8 @@ struct LineGlue {
     shrink: f32,
 }
 
-fn set_line(para: &mut Para, start: usize, b: &Break, p: &LayoutParams, justify: bool) -> Line {
+/// `fallback_run` sizes a line without glyphs (a blank line between stanzas).
+fn set_line(para: &mut Para, start: usize, b: &Break, p: &LayoutParams, justify: bool, fallback_run: u32) -> Line {
     let runs = para.runs;
     let mut placed: Vec<Placed> = Vec::new();
     let mut glues: Vec<LineGlue> = Vec::new();
@@ -398,10 +426,11 @@ fn set_line(para: &mut Para, start: usize, b: &Break, p: &LayoutParams, justify:
     // Line box: tallest line-height among the runs present; baseline with half-leading.
     let (mut height, mut asc, mut desc) = (0.0f32, 0.0f32, 0.0f32);
     let mut prev_run = None;
-    for g in &placed {
-        if prev_run != Some(g.run) {
-            prev_run = Some(g.run);
-            let r = &runs[g.run as usize];
+    let line_runs = placed.iter().map(|g| g.run);
+    for run in line_runs.chain(placed.is_empty().then_some(fallback_run)) {
+        if prev_run != Some(run) {
+            prev_run = Some(run);
+            let r = &runs[run as usize];
             let m = r.face.line_metrics(r.style.font_size);
             height = height.max(r.style.line_height);
             asc = asc.max(m.ascent);
@@ -482,6 +511,14 @@ mod tests {
         let wide = LayoutParams { measure: 900.0, indent: 0.0, align: TextAlign::Justify };
         let poem = [Run { text: "One line\nand another", style: &style, face: &face, lang: None }];
         assert_eq!(ts.layout(&poem, &wide).len(), 2, "newline forces a break");
+
+        let stanza = [Run { text: "One\n\nTwo", style: &style, face: &face, lang: None }];
+        let lines = ts.layout(&stanza, &wide);
+        assert_eq!(lines.len(), 3, "blank line kept");
+        assert!(lines[1].height > 0.0, "blank line has height");
+
+        let spacer = [Run { text: "\u{a0}", style: &style, face: &face, lang: None }];
+        assert_eq!(ts.layout(&spacer, &wide).len(), 1, "&nbsp; spacer paragraph keeps its line");
 
         let blank = [Run { text: "  ", style: &style, face: &face, lang: None }];
         assert!(ts.layout(&blank, &wide).is_empty());

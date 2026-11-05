@@ -15,6 +15,7 @@ const SUBPIXEL_STEPS: u32 = 4;
 
 /// One font file at its default instance.
 pub struct Face {
+    /// Unique per font file for as long as layout caches live (they key on it).
     pub id: u32,
     bytes: Arc<Vec<u8>>,
     shaper: harfrust::Font,
