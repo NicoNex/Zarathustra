@@ -1,7 +1,9 @@
 //! The Omero shell: home, reader and the state they share.
 
 pub mod home;
+pub mod quick;
 pub mod reader;
+pub mod settings;
 pub mod ui;
 
 use std::path::{Path, PathBuf};
