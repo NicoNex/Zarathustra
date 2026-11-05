@@ -508,10 +508,16 @@ pub fn auto_warmth(minutes: u32, night: u8) -> u8 {
 /// Local wall-clock time now: (days since 1970-01-01, minutes since midnight).
 pub fn local_now() -> (i64, u32) {
     let utc = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
-    // ponytail: re-reads the 2–3 KB zone file on every call (a few times per open panel or
-    // tick); cache it with its mtime if this ever runs per frame.
-    let offset = std::fs::read("/etc/localtime").ok().and_then(|d| tzif_offset(&d, utc)).unwrap_or(0);
-    let local = utc + offset;
+    // The reader header asks on every page turn: re-read the zone file at most every 15
+    // minutes (DST switches on the hour, so the offset can be a few minutes late at most).
+    static CACHE: std::sync::Mutex<(i64, i64)> = std::sync::Mutex::new((i64::MIN, 0));
+    let slot = utc.div_euclid(900);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.0 != slot {
+        let offset = std::fs::read("/etc/localtime").ok().and_then(|d| tzif_offset(&d, utc)).unwrap_or(0);
+        *cache = (slot, offset);
+    }
+    let local = utc + cache.1;
     (local.div_euclid(86_400), (local.rem_euclid(86_400) / 60) as u32)
 }
 
