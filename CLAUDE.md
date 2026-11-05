@@ -1,5 +1,7 @@
 # Omero
 
+Start here: `docs/superpowers/HANDOFF.md` (current state, open bugs, next steps).
+
 Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 (portable to other e-ink devices). Design: `docs/superpowers/specs/2026-11-04-omero-reader-design.md`. Plans: `docs/superpowers/plans/`.
 
 ## How we work (always)
