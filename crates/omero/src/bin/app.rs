@@ -204,10 +204,9 @@ fn main() -> Result<()> {
             marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
         } else if let Some((rect, waveform)) = panel.filter(|_| quick.is_open()) {
             quick.render(&mut dev.canvas(), &mut ctx);
-            // A drag frame doesn't wait for the previous one: the controller merges them.
-            if waveform != Waveform::Fast {
-                dev.wait_refresh(marker)?;
-            }
+            // Wait even between drag frames: overlapping DU updates collide on the MTK panel
+            // (offset gray blocks). Batching already keeps the drag from lagging behind.
+            dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;
         }
     }
