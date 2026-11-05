@@ -12,6 +12,7 @@ use omero_engine::book::{Book, Chapter};
 use omero_engine::font::draw_glyph;
 use omero_engine::style::cascade::Preferences;
 
+use crate::highlight::{Highlights, Outcome};
 use crate::menu::{self, Control, Typography};
 use crate::ui::{Label, INK_SOFT, LINE};
 use crate::{Action, Ctx, H, W};
@@ -37,6 +38,8 @@ pub struct Reader {
     state_file: PathBuf,
     /// Decoded images of the pages around the current one (`render` takes `&self`).
     images: std::cell::RefCell<omero_engine::image::ImageCache>,
+    /// Saved highlights and the selection in progress.
+    hl: Highlights,
 }
 
 /// A saved reading position: chapter, first block on the page, progress through the book.
@@ -68,6 +71,7 @@ impl Reader {
         let prefs = preferences(&typo);
         let state_file = ctx.state_file(path);
         let saved = Position::load(&state_file);
+        let hl = Highlights::open(path, &book, &ctx.state_dir);
         let mut r = Reader {
             chapter_index: saved.as_ref().map_or(0, |p| p.chapter.min(book.chapters.len() - 1)),
             book,
@@ -78,6 +82,7 @@ impl Reader {
             page: 0,
             state_file,
             images: Default::default(),
+            hl,
         };
         r.load(r.chapter_index, ctx)?;
         if let Some(block) = saved.map(|p| p.block) {
@@ -106,6 +111,7 @@ impl Reader {
         self.chapter = self.book.chapter(i, &self.prefs, &ctx.fonts, &mut ctx.ts, height)?;
         self.chapter_index = i;
         self.page = 0;
+        self.hl.chapter_loaded(&self.chapter, u32::try_from(i).unwrap_or(u32::MAX));
         eprintln!("chapter {i}: {} pages in {:?}", self.chapter.pages.len(), t.elapsed());
         Ok(())
     }
@@ -125,6 +131,7 @@ impl Reader {
 
     /// Moves one page forward or back across chapters; false at either end of the book.
     pub fn turn(&mut self, forward: bool, ctx: &mut Ctx) -> Result<bool> {
+        self.hl.dismiss();
         if forward && self.page + 1 < self.chapter.pages.len() {
             self.page += 1;
         } else if !forward && self.page > 0 {
@@ -163,6 +170,11 @@ impl Reader {
     pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Result<Action> {
         if self.menu {
             return self.menu_tap((x0, y0), ctx);
+        }
+        if (x - x0).abs() <= SWIPE {
+            if let Outcome::Redraw(rect) = self.hl.tap(&self.chapter, self.page, self.origin(), (x0, y0)) {
+                return Ok(Action::Region(rect));
+            }
         }
         let forward = match x - x0 {
             dx if dx < -SWIPE => true,
@@ -215,6 +227,35 @@ impl Reader {
         self.typo.margin_x()
     }
 
+    /// Top-left corner of the text area on screen.
+    fn origin(&self) -> (i32, i32) {
+        (self.margin_x(), MARGIN_TOP)
+    }
+
+    /// Long press at `at`: starts a selection on the word there. Returns the screen area to
+    /// refresh, `None` when nothing was selected.
+    pub fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
+        if self.menu {
+            return None;
+        }
+        outcome_rect(self.hl.long_press(&self.chapter, self.page, self.origin(), at))
+    }
+
+    /// The finger moved during a selection; returns the (possibly empty) area to refresh.
+    pub fn drag(&mut self, at: (i32, i32)) -> Option<Rect> {
+        outcome_rect(self.hl.drag(&self.chapter, self.page, self.origin(), at))
+    }
+
+    /// Screen rectangle of a button of the highlight popup, when one is open.
+    pub fn popup_button(&self, b: crate::highlight::Button) -> Option<Rect> {
+        self.hl.button(b)
+    }
+
+    /// The finger lifted after selecting: shows the highlight actions.
+    pub fn release(&mut self) -> Option<Rect> {
+        outcome_rect(self.hl.release(&self.chapter, self.page, self.origin()))
+    }
+
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
         c.fill(c.bounds(), 255);
         if let Some(page) = self.chapter.pages.get(self.page) {
@@ -230,6 +271,7 @@ impl Reader {
                     omero_engine::image::draw(c, img, x.round() as i32, y.round() as i32);
                 }
             }
+            self.hl.render_under(c, &self.chapter, self.page, self.origin());
             for line in &page.lines {
                 for g in &line.glyphs {
                     let Some(face) = ctx.fonts.face(g.face) else { continue };
@@ -241,6 +283,7 @@ impl Reader {
             }
         }
         self.footer(c, ctx);
+        self.hl.render_over(c, ctx);
         if self.menu {
             menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""));
         }
@@ -260,6 +303,13 @@ impl Reader {
         let text = format!("{} / {}", self.page + 1, self.chapter.pages.len());
         let x = (W - margin) as f32 - label.width(&text);
         label.draw(c, raster, &text, x, y + 44);
+    }
+}
+
+fn outcome_rect(o: Outcome) -> Option<Rect> {
+    match o {
+        Outcome::Redraw(r) => Some(r),
+        Outcome::Ignored => None,
     }
 }
 

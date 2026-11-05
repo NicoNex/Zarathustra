@@ -1,5 +1,6 @@
 //! The Omero shell: home, reader and the state they share.
 
+pub mod highlight;
 pub mod home;
 pub mod menu;
 pub mod quick;
@@ -84,6 +85,8 @@ pub enum Action {
     Redraw {
         turn: Option<bool>,
     },
+    /// Redraw the screen but refresh only this area (popups, highlights).
+    Region(omero_device::Rect),
     Open(PathBuf),
     Home,
     Quit,
