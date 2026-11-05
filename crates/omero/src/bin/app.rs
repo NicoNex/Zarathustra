@@ -76,6 +76,9 @@ fn main() -> Result<()> {
             r.menu = true;
             r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
             write_pgm(dir.join("menu.pgm"), &px)?;
+            r.show_contents();
+            r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_pgm(dir.join("toc.pgm"), &px)?;
         }
         return Ok(());
     }

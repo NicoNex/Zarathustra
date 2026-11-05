@@ -1,18 +1,28 @@
 //! The reader menu: a top bar (back to the library, book title) and a bottom sheet with the
-//! typography settings, which persist across books and sessions.
+//! table of contents entry and the typography settings, grouped as Text (size, font) and
+//! Layout (spacing, margins, alignment). The settings persist across books and sessions.
 
 use std::path::Path;
 
 use omero_device::{Canvas, Rect};
+use omero_engine::font::{Face, Rasterizer};
 
-use crate::ui::{rounded_outline, rounded_rect, Label, INK, INK_SOFT, LINE, PAPER};
+use crate::ui::{button, rounded_rect, segmented, segments, Label, INK, INK_SOFT, PAPER};
 use crate::{Ctx, H, W};
 
 pub const TOPBAR_H: i32 = 150;
-const PAD: i32 = 72;
-const ROW_H: i32 = 88;
-const GAP: i32 = 28;
-const LABEL_W: i32 = 250;
+pub const PAD: i32 = 64;
+/// Width of the row-label column left of the controls.
+const LABEL_W: i32 = 230;
+/// Touch targets: 96 px ≈ 8 mm at 300 dpi.
+pub const ROW_H: i32 = 96;
+const ROW_GAP: i32 = 20;
+const CHIP_GAP: i32 = 16;
+const SECTION_GAP: i32 = 40;
+const HEADER_H: i32 = 60;
+const CONTENTS_H: i32 = 104;
+const SHEET_PAD_TOP: i32 = 44;
+const SHEET_PAD_BOTTOM: i32 = 52;
 const FONT_COLS: usize = 3;
 const MAX_FONTS: usize = 9;
 
@@ -86,6 +96,7 @@ impl Typography {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Control {
     Library,
+    Contents,
     Smaller,
     Larger,
     Family(Option<String>),
@@ -102,48 +113,105 @@ fn families(ctx: &Ctx) -> Vec<Option<String>> {
     out
 }
 
-fn sheet_top(fonts: usize) -> i32 {
-    let font_rows = fonts.div_ceil(FONT_COLS) as i32;
-    H - (GAP * 2 + ROW_H + GAP + font_rows * (ROW_H + 16) + 3 * (ROW_H + GAP) + 20)
+/// Where everything in the sheet goes.
+struct Layout {
+    top: i32,
+    contents: Rect,
+    /// Section headers: text and the band they sit in.
+    headers: [(&'static str, Rect); 2],
+    /// Row labels with the row they name.
+    labels: [(&'static str, Rect); 5],
+    size: Rect,
+    fonts: Vec<(Option<String>, Rect)>,
+    spacing: Rect,
+    margin: Rect,
+    align: Rect,
+}
+
+impl Layout {
+    fn new(fonts: Vec<Option<String>>) -> Layout {
+        let font_rows = fonts.len().div_ceil(FONT_COLS).max(1) as i32;
+        let fonts_h = font_rows * ROW_H + (font_rows - 1) * CHIP_GAP;
+        let height = SHEET_PAD_TOP
+            + CONTENTS_H
+            + 2 * (SECTION_GAP + HEADER_H)
+            + ROW_H
+            + ROW_GAP
+            + fonts_h
+            + 3 * ROW_H
+            + 2 * ROW_GAP
+            + SHEET_PAD_BOTTOM;
+        let top = H - height;
+        let (x, w) = (PAD + LABEL_W, W - 2 * PAD - LABEL_W);
+        let row = |y: i32| Rect::new(x, y, w, ROW_H);
+
+        let mut y = top + SHEET_PAD_TOP;
+        let contents = Rect::new(PAD, y, W - 2 * PAD, CONTENTS_H);
+        y += CONTENTS_H + SECTION_GAP;
+        let text_header = Rect::new(PAD, y, W - 2 * PAD, HEADER_H);
+        y += HEADER_H;
+        let size = row(y);
+        y += ROW_H + ROW_GAP;
+        let cell = (w - CHIP_GAP * (FONT_COLS as i32 - 1)) / FONT_COLS as i32;
+        let font_top = y;
+        let fonts = (fonts.into_iter().enumerate())
+            .map(|(i, f)| {
+                let (r, c) = ((i / FONT_COLS) as i32, (i % FONT_COLS) as i32);
+                (f, Rect::new(x + c * (cell + CHIP_GAP), y + r * (ROW_H + CHIP_GAP), cell, ROW_H))
+            })
+            .collect();
+        y += fonts_h + SECTION_GAP;
+        let layout_header = Rect::new(PAD, y, W - 2 * PAD, HEADER_H);
+        y += HEADER_H;
+        let spacing = row(y);
+        let margin = row(y + ROW_H + ROW_GAP);
+        let align = row(y + 2 * (ROW_H + ROW_GAP));
+        Layout {
+            top,
+            contents,
+            headers: [("Text", text_header), ("Layout", layout_header)],
+            labels: [
+                ("Size", size),
+                ("Font", Rect::new(x, font_top, w, ROW_H)),
+                ("Spacing", spacing),
+                ("Margins", margin),
+                ("Alignment", align),
+            ],
+            size,
+            fonts,
+            spacing,
+            margin,
+            align,
+        }
+    }
 }
 
 /// Every control with its rectangle, top to bottom.
 pub fn controls(ctx: &Ctx) -> Vec<(Control, Rect)> {
-    let fonts = families(ctx);
-    let mut out = vec![(Control::Library, Rect::new(0, 0, 360, TOPBAR_H))];
-    let x = PAD + LABEL_W;
-    let width = W - PAD - x;
-    let mut y = sheet_top(fonts.len()) + GAP * 2;
-
-    out.push((Control::Smaller, Rect::new(x, y, 160, ROW_H)));
-    out.push((Control::Larger, Rect::new(W - PAD - 160, y, 160, ROW_H)));
-    y += ROW_H + GAP;
-
-    let cell = (W - 2 * PAD - 16 * (FONT_COLS as i32 - 1)) / FONT_COLS as i32;
-    for (i, f) in fonts.into_iter().enumerate() {
-        let (row, col) = ((i / FONT_COLS) as i32, (i % FONT_COLS) as i32);
-        out.push((Control::Family(f), Rect::new(PAD + col * (cell + 16), y + row * (ROW_H + 16), cell, ROW_H)));
-    }
-    y = out.last().map_or(y, |(_, r)| r.bottom()) + GAP;
-
-    let segments =
-        |n: usize, y: i32| (0..n).map(move |i| Rect::new(x + i as i32 * width / n as i32, y, width / n as i32, ROW_H));
-    out.extend(segments(SPACINGS.len(), y).enumerate().map(|(i, r)| (Control::Spacing(i), r)));
-    y += ROW_H + GAP;
-    out.extend(segments(MARGINS.len(), y).enumerate().map(|(i, r)| (Control::Margin(i), r)));
-    y += ROW_H + GAP;
-    out.extend(segments(2, y).enumerate().map(|(i, r)| (Control::Justify(i == 0), r)));
+    let l = Layout::new(families(ctx));
+    let size = segments(l.size, 3);
+    let mut out = vec![
+        (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
+        (Control::Contents, l.contents),
+        (Control::Smaller, size[0]),
+        (Control::Larger, size[2]),
+    ];
+    out.extend(l.fonts.into_iter().map(|(f, r)| (Control::Family(f), r)));
+    out.extend(segments(l.spacing, SPACINGS.len()).into_iter().enumerate().map(|(i, r)| (Control::Spacing(i), r)));
+    out.extend(segments(l.margin, MARGINS.len()).into_iter().enumerate().map(|(i, r)| (Control::Margin(i), r)));
+    out.extend(segments(l.align, 2).into_iter().enumerate().map(|(i, r)| (Control::Justify(i == 0), r)));
     out
 }
 
-/// Whether a tap at `(x, y)` lands on the menu's chrome (top bar or sheet).
+/// Whether a tap at height `y` lands on the menu's chrome (top bar or sheet).
 pub fn covers(ctx: &Ctx, y: i32) -> bool {
-    y < TOPBAR_H || y >= sheet_top(families(ctx).len())
+    y < TOPBAR_H || y >= Layout::new(families(ctx)).top
 }
 
-pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str) {
-    let fonts_n = families(ctx).len();
-    let controls = controls(ctx);
+/// Draws the menu over the page. `chapter` is the current table-of-contents entry, `None`
+/// when the book has no table of contents.
+pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, chapter: Option<&str>) {
+    let l = Layout::new(families(ctx));
     let Ctx { fonts, raster, .. } = ctx;
     let (Some(sans), Some(sans_bold), Some(serif_bold)) = (
         fonts.pick(&["sans-serif".into()], 400, false),
@@ -153,70 +221,71 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str) {
         return;
     };
 
-    // Top bar.
+    topbar(c, raster, sans, serif_bold, "‹  Library", title);
+
+    // Sheet: rounded top corners over a black edge, like the quick panel.
+    rounded_rect(c, Rect::new(0, l.top - 3, W, H - l.top + 40), 32, INK);
+    rounded_rect(c, Rect::new(0, l.top, W, H - l.top + 40), 30, PAPER);
+
+    // Contents: a full-width row naming the current chapter.
+    let r = l.contents;
+    button(c, r, false);
+    let ink = if chapter.is_some() { INK } else { INK_SOFT };
+    let head = Label { face: sans_bold, size: 32.0, ink };
+    let mut x = r.x as f32 + 36.0;
+    x += head.draw(c, raster, "Contents", x, head.baseline(r)) + 32.0;
+    let chevron = Label { face: sans_bold, size: 44.0, ink };
+    let chevron_x = (r.right() - 36) as f32 - chevron.width("›");
+    chevron.draw(c, raster, "›", chevron_x, chevron.baseline(r));
+    let sub = Label { face: sans, size: 30.0, ink: INK_SOFT };
+    let text = sub.fit(chapter.unwrap_or("No table of contents"), chevron_x - 32.0 - x);
+    sub.draw(c, raster, &text, x, sub.baseline(r));
+
+    let header = Label { face: sans_bold, size: 30.0, ink: INK };
+    for (text, r) in l.headers {
+        header.draw(c, raster, text, r.x as f32, r.y + 40);
+    }
+    let label = Label { face: sans, size: 30.0, ink: INK_SOFT };
+    for (text, r) in l.labels {
+        label.draw(c, raster, text, PAD as f32, label.baseline(r));
+    }
+
+    // Size: a stepper, the current step between a small and a large "A".
+    let segs = segmented(c, l.size, 3, None);
+    Label { face: sans_bold, size: 30.0, ink: INK }.centered(c, raster, "A", segs[0]);
+    Label { face: sans_bold, size: 46.0, ink: INK }.centered(c, raster, "A", segs[2]);
+    let value = format!("{} / {}", typo.size + 1, SIZES.len());
+    Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &value, segs[1]);
+
+    // Fonts: chips, each name set in its own face.
+    for (f, r) in &l.fonts {
+        let on = *f == typo.family;
+        button(c, *r, on);
+        let face = f.as_ref().and_then(|f| fonts.pick(std::slice::from_ref(f), 400, false)).unwrap_or(sans);
+        let name = f.as_deref().map_or("Original".into(), title_case);
+        Label { face, size: 32.0, ink: if on { PAPER } else { INK } }.centered(c, raster, &name, *r);
+    }
+
+    let mut choice = |c: &mut Canvas, r: Rect, names: &[&str], on: usize| {
+        let segs = segmented(c, r, names.len(), Some(on));
+        for (i, (name, s)) in names.iter().zip(segs).enumerate() {
+            Label { face: sans, size: 30.0, ink: if i == on { PAPER } else { INK } }.centered(c, raster, name, s);
+        }
+    };
+    choice(c, l.spacing, &SPACINGS.map(|s| s.1), typo.spacing);
+    choice(c, l.margin, &MARGINS.map(|m| m.1), typo.margin);
+    choice(c, l.align, &["Justified", "Left"], usize::from(!typo.justify));
+}
+
+/// The menu's top bar: a back link on the left and a centred title, over a black rule.
+pub fn topbar(c: &mut Canvas, raster: &mut Rasterizer, sans: &Face, serif_bold: &Face, back: &str, title: &str) {
     c.fill(Rect::new(0, 0, W, TOPBAR_H), PAPER);
-    c.fill(Rect::new(0, TOPBAR_H - 2, W, 2), INK);
-    let back = Label { face: sans, size: 32.0, ink: INK };
-    back.draw(c, raster, "‹  Library", PAD as f32, 92);
+    c.fill(Rect::new(0, TOPBAR_H - 3, W, 3), INK);
+    let b = Label { face: sans, size: 32.0, ink: INK };
+    b.draw(c, raster, back, PAD as f32, 92);
     let t = Label { face: serif_bold, size: 34.0, ink: INK };
     let text = t.fit(title, (W - 2 * 380) as f32);
     t.draw(c, raster, &text, (W as f32 - t.width(&text)) / 2.0, 92);
-
-    // Sheet with rounded top corners and a dark edge, like the quick panel.
-    let top = sheet_top(fonts_n);
-    rounded_rect(c, Rect::new(0, top - 3, W, H - top + 40), 32, INK);
-    rounded_rect(c, Rect::new(0, top, W, H - top + 40), 30, PAPER);
-    rounded_rect(c, Rect::new(W / 2 - 40, top + 18, 80, 8), 4, LINE);
-
-    let label = Label { face: sans, size: 28.0, ink: INK_SOFT };
-    let row_label = |c: &mut Canvas, raster: &mut _, text: &str, r: Rect| {
-        label.draw(c, raster, text, PAD as f32, r.y + r.h / 2 + 10);
-    };
-    let mut labelled = [false; 5];
-    for (ctl, r) in &controls {
-        let on = match ctl {
-            Control::Family(f) => *f == typo.family,
-            Control::Spacing(i) => *i == typo.spacing,
-            Control::Margin(i) => *i == typo.margin,
-            Control::Justify(j) => *j == typo.justify,
-            _ => false,
-        };
-        let (row, text): (usize, String) = match ctl {
-            Control::Library => continue,
-            Control::Smaller => (0, "A−".into()),
-            Control::Larger => (0, "A+".into()),
-            Control::Family(f) => (1, f.as_deref().map_or("Original".into(), title_case)),
-            Control::Spacing(i) => (2, SPACINGS[*i].1.into()),
-            Control::Margin(i) => (3, MARGINS[*i].1.into()),
-            Control::Justify(j) => (4, if *j { "Justified" } else { "Left" }.into()),
-        };
-        if !labelled[row] && row != 1 {
-            labelled[row] = true;
-            row_label(c, raster, ["Size", "", "Spacing", "Margins", "Alignment"][row], *r);
-        }
-        if on {
-            rounded_rect(c, *r, 20, INK);
-        } else {
-            rounded_outline(c, *r, 20, 2, LINE, PAPER);
-        }
-        let ink = if on { PAPER } else { INK };
-        // Font names are set in their own face.
-        let face = match ctl {
-            Control::Family(Some(f)) => fonts.pick(std::slice::from_ref(f), 400, false).unwrap_or(sans),
-            Control::Smaller | Control::Larger => sans_bold,
-            _ => sans,
-        };
-        let l = Label { face, size: if matches!(ctl, Control::Family(_)) { 32.0 } else { 30.0 }, ink };
-        let text = l.fit(&text, (r.w - 24) as f32);
-        l.draw(c, raster, &text, r.x as f32 + (r.w as f32 - l.width(&text)) / 2.0, r.y + r.h / 2 + 11);
-    }
-    // The current size between the − and + buttons.
-    if let (Some((_, minus)), Some((_, plus))) = (controls.get(1), controls.get(2)) {
-        let v = Label { face: sans, size: 32.0, ink: INK };
-        let text = format!("{}", typo.size + 1);
-        let mid = (minus.right() + plus.x) as f32 / 2.0;
-        v.draw(c, raster, &text, mid - v.width(&text) / 2.0, minus.y + minus.h / 2 + 11);
-    }
 }
 
 fn title_case(s: &str) -> String {
@@ -239,7 +308,7 @@ pub fn apply(typo: &mut Typography, ctl: &Control) -> bool {
         Control::Spacing(i) => typo.spacing = *i,
         Control::Margin(i) => typo.margin = *i,
         Control::Justify(j) => typo.justify = *j,
-        Control::Library => {}
+        Control::Library | Control::Contents => {}
     }
     *typo != before
 }
