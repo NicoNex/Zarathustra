@@ -13,11 +13,16 @@ use omero_engine::font::draw_glyph;
 use omero_engine::style::cascade::Preferences;
 
 use crate::menu::{self, Control, Typography};
+use crate::pace::Pace;
 use crate::ui::{Label, INK_SOFT, LINE};
 use crate::{Action, Ctx, H, W};
 
 const MARGIN_TOP: i32 = 110;
 const MARGIN_BOTTOM: i32 = 130;
+/// Clock baseline, well clear of the text starting at `MARGIN_TOP`.
+const HEADER_BASELINE: i32 = 66;
+/// The band the clock is drawn in, for refreshing it alone.
+pub const HEADER: Rect = Rect { x: 0, y: 0, w: W, h: MARGIN_TOP };
 /// Taps above this open the reader menu, as on the Kindle.
 const TOP_BAND: i32 = 150;
 /// Taps left of this go back a page (the Kindle's narrow left strip); elsewhere forward.
@@ -37,6 +42,9 @@ pub struct Reader {
     state_file: PathBuf,
     /// Decoded images of the pages around the current one (`render` takes `&self`).
     images: std::cell::RefCell<omero_engine::image::ImageCache>,
+    /// Show the clock in the header (`Settings::clock`, synced by the app).
+    pub clock: bool,
+    pace: Pace,
 }
 
 /// A saved reading position: chapter, first block on the page, progress through the book.
@@ -78,7 +86,10 @@ impl Reader {
             page: 0,
             state_file,
             images: Default::default(),
+            clock: crate::settings::Settings::load(&ctx.state_dir).clock,
+            pace: Pace::load(&ctx.state_dir),
         };
+        r.pace.restart(Instant::now());
         r.load(r.chapter_index, ctx)?;
         if let Some(block) = saved.map(|p| p.block) {
             r.page = r.page_of(block);
@@ -173,7 +184,15 @@ impl Reader {
             }
             _ => x0 >= BACK_ZONE,
         };
-        Ok(if self.turn(forward, ctx)? { Action::Redraw { turn: Some(forward) } } else { Action::None })
+        if !self.turn(forward, ctx)? {
+            return Ok(Action::None);
+        }
+        if forward {
+            self.pace.turned(Instant::now());
+        } else {
+            self.pace.restart(Instant::now()); // re-reading a page isn't reading speed
+        }
+        Ok(Action::Redraw { turn: Some(forward) })
     }
 
     fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Result<Action> {
@@ -240,13 +259,29 @@ impl Reader {
                 }
             }
         }
+        self.header(c, ctx);
         self.footer(c, ctx);
         if self.menu {
             menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""));
         }
     }
 
-    /// Page count in the chapter and a thin progress bar through the book.
+    /// The clock, centred above the text.
+    // ponytail: the time is drawn when the page is (turns, plus the app's 5-minute tick), so
+    // it can lag a few minutes while a page stays up. Wake on the minute if that matters.
+    fn header(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        if !self.clock {
+            return;
+        }
+        let Ctx { fonts, raster, .. } = ctx;
+        let Some(face) = fonts.pick(&["sans-serif".into()], 400, false) else { return };
+        let label = Label { face, size: 24.0, ink: INK_SOFT };
+        let minutes = crate::quick::local_now().1;
+        let text = format!("{:02}:{:02}", minutes / 60, minutes % 60);
+        label.draw(c, raster, &text, (W as f32 - label.width(&text)) / 2.0, HEADER_BASELINE);
+    }
+
+    /// Page count and time left in the chapter, and a thin progress bar through the book.
     fn footer(&self, c: &mut Canvas, ctx: &mut Ctx) {
         let y = H - MARGIN_BOTTOM / 2;
         let margin = self.margin_x();
@@ -260,6 +295,11 @@ impl Reader {
         let text = format!("{} / {}", self.page + 1, self.chapter.pages.len());
         let x = (W - margin) as f32 - label.width(&text);
         label.draw(c, raster, &text, x, y + 44);
+
+        let Some(face) = fonts.pick(&["sans-serif".into()], 400, false) else { return };
+        let label = Label { face, size: 24.0, ink: INK_SOFT };
+        let left = self.pace.minutes(self.chapter.pages.len().saturating_sub(self.page));
+        label.draw(c, raster, &format!("{left} min left in chapter"), margin as f32, y + 44);
     }
 }
 

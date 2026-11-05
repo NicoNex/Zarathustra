@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use omero::home::Home;
 use omero::quick::{QuickPanel, QuickResult, PANEL};
-use omero::reader::Reader;
+use omero::reader::{Reader, HEADER};
 use omero::sleep::render_sleep;
 use omero::{first_existing, Action, Ctx, H, W};
 use omero_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
@@ -24,10 +24,14 @@ enum Screen {
 }
 
 impl Screen {
-    fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+    /// Draws the screen; `clock` is the current `Settings::clock`.
+    fn render(&mut self, c: &mut Canvas, ctx: &mut Ctx, clock: bool) {
         match self {
             Screen::Home(h) => h.render(c, ctx),
-            Screen::Reader(r) => r.render(c, ctx),
+            Screen::Reader(r) => {
+                r.clock = clock;
+                r.render(c, ctx)
+            }
         }
     }
 }
@@ -83,11 +87,12 @@ fn main() -> Result<()> {
     let mut dev = omero_device::open_default()?;
     let mut quick = QuickPanel::new(&ctx.state_dir, dev.as_mut());
     let full = Rect::new(0, 0, W, H);
-    screen.render(&mut dev.canvas(), &mut ctx);
+    screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
     let mut marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
     let mut turns = 0u32;
     let mut down = None;
     let mut events = Vec::new();
+    let mut asleep = false;
     loop {
         events.clear();
         // Wake every few minutes so automatic warmth follows the clock.
@@ -95,6 +100,7 @@ fn main() -> Result<()> {
         while let Some(ev) = dev.power_event() {
             match ev {
                 PowerEvent::Sleep => {
+                    asleep = true;
                     quick.close();
                     let battery = dev.battery();
                     match &mut screen {
@@ -102,12 +108,23 @@ fn main() -> Result<()> {
                         Screen::Home(_) => render_sleep(&mut dev.canvas(), &mut ctx, None, "", "", battery),
                     }
                 }
-                PowerEvent::Wake => screen.render(&mut dev.canvas(), &mut ctx),
+                PowerEvent::Wake => {
+                    asleep = false;
+                    screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
+                }
                 PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
             }
             dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
             down = None;
+        }
+        // The periodic wake-up: bring the reader's clock up to date.
+        if events.is_empty() && !asleep && !quick.is_open() && quick.settings().clock {
+            if let Screen::Reader(_) = screen {
+                screen.render(&mut dev.canvas(), &mut ctx, true);
+                dev.wait_refresh(marker)?;
+                marker = dev.refresh(&Refresh { rect: HEADER, waveform: Waveform::Text, flash: false, swipe: None })?;
+            }
         }
         // Panel changes from the whole batch, drawn once: a drag queues many moves per frame.
         let mut panel: Option<(Rect, Waveform)> = quick.tick(dev.as_mut()).map(|r| (r, Waveform::Text));
@@ -181,7 +198,7 @@ fn main() -> Result<()> {
                     (None, true)
                 }
             };
-            screen.render(&mut dev.canvas(), &mut ctx);
+            screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             let drawn = t0.elapsed();
             dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh {
@@ -199,7 +216,7 @@ fn main() -> Result<()> {
             eprintln!("drawn in {drawn:?}");
         }
         if closed {
-            screen.render(&mut dev.canvas(), &mut ctx);
+            screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
         } else if let Some((rect, waveform)) = panel.filter(|_| quick.is_open()) {

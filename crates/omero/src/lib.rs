@@ -2,6 +2,7 @@
 
 pub mod home;
 pub mod menu;
+pub mod pace;
 pub mod quick;
 pub mod reader;
 pub mod settings;
