@@ -51,6 +51,10 @@ impl Press {
 
     /// Turns the press into a long press at `start`: selects the word there, if any.
     fn fire(&mut self, r: &mut Reader, start: (i32, i32), selection: &mut Option<Rect>) {
+        if r.menu {
+            self.at = None; // menu controls take plain taps, however long
+            return;
+        }
         self.fired = true;
         if let Some(rect) = r.long_press(start) {
             self.selecting = true;
