@@ -171,6 +171,7 @@ fn main() -> Result<()> {
         let mut power = false;
         while let Some(ev) = dev.power_event() {
             power = true;
+            dev.wait_refresh(marker)?;
             match ev {
                 PowerEvent::Sleep => {
                     asleep = true;
@@ -187,7 +188,6 @@ fn main() -> Result<()> {
                 }
                 PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
             }
-            dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
             down = None;
             press = Press::default();
@@ -196,8 +196,8 @@ fn main() -> Result<()> {
         let periodic = events.is_empty() && long_press.is_none() && !power;
         if periodic && !asleep && !quick.is_open() && quick.settings().clock {
             if let Screen::Reader(_) = screen {
-                screen.render(&mut dev.canvas(), &mut ctx, true);
                 dev.wait_refresh(marker)?;
+                screen.render(&mut dev.canvas(), &mut ctx, true);
                 marker = dev.refresh(&Refresh { rect: HEADER, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
@@ -264,8 +264,8 @@ fn main() -> Result<()> {
                     if let Some(rect) = r.release() {
                         // Drag frames of this batch are not drawn yet: cover them too.
                         let rect = selection.map_or(rect, |s| s.union(&rect));
-                        r.render(&mut dev.canvas(), &mut ctx);
                         dev.wait_refresh(marker)?;
+                        r.render(&mut dev.canvas(), &mut ctx);
                         marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                     }
                 }
@@ -276,8 +276,8 @@ fn main() -> Result<()> {
             // Swipe down from the top edge: the quick-settings panel, on every screen.
             if QuickPanel::opens(start, (t.x, t.y)) {
                 let rect = quick.open(dev.as_ref());
-                quick.render(&mut dev.canvas(), &mut ctx);
                 dev.wait_refresh(marker)?;
+                quick.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                 continue;
             }
@@ -291,8 +291,8 @@ fn main() -> Result<()> {
                 Action::None => continue,
                 Action::Quit => return Ok(()),
                 Action::Region(rect) => {
-                    screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
                     dev.wait_refresh(marker)?;
+                    screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
                     marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                     continue;
                 }
@@ -326,9 +326,9 @@ fn main() -> Result<()> {
                     (None, true)
                 }
             };
+            dev.wait_refresh(marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             let drawn = t0.elapsed();
-            dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh {
                 rect: full,
                 waveform: if flash { Waveform::Full } else { Waveform::Text },
@@ -350,14 +350,14 @@ fn main() -> Result<()> {
             }
         }
         if let Some(rect) = selection.filter(|r| !r.is_empty()) {
+            dev.wait_refresh(marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             // Black-and-white while the finger moves; the gray settles on release.
-            dev.wait_refresh(marker)?;
             marker = dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
         }
         if closed {
-            screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             dev.wait_refresh(marker)?;
+            screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
         } else if let Some((rect, waveform)) = panel.filter(|_| quick.is_open()) {
             // Wait before drawing: the MTK driver reads the framebuffer while an update runs,
