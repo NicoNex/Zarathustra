@@ -96,6 +96,27 @@ pub fn blocks(dom: &Dom, styles: &[Option<ComputedStyle>], lang: Option<&str>) -
     b.blocks
 }
 
+/// The block a link target `node` lands in: the block of the element itself, the block an
+/// inline element sits in, or the first block after a container that makes no block of its own.
+pub fn block_of(dom: &Dom, blocks: &[Block], node: NodeId) -> Option<usize> {
+    let contains = |b: &Block| {
+        let mut n = Some(node);
+        while let Some(id) = n {
+            if id == b.node {
+                return true;
+            }
+            n = dom.parent(id);
+        }
+        false
+    };
+    match blocks.iter().position(|b| b.node.index() >= node.index()) {
+        Some(i) if blocks[i].node == node => Some(i),
+        Some(i) if i > 0 && contains(&blocks[i - 1]) => Some(i - 1),
+        Some(i) => Some(i),
+        None => blocks.iter().rposition(contains).or(blocks.len().checked_sub(1)),
+    }
+}
+
 fn lang_of(dom: &Dom, id: NodeId) -> Option<&str> {
     dom.attr(id, "xml:lang").or_else(|| dom.attr(id, "lang")).filter(|l| !l.is_empty())
 }
@@ -370,6 +391,21 @@ mod tests {
         let styles = compute(&dom, &Stylesheets::default(), &prefs);
         let blocks = blocks(&dom, &styles, Some("en"));
         (dom, blocks)
+    }
+
+    #[test]
+    fn link_targets_find_their_block() {
+        let (dom, b) = build(
+            "<html><body><p id='a'>one</p><section id='s'><div>x <span id='i'>y</span><p id='p'>z</p>w \
+             <em id='e'>v</em></div></section><p>last</p></body></html>",
+        );
+        let texts: Vec<&str> = b.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts, ["one", "x y", "z", "w v", "last"]);
+        let at = |id: &str| {
+            let node = dom.descendants(Dom::ROOT).find(|&n| dom.attr(n, "id") == Some(id)).expect("id");
+            block_of(&dom, &b, node)
+        };
+        assert_eq!([at("a"), at("s"), at("i"), at("p"), at("e")], [0, 1, 1, 2, 3].map(Some));
     }
 
     #[test]
