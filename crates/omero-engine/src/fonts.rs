@@ -72,6 +72,13 @@ impl FontLibrary {
         out
     }
 
+    /// Families fit for body text: those with both an upright and an italic style (which
+    /// leaves out symbol, CJK and single-style display fonts).
+    pub fn reading_families(&self) -> Vec<&str> {
+        let has = |f: &str, italic: bool| self.entries.iter().any(|e| e.family == f && e.italic == italic);
+        self.families().into_iter().filter(|f| has(f, false) && has(f, true)).collect()
+    }
+
     /// The loaded face with id `id` (ids are entry indices, so they are unique and stable).
     pub fn face(&self, id: u32) -> Option<&Face> {
         let e = self.entries.get(id as usize)?;

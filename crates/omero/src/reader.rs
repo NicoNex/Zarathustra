@@ -12,20 +12,25 @@ use omero_engine::book::{Book, Chapter};
 use omero_engine::font::draw_glyph;
 use omero_engine::style::cascade::Preferences;
 
+use crate::menu::{self, Control, Typography};
 use crate::ui::{Label, INK_SOFT, LINE};
 use crate::{Action, Ctx, H, W};
 
-const MARGIN_X: i32 = 96;
 const MARGIN_TOP: i32 = 110;
 const MARGIN_BOTTOM: i32 = 130;
-/// Taps above this go back home (until the reader menu exists).
-const TOP_BAND: i32 = 140;
+/// Taps above this open the reader menu, as on the Kindle.
+const TOP_BAND: i32 = 150;
+/// Taps left of this go back a page (the Kindle's narrow left strip); elsewhere forward.
+const BACK_ZONE: i32 = W / 4;
 /// Horizontal travel that makes a touch a swipe.
 const SWIPE: i32 = 100;
 
 pub struct Reader {
     book: Book,
     prefs: Preferences,
+    typo: Typography,
+    /// The menu (top bar + typography sheet) is shown over the page.
+    pub menu: bool,
     chapter: Chapter,
     chapter_index: usize,
     pub page: usize,
@@ -57,30 +62,23 @@ impl Reader {
         if book.chapters.is_empty() {
             bail!("no chapters");
         }
-        let prefs = Preferences {
-            font_size: 40.0,
-            font_family: None,
-            line_height: Some(1.45),
-            justify: Some(true),
-            hyphenate: true,
-            page_width: (W - 2 * MARGIN_X) as f32,
-        };
+        let typo = Typography::load(&ctx.state_dir);
+        let prefs = preferences(&typo);
         let state_file = ctx.state_file(path);
         let saved = Position::load(&state_file);
         let mut r = Reader {
             chapter_index: saved.as_ref().map_or(0, |p| p.chapter.min(book.chapters.len() - 1)),
             book,
             prefs,
+            typo,
+            menu: false,
             chapter: Chapter { blocks: Vec::new(), pages: Vec::new() },
             page: 0,
             state_file,
         };
         r.load(r.chapter_index, ctx)?;
         if let Some(block) = saved.map(|p| p.block) {
-            // The saved block's page: the last page starting at or before it.
-            r.page = (r.chapter.pages.iter())
-                .rposition(|p| p.lines.first().is_some_and(|l| l.block as usize <= block))
-                .unwrap_or(0);
+            r.page = r.page_of(block);
         }
         if r.chapter.pages.is_empty() {
             r.turn(true, ctx)?; // cover-only or empty chapter: start at the first page with text
@@ -100,6 +98,17 @@ impl Reader {
         self.page = 0;
         eprintln!("chapter {i}: {} pages in {:?}", self.chapter.pages.len(), t.elapsed());
         Ok(())
+    }
+
+    /// The page showing block `block`: the last page starting at or before it.
+    fn page_of(&self, block: usize) -> usize {
+        (self.chapter.pages.iter())
+            .rposition(|p| p.lines.first().is_some_and(|l| l.block as usize <= block))
+            .unwrap_or(0)
+    }
+
+    fn first_block(&self) -> usize {
+        self.chapter.pages.get(self.page).and_then(|p| p.lines.first()).map_or(0, |l| l.block as usize)
     }
 
     pub fn pages(&self) -> usize {
@@ -138,24 +147,64 @@ impl Reader {
     }
 
     pub fn save(&self) {
-        let page = self.chapter.pages.get(self.page);
-        let block = page.and_then(|p| p.lines.first()).map_or(0, |l| l.block);
-        let line = format!("{} {block} {:.4}\n", self.chapter_index, self.progress());
+        let line = format!("{} {} {:.4}\n", self.chapter_index, self.first_block(), self.progress());
         std::fs::write(&self.state_file, line).ok();
     }
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Result<Action> {
+        if self.menu {
+            return self.menu_tap((x0, y0), ctx);
+        }
         let forward = match x - x0 {
             dx if dx < -SWIPE => true,
             dx if dx > SWIPE => false,
             _ if y0 < TOP_BAND => {
-                self.save();
-                return Ok(Action::Home);
+                self.menu = true;
+                return Ok(Action::Redraw { turn: None });
             }
-            _ => x0 >= W / 3,
+            _ => x0 >= BACK_ZONE,
         };
         Ok(if self.turn(forward, ctx)? { Action::Redraw { turn: Some(forward) } } else { Action::None })
+    }
+
+    fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Result<Action> {
+        let hit =
+            menu::controls(ctx).into_iter().find(|(_, r)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom());
+        match hit {
+            Some((Control::Library, _)) => {
+                self.save();
+                self.menu = false;
+                Ok(Action::Home)
+            }
+            Some((ctl, _)) => {
+                if menu::apply(&mut self.typo, &ctl) {
+                    self.typo.save(&ctx.state_dir);
+                    self.relayout(ctx)?;
+                    return Ok(Action::Redraw { turn: None });
+                }
+                Ok(Action::None)
+            }
+            None if menu::covers(ctx, y) => Ok(Action::None),
+            None => {
+                self.menu = false;
+                Ok(Action::Redraw { turn: None })
+            }
+        }
+    }
+
+    /// Lays the chapter out again with the current typography, keeping the reading position.
+    fn relayout(&mut self, ctx: &mut Ctx) -> Result<()> {
+        let block = self.first_block();
+        self.prefs = preferences(&self.typo);
+        self.load(self.chapter_index, ctx)?;
+        self.page = self.page_of(block);
+        self.save();
+        Ok(())
+    }
+
+    fn margin_x(&self) -> i32 {
+        self.typo.margin_x()
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
@@ -164,7 +213,7 @@ impl Reader {
             for line in &page.lines {
                 for g in &line.glyphs {
                     let Some(face) = ctx.fonts.face(g.face) else { continue };
-                    let x = MARGIN_X as f32 + line.x + g.x;
+                    let x = self.margin_x() as f32 + line.x + g.x;
                     let (gx, glyph) = ctx.raster.glyph(face, g.gid, g.size, x);
                     let y = (MARGIN_TOP as f32 + line.baseline + g.y).round() as i32;
                     draw_glyph(c, glyph, gx, y, 0);
@@ -172,20 +221,35 @@ impl Reader {
             }
         }
         self.footer(c, ctx);
+        if self.menu {
+            menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""));
+        }
     }
 
     /// Page count in the chapter and a thin progress bar through the book.
     fn footer(&self, c: &mut Canvas, ctx: &mut Ctx) {
         let y = H - MARGIN_BOTTOM / 2;
-        let width = W - 2 * MARGIN_X;
-        c.fill(Rect::new(MARGIN_X, y, width, 2), LINE);
-        c.fill(Rect::new(MARGIN_X, y - 1, (width as f32 * self.progress()) as i32, 4), 60);
+        let margin = self.margin_x();
+        let width = W - 2 * margin;
+        c.fill(Rect::new(margin, y, width, 2), LINE);
+        c.fill(Rect::new(margin, y - 1, (width as f32 * self.progress()) as i32, 4), 60);
 
         let Ctx { fonts, raster, .. } = ctx;
         let Some(face) = fonts.pick(&["serif".into()], 400, false) else { return };
         let label = Label { face, size: 26.0, ink: INK_SOFT };
         let text = format!("{} / {}", self.page + 1, self.chapter.pages.len());
-        let x = (W - MARGIN_X) as f32 - label.width(&text);
+        let x = (W - margin) as f32 - label.width(&text);
         label.draw(c, raster, &text, x, y + 44);
+    }
+}
+
+fn preferences(t: &Typography) -> Preferences {
+    Preferences {
+        font_size: t.font_size(),
+        font_family: t.family.clone(),
+        line_height: Some(t.line_height()),
+        justify: Some(t.justify),
+        hyphenate: true,
+        page_width: (W - 2 * t.margin_x()) as f32,
     }
 }

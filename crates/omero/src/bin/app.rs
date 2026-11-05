@@ -5,10 +5,11 @@
 //! With `--pgm`, renders the home screen and the first pages of BOOK into DIR instead.
 
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use omero::home::Home;
+use omero::quick::{QuickPanel, QuickResult, PANEL};
 use omero::reader::Reader;
 use omero::{first_existing, Action, Ctx, H, W};
 use omero_device::{Canvas, Event, Phase, Rect, Refresh, Swipe, Waveform};
@@ -71,11 +72,15 @@ fn main() -> Result<()> {
                 write_pgm(dir.join(format!("page{n}.pgm")), &px)?;
                 r.turn(true, &mut ctx)?;
             }
+            r.menu = true;
+            r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_pgm(dir.join("menu.pgm"), &px)?;
         }
         return Ok(());
     }
 
     let mut dev = omero_device::open_default()?;
+    let mut quick = QuickPanel::new(&ctx.state_dir, dev.as_mut());
     let full = Rect::new(0, 0, W, H);
     screen.render(&mut dev.canvas(), &mut ctx);
     let mut marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
@@ -84,12 +89,36 @@ fn main() -> Result<()> {
     let mut events = Vec::new();
     loop {
         events.clear();
-        dev.wait_events(None, &mut events)?;
+        // Wake every few minutes so automatic warmth follows the clock.
+        dev.wait_events(Some(Duration::from_secs(300)), &mut events)?;
+        if let Some(rect) = quick.tick(dev.as_mut()) {
+            quick.render(&mut dev.canvas(), &mut ctx);
+            dev.wait_refresh(marker)?;
+            marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
+        }
         for e in &events {
             let t = match e {
                 Event::Touch(t) => t,
                 Event::Quit => return Ok(()),
             };
+            if quick.is_open() {
+                match quick.touch(t, dev.as_mut()) {
+                    QuickResult::None => {}
+                    QuickResult::Redraw { rect, waveform } => {
+                        quick.render(&mut dev.canvas(), &mut ctx);
+                        dev.wait_refresh(marker)?;
+                        marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;
+                    }
+                    QuickResult::Close | QuickResult::Sleep => {
+                        screen.render(&mut dev.canvas(), &mut ctx);
+                        dev.wait_refresh(marker)?;
+                        marker =
+                            dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
+                    }
+                }
+                down = None;
+                continue;
+            }
             match t.phase {
                 Phase::Down => {
                     down = Some((t.x, t.y));
@@ -100,7 +129,14 @@ fn main() -> Result<()> {
             }
             let Some(start) = down.take() else { continue };
             let t0 = Instant::now();
-            eprintln!("touch {start:?} → ({}, {})", t.x, t.y);
+            // Swipe down from the top edge: the quick-settings panel, on every screen.
+            if QuickPanel::opens(start, (t.x, t.y)) {
+                let rect = quick.open(dev.as_ref());
+                quick.render(&mut dev.canvas(), &mut ctx);
+                dev.wait_refresh(marker)?;
+                marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
+                continue;
+            }
             let action = match &mut screen {
                 Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
                 Screen::Reader(r) => r.tap(start, t.x, &mut ctx)?,
@@ -135,7 +171,13 @@ fn main() -> Result<()> {
                 rect: full,
                 waveform: if flash { Waveform::Full } else { Waveform::Text },
                 flash,
-                swipe: turn.filter(|_| swipe && !flash).map(|f| if f { Swipe::Left } else { Swipe::Right }),
+                swipe: turn.filter(|_| swipe && quick.settings().swipe_animation && !flash).map(|f| {
+                    if f {
+                        Swipe::Left
+                    } else {
+                        Swipe::Right
+                    }
+                }),
             })?;
             eprintln!("drawn in {drawn:?}");
         }
