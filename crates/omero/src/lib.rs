@@ -11,6 +11,7 @@ pub mod quick;
 pub mod reader;
 pub mod settings;
 pub mod sleep;
+pub mod stats;
 pub mod toc;
 pub mod ui;
 
