@@ -97,8 +97,9 @@ fn main() -> Result<()> {
             }
             let Some(start) = down.take() else { continue };
             let t0 = Instant::now();
+            eprintln!("touch {start:?} → ({}, {})", t.x, t.y);
             let action = match &mut screen {
-                Screen::Home(h) => h.tap(start, (t.x, t.y)),
+                Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
                 Screen::Reader(r) => r.tap(start, t.x, &mut ctx)?,
             };
             // Screen changes flash (clean slate); page turns animate and flash now and then.
