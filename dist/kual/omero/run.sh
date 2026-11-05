@@ -14,7 +14,9 @@ for m in ad_screensaver screensaver; do
 done
 
 restore() {
-	for m in $SAVERS; do lipc-set-prop com.lab126.blanket load "$m"; done
+	# Reload what we unloaded; if an earlier run died before restoring, the live detection
+	# above finds nothing, so fall back to the module this device ships.
+	for m in ${SAVERS:-ad_screensaver}; do lipc-set-prop com.lab126.blanket load "$m"; done
 	lipc-set-prop com.lab126.powerd preventScreenSaver 0
 	cd / && start lab126_gui
 }
@@ -25,7 +27,7 @@ stop lab126_gui
 usleep 1250000
 trap - TERM
 trap restore EXIT
-trap "exit 1" INT TERM
+trap "exit 1" INT TERM HUP
 
 for m in $SAVERS; do lipc-set-prop com.lab126.blanket unload "$m"; done
 # No idle timeout from powerd (it can't see our touches); the power button still works.

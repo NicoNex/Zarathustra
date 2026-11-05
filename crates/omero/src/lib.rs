@@ -65,11 +65,35 @@ impl Ctx {
         self.fonts.pick(&["sans-serif".into()], if bold { 700 } else { 400 }, false)
     }
 
-    /// Where a book's reading position is saved.
+    /// Where a book's reading position is saved: keyed by the full path, so books with the
+    /// same file name in different folders don't share it.
     pub fn state_file(&self, book: &Path) -> PathBuf {
         let stem = book.file_stem().map_or_else(|| "book".into(), |s| s.to_string_lossy().into_owned());
-        self.state_dir.join(format!("{stem}.pos"))
+        // FNV-1a: stable across Rust versions, unlike the std hasher.
+        let hash = book
+            .as_os_str()
+            .as_encoded_bytes()
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
+        let file = self.state_dir.join(format!("{stem}-{hash:016x}.pos"));
+        // ponytail: migrates the old stem-only name; drop once devices have opened their books.
+        let old = self.state_dir.join(format!("{stem}.pos"));
+        if !file.exists() && old.exists() {
+            std::fs::rename(&old, &file).ok();
+        }
+        file
     }
+}
+
+/// Replaces `path` with `data` so a crash or power loss leaves the old or the new file, never
+/// a truncated one: write a temp file, flush it to disk, rename it over.
+pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(data.as_ref())?;
+    f.sync_all()?;
+    std::fs::rename(tmp, path)
 }
 
 impl Default for Ctx {

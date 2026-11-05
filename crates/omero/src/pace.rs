@@ -52,9 +52,8 @@ impl Pace {
         self.samples = self.samples.saturating_add(1);
         // A plain mean over the first samples, so the default doesn't linger; then an EWMA.
         let alpha = (1.0 / self.samples as f32).max(ALPHA);
-        let base = if self.samples == 1 { d.as_secs_f32() } else { self.secs_per_page };
-        self.secs_per_page = base + alpha * (d.as_secs_f32() - base);
-        std::fs::write(&self.path, format!("{:.2} {}\n", self.secs_per_page, self.samples)).ok();
+        self.secs_per_page += alpha * (d.as_secs_f32() - self.secs_per_page);
+        crate::write_atomic(&self.path, format!("{:.2} {}\n", self.secs_per_page, self.samples)).ok();
     }
 
     /// Seconds per page: measured, or the default until there are enough samples.

@@ -25,5 +25,5 @@ name = "omero"
 path = "src/bin/app.rs"
 
 [[bin]]
-name = "powerprobe"
+name = "omero-powerprobe"
 path = "src/bin/powerprobe.rs"

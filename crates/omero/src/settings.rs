@@ -36,10 +36,7 @@ impl Settings {
 
     /// Writes to a temporary file first so a crash never leaves half a file.
     pub fn save(&self, state_dir: &Path) -> io::Result<()> {
-        let path = Self::path(state_dir);
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, self.to_text())?;
-        std::fs::rename(tmp, path)
+        crate::write_atomic(&Self::path(state_dir), self.to_text())
     }
 
     pub fn parse(text: &str) -> Settings {

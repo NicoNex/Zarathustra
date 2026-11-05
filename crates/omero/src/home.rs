@@ -288,7 +288,7 @@ impl Home {
     fn set_grid(&mut self, grid: bool) {
         self.grid = grid;
         self.page = 0;
-        std::fs::write(&self.view_file, if grid { "grid\n" } else { "list\n" }).ok();
+        crate::write_atomic(&self.view_file, if grid { "grid\n" } else { "list\n" }).ok();
     }
 
     /// Handles a completed touch from `(x0, y0)` to `(x, y)`.

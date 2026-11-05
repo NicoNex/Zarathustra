@@ -69,6 +69,10 @@ impl Kindle {
         if let Err(e) = powerd.read(&mut events) {
             eprintln!("powerd events lost: {e}");
             self.powerd = None;
+            // No Wake can arrive any more: wake now rather than stay dark with touch muted.
+            if self.asleep.is_some() {
+                events.push(PowerEvent::Wake);
+            }
         }
         for ev in events {
             self.on_power(ev);
@@ -155,6 +159,11 @@ impl Device for Kindle {
     }
 
     fn set_light(&mut self, light: Light) -> io::Result<()> {
+        // Asleep the light stays off; keep the newest level (auto warmth) for the wake.
+        if let Some(saved) = &mut self.asleep {
+            *saved = Some(light);
+            return Ok(());
+        }
         match &self.light {
             Some(l) => l.set(light),
             None => Ok(()),

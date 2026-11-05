@@ -1,8 +1,8 @@
 //! Throwaway probe for the power button and sleep: shows a page, then follows powerd's
 //! sleep/wake cycle with the sleep screen, logging every step with timestamps.
 //!
-//!   powerprobe [--auto] [BOOK]     on the device, via `run.sh powerprobe`
-//!   powerprobe --pgm DIR [BOOK]    renders the sleep screens to PGM files instead
+//!   omero-powerprobe [--auto] [BOOK]     on the device, via `run.sh omero-powerprobe`
+//!   omero-powerprobe --pgm DIR [BOOK]    renders the sleep screens to PGM files instead
 //!
 //! `--auto` runs one cycle unattended: it presses the power button through powerd, sets an
 //! RTC alarm when powerd is about to suspend, and presses it again on resume. The probe
