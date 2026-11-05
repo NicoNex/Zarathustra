@@ -1,0 +1,129 @@
+//! Font library: every font file in a set of directories, indexed by family, weight and
+//! style, loaded on first use so dozens of installed fonts cost nothing until a book asks.
+
+use std::cell::OnceCell;
+use std::path::{Path, PathBuf};
+
+use skrifa::attribute::Style;
+use skrifa::string::StringId;
+use skrifa::{FontRef, MetadataProvider};
+
+use crate::font::Face;
+
+struct Entry {
+    path: PathBuf,
+    /// Lowercase family name.
+    family: String,
+    weight: u16,
+    italic: bool,
+    face: OnceCell<Option<Face>>,
+}
+
+pub struct FontLibrary {
+    entries: Vec<Entry>,
+    /// Lowercase family used for `serif` and whenever nothing else matches.
+    default_family: String,
+}
+
+/// Families tried for the CSS generic `sans-serif`, in order.
+const SANS: &[&str] = &["amazon ember", "helvetica lt", "helvetica", "futura"];
+
+impl FontLibrary {
+    pub fn new(default_family: &str) -> Self {
+        FontLibrary { entries: Vec::new(), default_family: default_family.to_lowercase() }
+    }
+
+    /// Indexes the `.ttf`/`.otf` files in `dir`; unreadable files are skipped.
+    // ponytail: reads each file once to get its names (~0.5 s for the Kindle's 80 system fonts);
+    // cache the index on disk if startup time matters.
+    pub fn add_dir(&mut self, dir: &Path) {
+        let Ok(read) = std::fs::read_dir(dir) else { return };
+        let mut paths: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
+            let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+            if !matches!(ext.as_deref(), Some("ttf" | "otf")) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(font) = FontRef::new(&bytes) else { continue };
+            let name = |id| font.localized_strings(id).english_or_first().map(|s| s.to_string());
+            let Some(family) = name(StringId::TYPOGRAPHIC_FAMILY_NAME).or_else(|| name(StringId::FAMILY_NAME)) else {
+                continue;
+            };
+            let attrs = font.attributes();
+            self.entries.push(Entry {
+                path,
+                family: family.to_lowercase(),
+                weight: attrs.weight.value().round() as u16,
+                italic: attrs.style != Style::Normal,
+                face: OnceCell::new(),
+            });
+        }
+    }
+
+    /// Family names as the fonts spell them (lowercase), deduplicated, in index order.
+    pub fn families(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for e in &self.entries {
+            if !out.contains(&e.family.as_str()) {
+                out.push(&e.family);
+            }
+        }
+        out
+    }
+
+    /// The loaded face with id `id` (ids are entry indices, so they are unique and stable).
+    pub fn face(&self, id: u32) -> Option<&Face> {
+        let e = self.entries.get(id as usize)?;
+        e.face.get_or_init(|| Face::from_bytes(id, std::fs::read(&e.path).ok()?)).as_ref()
+    }
+
+    /// Best face for a CSS family list, weight and style: the first listed family that is
+    /// installed, else the default; within it the matching style, then the closest weight.
+    pub fn pick(&self, families: &[String], weight: u16, italic: bool) -> Option<&Face> {
+        let installed = |f: &str| self.entries.iter().any(|e| e.family == f);
+        let wanted = families
+            .iter()
+            .map(|f| f.trim().to_lowercase())
+            .find_map(|f| match f.as_str() {
+                "serif" => Some(self.default_family.clone()),
+                "sans-serif" => SANS.iter().find(|s| installed(s)).map(|s| s.to_string()),
+                _ if installed(&f) => Some(f),
+                _ => None,
+            })
+            .unwrap_or_else(|| self.default_family.clone());
+        let best = |family: &str| {
+            (self.entries.iter().enumerate())
+                .filter(|(_, e)| e.family == family)
+                .min_by_key(|(_, e)| ((e.italic != italic) as u16, e.weight.abs_diff(weight)))
+                .map(|(i, _)| i)
+        };
+        let id = best(&wanted).or_else(|| best(&self.default_family)).or((!self.entries.is_empty()).then_some(0))?;
+        self.face(id as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_family_style_and_weight() {
+        let mut lib = FontLibrary::new("Bookerly");
+        lib.add_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../dev-fonts")));
+        if !lib.families().contains(&"bookerly") {
+            return; // dev fonts are local-only
+        }
+        let id = |fam: &[&str], w, i| {
+            let fam: Vec<String> = fam.iter().map(|s| s.to_string()).collect();
+            let face = lib.pick(&fam, w, i).expect("a face");
+            lib.entries[face.id as usize].path.file_name().and_then(|n| n.to_str()).map(str::to_string)
+        };
+        assert_eq!(id(&["serif"], 400, false).as_deref(), Some("Bookerly-Regular.ttf"));
+        assert_eq!(id(&["Nonexistent", "serif"], 700, true).as_deref(), Some("Bookerly-BoldItalic.ttf"));
+        assert_eq!(id(&["Baskerville"], 400, false).as_deref(), Some("Baskerville-Regular.ttf"));
+        assert_eq!(id(&["Baskerville"], 700, false).as_deref(), Some("Baskerville-Regular.ttf"), "closest weight");
+        assert_eq!(id(&["unknown"], 400, true).as_deref(), Some("Bookerly-Italic.ttf"), "default family");
+    }
+}
