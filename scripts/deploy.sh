@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")/.."
 cargo build --release --target armv7-unknown-linux-musleabihf -p omero
 BIN=target/armv7-unknown-linux-musleabihf/release
-BINS="omero-probe omero-textprobe omero-reader"
+BINS="omero-probe omero-textprobe omero"
 
 # Stage the device layout (omero/bin/*, extensions/omero/*) and ship it as one tar stream.
 STAGE=target/kindle-stage
