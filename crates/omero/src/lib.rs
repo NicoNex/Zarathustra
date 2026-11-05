@@ -1,5 +1,6 @@
 //! The Omero shell: home, reader and the state they share.
 
+pub mod clock;
 pub mod highlight;
 pub mod home;
 pub mod menu;
@@ -31,6 +32,17 @@ pub fn first_existing(candidates: &[&str]) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(candidates[0]))
 }
 
+/// The reading font, regular or bold; a free function so drawing code can hold the
+/// rasterizer mutably next to it.
+pub fn serif(fonts: &FontLibrary, bold: bool) -> Option<&Face> {
+    fonts.pick(&["serif".into()], if bold { 700 } else { 400 }, false)
+}
+
+/// The UI font, regular or bold.
+pub fn sans(fonts: &FontLibrary, bold: bool) -> Option<&Face> {
+    fonts.pick(&["sans-serif".into()], if bold { 700 } else { 400 }, false)
+}
+
 /// Long-lived resources every screen draws with.
 pub struct Ctx {
     pub fonts: FontLibrary,
@@ -59,12 +71,12 @@ impl Ctx {
 
     /// The reading font (also used for book titles).
     pub fn serif(&self, bold: bool) -> Option<&Face> {
-        self.fonts.pick(&["serif".into()], if bold { 700 } else { 400 }, false)
+        serif(&self.fonts, bold)
     }
 
     /// The UI font.
     pub fn sans(&self, bold: bool) -> Option<&Face> {
-        self.fonts.pick(&["sans-serif".into()], if bold { 700 } else { 400 }, false)
+        sans(&self.fonts, bold)
     }
 
     /// Where a book's reading position is saved: keyed by the full path, so books with the

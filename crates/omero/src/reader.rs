@@ -271,8 +271,7 @@ impl Reader {
     }
 
     fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Action {
-        let hit =
-            menu::controls(ctx).into_iter().find(|(_, r)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom());
+        let hit = menu::controls(ctx).into_iter().find(|(_, r)| r.contains(x, y));
         match hit {
             Some((Control::Library, _)) => {
                 self.save();
@@ -433,11 +432,10 @@ impl Reader {
             return;
         }
         let Ctx { fonts, raster, .. } = ctx;
-        let Some(face) = fonts.pick(&["sans-serif".into()], 400, false) else { return };
+        let Some(face) = crate::sans(fonts, false) else { return };
         let label = Label { face, size: 24.0, ink: INK_SOFT };
-        let minutes = crate::quick::local_now().1;
-        let text = format!("{:02}:{:02}", minutes / 60, minutes % 60);
-        label.draw(c, raster, &text, (W as f32 - label.width(&text)) / 2.0, HEADER_BASELINE);
+        let text = crate::clock::hhmm(crate::clock::local_now().1);
+        label.draw_centred(c, raster, &text, W as f32 / 2.0, HEADER_BASELINE);
     }
 
     /// Page count and time left in the chapter, and a thin progress bar through the book.
@@ -449,13 +447,13 @@ impl Reader {
         c.fill(Rect::new(margin, y - 1, (width as f32 * self.progress()) as i32, 4), 60);
 
         let Ctx { fonts, raster, .. } = ctx;
-        let Some(face) = fonts.pick(&["serif".into()], 400, false) else { return };
+        let Some(face) = crate::serif(fonts, false) else { return };
         let label = Label { face, size: 26.0, ink: INK_SOFT };
         let text = format!("{} / {}", self.page + 1, self.chapter.pages.len());
         let x = (W - margin) as f32 - label.width(&text);
         label.draw(c, raster, &text, x, y + 44);
 
-        let Some(face) = fonts.pick(&["sans-serif".into()], 400, false) else { return };
+        let Some(face) = crate::sans(fonts, false) else { return };
         let label = Label { face, size: 24.0, ink: INK_SOFT };
         let left = self.pace.minutes(self.chapter.pages.len().saturating_sub(self.page));
         label.draw(c, raster, &format!("{left} min left in chapter"), margin as f32, y + 44);

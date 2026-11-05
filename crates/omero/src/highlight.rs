@@ -265,12 +265,8 @@ impl Popup {
     }
 
     fn button_at(&self, (x, y): (i32, i32)) -> Option<Button> {
-        self.buttons.iter().find(|(_, r)| contains(r, x, y)).map(|&(b, _)| b)
+        self.buttons.iter().find(|(_, r)| r.contains(x, y)).map(|&(b, _)| b)
     }
-}
-
-fn contains(r: &Rect, x: i32, y: i32) -> bool {
-    x >= r.x && x < r.right() && y >= r.y && y < r.bottom()
 }
 
 /// What a touch did to the highlights layer.
@@ -358,7 +354,7 @@ impl Highlights {
     /// top-left corner on screen.
     pub fn long_press(&mut self, chapter: &Chapter, page: usize, origin: (i32, i32), (x, y): (i32, i32)) -> Outcome {
         let Some(p) = chapter.pages.get(page) else { return Outcome::Ignored };
-        if self.popup.as_ref().is_some_and(|popup| contains(&popup.rect, x, y)) {
+        if self.popup.as_ref().is_some_and(|popup| popup.rect.contains(x, y)) {
             return Outcome::Ignored; // a press on the popup is for its buttons
         }
         let Some(pos) = hit(p, &chapter.blocks, (x - origin.0) as f32, (y - origin.1) as f32) else {
@@ -505,15 +501,13 @@ impl Highlights {
         let Some(popup) = &self.popup else { return };
         rounded_rect(c, popup.rect, 20, INK);
         let Ctx { fonts, raster, .. } = ctx;
-        let Some(face) = fonts.pick(&["sans-serif".into()], 700, false) else { return };
+        let Some(face) = crate::sans(fonts, true) else { return };
         let label = Label { face, size: 36.0, ink: PAPER };
         for (i, (b, r)) in popup.buttons.iter().enumerate() {
             if i > 0 {
                 c.fill(Rect::new(r.x, r.y + 24, 2, r.h - 48), 120);
             }
-            let text = b.label();
-            let x = r.x as f32 + (r.w as f32 - label.width(text)) / 2.0;
-            label.draw(c, raster, text, x, r.y + r.h / 2 + 13);
+            label.centered(c, raster, b.label(), *r);
         }
     }
 }
