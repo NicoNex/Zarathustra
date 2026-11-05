@@ -61,6 +61,8 @@ const NULL: u32 = u32::MAX;
 const MAX_FILE: u64 = 256 << 20;
 /// Largest decompressed font.
 const MAX_FONT: u64 = 32 << 20;
+/// Largest decompressed text: a crafted header must not make us allocate without bound.
+const MAX_TEXT: usize = 64 << 20;
 
 impl Mobi {
     pub fn open(path: &Path) -> Result<Mobi, MobiError> {
@@ -357,13 +359,22 @@ fn text<'a>(rec: &impl Fn(usize) -> Option<&'a [u8]>, base: usize, h: &Header) -
     } else {
         None
     };
-    let mut text = Vec::with_capacity(h.text_length.min(64 << 20));
+    if h.text_length > MAX_TEXT {
+        return Err(MobiError::Malformed("text too large"));
+    }
+    let mut text = Vec::with_capacity(h.text_length);
     for i in 1..=h.text_records {
+        // Stopping at the declared length bounds the output whatever the records hold (HUFF
+        // records are bounded on their own).
+        let budget = h.text_length - text.len().min(h.text_length);
+        if budget == 0 {
+            break;
+        }
         let r = rec(base + i).ok_or(MobiError::Malformed("text record"))?;
         let r = &r[..r.len() - compress::trailing_size(r, h.extra_flags)];
         match (h.compression, &mut huff) {
-            (1, _) => text.extend_from_slice(r),
-            (2, _) => compress::palmdoc(r, &mut text)?,
+            (1, _) => text.extend_from_slice(&r[..r.len().min(budget)]),
+            (2, _) => compress::palmdoc(r, &mut text, budget)?,
             (17480, Some(huff)) => huff.unpack(r, &mut text)?,
             (c, _) => return Err(MobiError::Compression(c)),
         }
@@ -547,6 +558,14 @@ mod tests {
         let file = palmdb(&[record0(4, 1, 2, &[]), b"text".to_vec()]);
         assert!(matches!(Mobi::from_bytes(file), Err(MobiError::Drm)));
         assert!(matches!(Mobi::from_bytes(b"PK\x03\x04".to_vec()), Err(MobiError::NotMobi)));
+        let huge = palmdb(&[record0(MAX_TEXT + 1, 1, 0, &[]), b"text".to_vec()]);
+        assert!(matches!(Mobi::from_bytes(huge), Err(MobiError::Malformed(_))), "text length is capped");
+        // Records past the declared length are not decoded.
+        let short = palmdb(&[record0(4, 2, 0, &[]), b"text".to_vec(), b"more".to_vec()]);
+        assert_eq!(
+            Mobi::from_bytes(short).expect("opens").read_part(0).expect("part"),
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title></title></head><body>text</body></html>"
+        );
         let mut file = palmdb(&[record0(4, 1, 0, &[]), b"text".to_vec()]);
         // Every truncation is an error or a book, never a panic.
         while file.len() > 60 {
@@ -588,9 +607,9 @@ mod tests {
     /// every part parses as XML.
     #[test]
     fn local_books_parse() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../dev-books");
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        for entry in entries.flatten() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let dirs = ["dev-books", "dev-books/azw3"].map(|d| root.join(d));
+        for entry in dirs.iter().filter_map(|d| std::fs::read_dir(d).ok()).flatten().flatten() {
             let path = entry.path();
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
             if !matches!(ext.as_str(), "azw3" | "mobi" | "azw") {

@@ -7,7 +7,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::epub::Epub;
+use crate::epub::{Epub, Metadata};
 use crate::image;
 
 /// Size the cover thumbnails are fitted into.
@@ -91,7 +91,7 @@ impl Library {
         files.sort();
         files.dedup();
         let thumbs = cache_dir.join(THUMB_DIR);
-        let books: Vec<BookEntry> = files
+        let (books, cacheable): (Vec<BookEntry>, Vec<bool>) = files
             .into_iter()
             .filter_map(|path| {
                 let format = Format::from_path(&path)?;
@@ -100,15 +100,16 @@ impl Library {
                 if let Some(hit) = cache.get(&path) {
                     let fresh = hit.size == size && hit.modified == modified;
                     if fresh && hit.cover_thumb.as_ref().is_none_or(|t| t.is_file()) {
-                        return Some(hit.clone());
+                        return Some((hit.clone(), true));
                     }
                 }
                 Some(read_entry(path, format, size, modified, &thumbs))
             })
-            .collect();
+            .unzip();
         let library = Library { books };
+        let cached: Vec<&BookEntry> = library.books.iter().zip(cacheable).filter_map(|(b, c)| c.then_some(b)).collect();
         // ponytail: a read-only or full cache dir just means slower rescans; nothing to report.
-        let _ = save_cache(cache_dir, &library);
+        let _ = save_cache(cache_dir, &cached);
         library
     }
 
@@ -275,7 +276,9 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, thumbs: &Path) -> BookEntry {
+/// The entry for a book not in the cache, and whether it may be cached: not when it has a
+/// cover whose thumbnail could not be written (a full disk), or it would stay coverless.
+fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, thumbs: &Path) -> (BookEntry, bool) {
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let mut entry = BookEntry {
         title: stem.strip_suffix(".kepub").unwrap_or(&stem).to_string(),
@@ -289,43 +292,38 @@ fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, th
         modified,
         cover_thumb: None,
     };
+    let Some((m, cover)) = read_book(&entry.path, format) else { return (entry, true) };
+    if let Some(title) = m.title.filter(|t| !t.trim().is_empty()) {
+        entry.title = title;
+    }
+    entry.authors = m.authors;
+    entry.language = m.language;
+    entry.series = m.series;
+    entry.series_index = m.series_index;
+    // An undecodable cover (WebP, corrupt) is final; a failed write is not.
+    let Some(png) = cover.as_deref().and_then(thumb_png) else { return (entry, true) };
+    let dest = thumb_path(thumbs, &entry);
+    entry.cover_thumb = write_atomic(&dest, &png).ok().map(|()| dest);
+    let cacheable = entry.cover_thumb.is_some();
+    (entry, cacheable)
+}
+
+/// Metadata and cover image bytes, or `None` when the book cannot be read.
+fn read_book(path: &Path, format: Format) -> Option<(Metadata, Option<Vec<u8>>)> {
     match format {
-        Format::Epub | Format::Kepub => read_epub(&mut entry, thumbs),
-        Format::Azw3 | Format::Mobi => read_mobi(&mut entry, thumbs),
+        Format::Epub | Format::Kepub => {
+            let mut epub = Epub::open(BufReader::new(fs::File::open(path).ok()?)).ok()?;
+            let cover = epub.cover.clone().and_then(|c| epub.read(&c).ok());
+            Some((std::mem::take(&mut epub.metadata), cover))
+        }
+        Format::Azw3 | Format::Mobi => {
+            let mut mobi = crate::mobi::Mobi::open(path).ok()?;
+            let cover = mobi.cover();
+            Some((std::mem::take(&mut mobi.metadata), cover))
+        }
         // ponytail: PDF and TXT keep the file stem as title until their readers land.
-        Format::Pdf | Format::Txt => {}
+        Format::Pdf | Format::Txt => None,
     }
-    entry
-}
-
-fn read_epub(entry: &mut BookEntry, thumbs: &Path) {
-    let Ok(file) = fs::File::open(&entry.path) else { return };
-    let Ok(mut epub) = Epub::open(BufReader::new(file)) else { return };
-    let m = std::mem::take(&mut epub.metadata);
-    if let Some(title) = m.title.filter(|t| !t.trim().is_empty()) {
-        entry.title = title;
-    }
-    entry.authors = m.authors;
-    entry.language = m.language;
-    entry.series = m.series;
-    entry.series_index = m.series_index;
-    let Some(cover) = epub.cover.clone() else { return };
-    let Ok(bytes) = epub.read(&cover) else { return };
-    entry.cover_thumb = make_thumb(&bytes, &thumb_path(thumbs, entry));
-}
-
-fn read_mobi(entry: &mut BookEntry, thumbs: &Path) {
-    let Ok(mut mobi) = crate::mobi::Mobi::open(&entry.path) else { return };
-    let m = std::mem::take(&mut mobi.metadata);
-    if let Some(title) = m.title.filter(|t| !t.trim().is_empty()) {
-        entry.title = title;
-    }
-    entry.authors = m.authors;
-    entry.language = m.language;
-    entry.series = m.series;
-    entry.series_index = m.series_index;
-    let Some(bytes) = mobi.cover() else { return };
-    entry.cover_thumb = make_thumb(&bytes, &thumb_path(thumbs, entry));
 }
 
 /// Thumbnail file name: the cache key (path, size, mtime) hashed, so a changed book gets a new one.
@@ -339,7 +337,8 @@ fn thumb_path(thumbs: &Path, entry: &BookEntry) -> PathBuf {
     thumbs.join(format!("{h:016x}.png"))
 }
 
-fn make_thumb(cover: &[u8], dest: &Path) -> Option<PathBuf> {
+/// The cover fitted, dithered to 16 grays and encoded as PNG; `None` if it does not decode.
+fn thumb_png(cover: &[u8]) -> Option<Vec<u8>> {
     let mut img = image::decode(cover, THUMB_W, THUMB_H)?;
     image::quantize16(&mut img);
     let opts = zune_core::options::EncoderOptions::new(
@@ -350,9 +349,19 @@ fn make_thumb(cover: &[u8], dest: &Path) -> Option<PathBuf> {
     );
     let mut png = Vec::new();
     zune_png::PngEncoder::new(&img.pixels, opts).encode(&mut png).ok()?;
-    fs::create_dir_all(dest.parent()?).ok()?;
-    fs::write(dest, png).ok()?;
-    Some(dest.to_path_buf())
+    Some(png)
+}
+
+/// Writes through a temporary file and a rename, so a crash or a full disk never leaves a
+/// truncated file under `dest` (a leftover temporary is cleaned up with the stale thumbnails).
+fn write_atomic(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = dest.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let mut tmp = dest.as_os_str().to_owned();
+    tmp.push(".tmp");
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, dest)
 }
 
 fn nanos(t: SystemTime) -> u64 {
@@ -398,9 +407,10 @@ fn unescape(s: &str) -> String {
     out
 }
 
-fn save_cache(cache_dir: &Path, library: &Library) -> std::io::Result<()> {
+/// Writes `books` as the cache and deletes the thumbnails none of them uses.
+fn save_cache(cache_dir: &Path, books: &[&BookEntry]) -> std::io::Result<()> {
     let mut text = format!("{CACHE_HEADER}\n");
-    for b in &library.books {
+    for b in books {
         let authors: Vec<String> = b.authors.iter().map(|a| escape(a)).collect();
         let fields = [
             escape(&b.path.to_string_lossy()),
@@ -416,19 +426,15 @@ fn save_cache(cache_dir: &Path, library: &Library) -> std::io::Result<()> {
         text.push_str(&fields.join("\t"));
         text.push('\n');
     }
-    fs::create_dir_all(cache_dir)?;
-    let tmp = cache_dir.join(format!("{CACHE_FILE}.tmp"));
-    fs::write(&tmp, text)?;
-    fs::rename(&tmp, cache_dir.join(CACHE_FILE))?;
-    remove_stale_thumbs(cache_dir, library);
+    write_atomic(&cache_dir.join(CACHE_FILE), text.as_bytes())?;
+    remove_stale_thumbs(cache_dir, books);
     Ok(())
 }
 
-/// Deletes thumbnails no book refers to any more (removed or changed books).
-fn remove_stale_thumbs(cache_dir: &Path, library: &Library) {
+/// Deletes thumbnails no book refers to any more (removed or changed books, failed writes).
+fn remove_stale_thumbs(cache_dir: &Path, books: &[&BookEntry]) {
     let Ok(entries) = fs::read_dir(cache_dir.join(THUMB_DIR)) else { return };
-    let live: std::collections::HashSet<&Path> =
-        library.books.iter().filter_map(|b| b.cover_thumb.as_deref()).collect();
+    let live: std::collections::HashSet<&Path> = books.iter().filter_map(|b| b.cover_thumb.as_deref()).collect();
     for path in entries.flatten().map(|e| e.path()) {
         if !live.contains(path.as_path()) {
             let _ = fs::remove_file(path);
@@ -595,6 +601,22 @@ mod tests {
     }
 
     #[test]
+    fn failed_thumbnail_write_is_retried() {
+        let root = TempDir::new("thumbfail");
+        let docs = root.0.join("documents");
+        let cache = root.0.join("cache");
+        write_epub(&docs.join("a.epub"), "A", "Anon", None);
+        // A file where the thumbnail folder should be: every thumbnail write fails.
+        touch(&cache.join(THUMB_DIR));
+        let lib = Library::scan(&[&docs], &cache);
+        assert_eq!(lib.books[0].cover_thumb, None);
+        assert!(load_cache(&cache).is_empty(), "not cached as coverless");
+        fs::remove_file(cache.join(THUMB_DIR)).expect("unblock");
+        let lib = Library::scan(&[&docs], &cache);
+        assert!(lib.books[0].cover_thumb.as_ref().is_some_and(|t| t.is_file()));
+    }
+
+    #[test]
     fn cache_line_roundtrip_with_awkward_text() {
         let b = BookEntry {
             path: PathBuf::from("/mnt/us/documents/a\tb/c.epub"),
@@ -609,7 +631,7 @@ mod tests {
             cover_thumb: None,
         };
         let root = TempDir::new("cache");
-        save_cache(&root.0, &Library { books: vec![b.clone()] }).expect("save");
+        save_cache(&root.0, &[&b]).expect("save");
         let loaded = load_cache(&root.0);
         assert_eq!(loaded.get(&b.path), Some(&b));
         assert!(parse_line("too\tfew").is_none());

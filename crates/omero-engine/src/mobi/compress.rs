@@ -36,12 +36,13 @@ fn backward_varint(rec: &[u8], end: usize) -> usize {
     value
 }
 
-/// Decompresses one PalmDOC (LZ77) record, appending to `out`. Back-references stay inside the
-/// record's own output: records are compressed independently.
-pub fn palmdoc(input: &[u8], out: &mut Vec<u8>) -> Result<(), MobiError> {
+/// Decompresses one PalmDOC (LZ77) record, appending to `out`; stops once `limit` bytes were
+/// appended (overshooting by at most one token). Back-references stay inside the record's own
+/// output: records are compressed independently.
+pub fn palmdoc(input: &[u8], out: &mut Vec<u8>, limit: usize) -> Result<(), MobiError> {
     let start = out.len();
     let mut i = 0;
-    while let Some(&c) = input.get(i) {
+    while let Some(&c) = input.get(i).filter(|_| out.len() - start < limit) {
         i += 1;
         match c {
             1..=8 => {
@@ -210,7 +211,7 @@ mod tests {
 
     fn lz77(input: &[u8]) -> Result<Vec<u8>, MobiError> {
         let mut out = Vec::new();
-        palmdoc(input, &mut out).map(|()| out)
+        palmdoc(input, &mut out, usize::MAX).map(|()| out)
     }
 
     #[test]
@@ -232,6 +233,15 @@ mod tests {
         assert!(lz77(&[0x80, 0x08]).is_err(), "distance past the start");
         assert!(lz77(&[5, b'a']).is_err(), "truncated literal run");
         assert!(lz77(&[0x80]).is_err(), "truncated pair");
+    }
+
+    #[test]
+    fn palmdoc_stops_at_the_limit() {
+        let pair: u16 = 0x8000 | (1 << 3) | 7; // dist 1, len 10
+        let input = [b'z', (pair >> 8) as u8, pair as u8, (pair >> 8) as u8, pair as u8];
+        let mut out = Vec::new();
+        palmdoc(&input, &mut out, 5).expect("ok");
+        assert_eq!(out.len(), 11, "the token crossing the limit finishes, the next is skipped");
     }
 
     #[test]
