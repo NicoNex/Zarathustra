@@ -1,6 +1,6 @@
 //! Block building: the styled DOM becomes a flat list of text blocks (paragraphs, headings,
-//! list items, cells) with collapsed vertical margins, CSS whitespace processing and the
-//! inline style changes recorded as spans.
+//! list items, cells) and image blocks, with collapsed vertical margins, CSS whitespace
+//! processing and the inline style changes recorded as spans.
 
 use crate::dom::{Dom, NodeId, NodeKind};
 use crate::style::cascade::ComputedStyle;
@@ -30,6 +30,23 @@ pub struct Block {
     /// Headings: never the last thing on a page.
     pub keep_with_next: bool,
     pub avoid_break_inside: bool,
+    /// An image block (its `text` is empty).
+    pub image: Option<ImageRef>,
+}
+
+/// An image in the flow: `<img>`, or an SVG wrapper around one `<image>` (common for covers).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageRef {
+    /// `src`/`href` as written; [`crate::book::Book::chapter`] resolves it to an archive path.
+    pub src: String,
+    /// Requested display size in device pixels, from CSS `width`/`height` or percentage
+    /// attributes (resolved against the column).
+    // ponytail: absolute `width`/`height` attributes are ignored, the pixel size from the file
+    // header is the natural size. Map them like CSS px if a book relies on them.
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    /// Pixel size from the image header, when it is a decodable format; filled by the book.
+    pub intrinsic: Option<(u32, u32)>,
 }
 
 impl Block {
@@ -52,11 +69,13 @@ struct Builder<'a> {
     /// Largest margin since the last block (adjacent margins collapse).
     margin: f32,
     break_pending: bool,
+    /// Images met before any text of the current paragraph; they become blocks ahead of it.
+    images: Vec<ImageRef>,
 }
 
 /// Blocks of a chapter body; `lang` is the book's language when no element sets one.
-// ponytail: images, tables (cells become plain blocks), floats and inline-blocks are not laid out
-// as such; their text flows as paragraphs. Add image blocks with the reader view.
+// ponytail: tables (cells become plain blocks), floats and inline-blocks are not laid out as
+// such; their text flows as paragraphs.
 pub fn blocks(dom: &Dom, styles: &[Option<ComputedStyle>], lang: Option<&str>) -> Vec<Block> {
     let mut b = Builder {
         dom,
@@ -67,6 +86,7 @@ pub fn blocks(dom: &Dom, styles: &[Option<ComputedStyle>], lang: Option<&str>) -
         space: true,
         margin: 0.0,
         break_pending: false,
+        images: Vec::new(),
     };
     let root = dom.children(Dom::ROOT).find(|&c| dom.name(c).is_some());
     if let Some(root) = root {
@@ -114,6 +134,11 @@ impl<'a> Builder<'a> {
                 NodeKind::Element { .. } => {
                     let Some(cs) = self.style(c) else { continue };
                     if cs.display == Display::None {
+                    } else if matches!(self.dom.name(c), Some("img" | "svg")) {
+                        if is_block(cs.display) {
+                            self.flush(id, x, lang);
+                        }
+                        self.image(c);
                     } else if is_block(cs.display) {
                         self.flush(id, x, lang);
                         self.block(c, x, lang_of(self.dom, c).or(lang));
@@ -133,7 +158,13 @@ impl<'a> Builder<'a> {
     /// (invalid but common) are flattened into the paragraph.
     fn inline(&mut self, id: NodeId) {
         let Some(s) = self.style(id) else { return };
+        if matches!(self.dom.name(id), Some("img" | "svg")) {
+            return self.image(id);
+        }
         if self.dom.name(id) == Some("br") {
+            if !self.images.is_empty() && self.text.trim().is_empty() {
+                return; // the queued image becomes its own block: no line to break
+            }
             self.push_span(id);
             self.text.push('\n');
             self.space = true;
@@ -151,6 +182,41 @@ impl<'a> Builder<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// An `<img>`, or an `<svg>` wrapping an `<image>`, queued as a block image when no text
+    /// precedes it in the paragraph. Other SVG content is dropped.
+    // ponytail: images inside running text (glyph-like ornaments, inline formulas) are skipped;
+    // they need inline boxes in the line breaker.
+    fn image(&mut self, id: NodeId) {
+        if !self.text.trim().is_empty() {
+            return;
+        }
+        let img = match self.dom.name(id) {
+            Some("svg") => match self.dom.find(id, "image") {
+                Some(i) => i,
+                None => return,
+            },
+            _ => id,
+        };
+        // `xlink:href` is stored by its local name.
+        let Some(src) = self.dom.attr(img, "src").or_else(|| self.dom.attr(img, "href")) else { return };
+        let column = self.style(id).map_or(0.0, |s| s.content_width);
+        let size = |key: &str| {
+            let css = |n: NodeId| self.style(n).and_then(|s| if key == "width" { s.width } else { s.height });
+            let pct = |n: NodeId| {
+                let v = self.dom.attr(n, key)?.trim().strip_suffix('%')?.trim().parse::<f32>().ok()?;
+                // Percentage heights have no definite containing height in reflowable text.
+                (key == "width").then_some(v / 100.0 * column)
+            };
+            css(img).or_else(|| pct(img)).or_else(|| css(id)).or_else(|| pct(id))
+        };
+        self.images.push(ImageRef {
+            src: src.trim().to_string(),
+            width: size("width"),
+            height: size("height"),
+            intrinsic: None,
+        });
     }
 
     fn push_span(&mut self, node: NodeId) {
@@ -194,8 +260,30 @@ impl<'a> Builder<'a> {
         let trimmed = self.text.trim_end_matches(' ').len();
         self.text.truncate(trimmed);
         self.spans.retain(|s| s.start < trimmed);
+        let s = self.style(node);
+        let width = s.map_or(0.0, |s| s.content_width);
+        let avoid_break_inside = s.is_some_and(|s| s.break_inside_avoid);
+        let images = std::mem::take(&mut self.images);
+        // A line break or stray space between an image and its paragraph's end is no text.
+        if !images.is_empty() && self.text.trim().is_empty() {
+            self.text.clear();
+        }
+        for image in images {
+            self.blocks.push(Block {
+                node,
+                text: String::new(),
+                spans: Vec::new(),
+                lang: None,
+                space_before: std::mem::take(&mut self.margin),
+                x,
+                width,
+                break_before: std::mem::take(&mut self.break_pending),
+                keep_with_next: false,
+                avoid_break_inside: true,
+                image: Some(image),
+            });
+        }
         if !self.text.is_empty() {
-            let s = self.style(node);
             let name = self.dom.name(node).unwrap_or_default();
             let heading = matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
             self.blocks.push(Block {
@@ -205,10 +293,11 @@ impl<'a> Builder<'a> {
                 lang: lang.map(str::to_string),
                 space_before: std::mem::take(&mut self.margin),
                 x,
-                width: s.map_or(0.0, |s| s.content_width),
+                width,
                 break_before: std::mem::take(&mut self.break_pending),
                 keep_with_next: heading,
-                avoid_break_inside: s.is_some_and(|s| s.break_inside_avoid),
+                avoid_break_inside,
+                image: None,
             });
         }
         self.text.clear();
@@ -308,5 +397,27 @@ mod tests {
         let (_, b) = build("<body><div>before<p>inside</p>after<script>x()</script></div></body>");
         let texts: Vec<&str> = b.iter().map(|b| b.text.as_str()).collect();
         assert_eq!(texts, ["before", "inside", "after"]);
+    }
+
+    #[test]
+    fn images_become_blocks() {
+        let (dom, b) = build(
+            "<body><p>Text</p><p><span><img src='a.jpg'/></span></p>\
+             <div><img src='b.png' width='50%'/><br/>Caption</div>\
+             <p>Inline <img src='glyph.png'/> image</p>\
+             <img src='c.gif' style='display:block; width:20%'/>\
+             <svg width='100%' height='100%' viewBox='0 0 4 6'><title>t</title><image href='cover.jpg'/></svg></body>",
+        );
+        let srcs: Vec<Option<&str>> = b.iter().map(|b| b.image.as_ref().map(|i| i.src.as_str())).collect();
+        let texts: Vec<&str> = b.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(srcs, [None, Some("a.jpg"), Some("b.png"), None, None, Some("c.gif"), Some("cover.jpg")]);
+        assert_eq!(texts, ["Text", "", "", "Caption", "Inline image", "", ""]);
+        let img = |i: usize| b[i].image.clone().expect("image");
+        assert_eq!((img(1).width, img(1).height), (None, None));
+        assert_eq!(img(2).width, Some(250.0), "50% of the 500 px column");
+        assert_eq!(img(5).width, Some(100.0), "CSS 20%");
+        assert_eq!(img(6).width, Some(500.0), "the svg's 100%");
+        assert_eq!(dom.name(b[1].node), Some("p"));
+        assert!(b[1].space_before > 0.0, "the paragraph's margin goes to its image");
     }
 }

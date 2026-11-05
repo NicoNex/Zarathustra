@@ -1,7 +1,7 @@
-//! Pagination: blocks → lines → pages, with widow and orphan control, headings kept with
-//! the text that follows, forced breaks and blocks that must not split.
+//! Pagination: blocks → lines and images → pages, with widow and orphan control, headings
+//! kept with what follows, forced breaks and blocks that must not split.
 
-use super::flow::Block;
+use super::flow::{Block, ImageRef};
 use super::paragraph::{LayoutParams, Line, Placed, Run, Typesetter};
 use crate::fonts::FontLibrary;
 use crate::style::cascade::ComputedStyle;
@@ -9,6 +9,10 @@ use crate::style::css::TextAlign;
 
 /// Fewest lines of a paragraph left at a page bottom (orphans) or carried to the next top (widows).
 const MIN_LINES: usize = 2;
+/// Share of the page height an image may fill, so a picture never quite touches the footer.
+const IMAGE_MAX_HEIGHT: f32 = 0.96;
+/// Never enlarge an image more than this over its pixel size (ornaments stay small).
+const IMAGE_MAX_UPSCALE: f32 = 2.0;
 
 /// A line on a page; `glyphs[].run` indexes the block's spans.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,9 +24,42 @@ pub struct PageLine {
     pub glyphs: Vec<Placed>,
 }
 
+/// An image on a page; `block` indexes the chapter's blocks, whose `image` holds the source.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageImage {
+    pub block: u32,
+    /// Top-left corner and size, relative to the text area.
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Page {
     pub lines: Vec<PageLine>,
+    pub images: Vec<PageImage>,
+}
+
+impl Page {
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty() && self.images.is_empty()
+    }
+
+    /// The first block shown on the page (its reading position).
+    pub fn first_block(&self) -> Option<u32> {
+        let line = self.lines.first().map(|l| l.block);
+        let image = self.images.first().map(|i| i.block);
+        line.into_iter().chain(image).min()
+    }
+}
+
+/// An image's laid-out box: left edge within the text area (centred in its column) and size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageBox {
+    pub x: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 /// What pagination needs to know about a block besides its lines.
@@ -33,6 +70,8 @@ pub struct Flow {
     pub break_before: bool,
     pub keep_with_next: bool,
     pub avoid_break_inside: bool,
+    /// An image block: placed whole instead of lines.
+    pub image: Option<ImageBox>,
 }
 
 impl From<&Block> for Flow {
@@ -43,8 +82,26 @@ impl From<&Block> for Flow {
             break_before: b.break_before,
             keep_with_next: b.keep_with_next,
             avoid_break_inside: b.avoid_break_inside,
+            image: None,
         }
     }
+}
+
+/// Display size of `img` in a column `column` wide on a page `height` tall: CSS size when
+/// given, else twice the pixel size; at most 2× the pixels, within the column and the page,
+/// aspect ratio kept. `None` when the image's size is unknown (undecodable format).
+pub fn image_size(img: &ImageRef, column: f32, height: f32) -> Option<(f32, f32)> {
+    let (iw, ih) = img.intrinsic?;
+    let (iw, ih) = (iw as f32, ih as f32);
+    let aspect = ih / iw;
+    let w = match (img.width, img.height) {
+        (Some(w), _) => w,
+        (None, Some(h)) => h / aspect,
+        // A CSS px is ~3 device pixels at 300 dpi: pixel-sized pictures would be stamps.
+        (None, None) => iw * IMAGE_MAX_UPSCALE,
+    };
+    let w = w.min(iw * IMAGE_MAX_UPSCALE).min(column).min(height * IMAGE_MAX_HEIGHT / aspect);
+    (w >= 1.0 && w * aspect >= 1.0).then_some((w, w * aspect))
 }
 
 /// Typesets and paginates a chapter's blocks into pages `height` pixels tall.
@@ -56,6 +113,14 @@ pub fn layout(
     height: f32,
 ) -> Vec<Page> {
     let laid = blocks.iter().map(|b| {
+        if let Some(img) = &b.image {
+            let image = image_size(img, b.width, height).map(|(width, h)| ImageBox {
+                x: b.x + (b.width - width) / 2.0,
+                width,
+                height: h,
+            });
+            return (Flow { image, ..Flow::from(b) }, Vec::new());
+        }
         let style = |n: crate::dom::NodeId| styles.get(n.index()).and_then(Option::as_ref);
         let runs: Option<Vec<Run>> = (0..b.spans.len())
             .map(|i| {
@@ -80,7 +145,7 @@ pub fn layout(
     paginate(laid, height)
 }
 
-/// Stacks blocks' lines into pages.
+/// Stacks blocks' lines and images into pages.
 pub fn paginate(blocks: impl IntoIterator<Item = (Flow, Vec<Line>)>, height: f32) -> Vec<Page> {
     let blocks: Vec<(Flow, Vec<Line>)> = blocks.into_iter().collect();
     let mut pages = Vec::new();
@@ -90,7 +155,7 @@ pub fn paginate(blocks: impl IntoIterator<Item = (Flow, Vec<Line>)>, height: f32
     let mut carried_break = false;
 
     for (bi, (flow, lines)) in blocks.iter().enumerate() {
-        if lines.is_empty() {
+        if lines.is_empty() && flow.image.is_none() {
             carried_space = carried_space.max(flow.space_before);
             carried_break |= flow.break_before;
             continue;
@@ -98,7 +163,7 @@ pub fn paginate(blocks: impl IntoIterator<Item = (Flow, Vec<Line>)>, height: f32
         let space = std::mem::take(&mut carried_space).max(flow.space_before);
         let forced = std::mem::take(&mut carried_break) || flow.break_before;
         let new_page = |page: &mut Page, pages: &mut Vec<Page>, y: &mut f32| {
-            if !page.lines.is_empty() {
+            if !page.is_empty() {
                 pages.push(std::mem::take(page));
             }
             *y = 0.0;
@@ -106,15 +171,31 @@ pub fn paginate(blocks: impl IntoIterator<Item = (Flow, Vec<Line>)>, height: f32
         if forced {
             new_page(&mut page, &mut pages, &mut y);
         }
-        if !page.lines.is_empty() {
+        if !page.is_empty() {
             y += space;
         }
+        if let Some(img) = flow.image {
+            // Images never split: on to the next page, or shrunk to fit a fresh one.
+            if y + img.height > height + 0.01 && !page.is_empty() {
+                new_page(&mut page, &mut pages, &mut y);
+            }
+            let scale = (height / img.height).min(1.0);
+            let (w, h) = (img.width * scale, img.height * scale);
+            page.images.push(PageImage { block: bi as u32, x: img.x + (img.width - w) / 2.0, y, width: w, height: h });
+            y += h;
+            continue;
+        }
         // A heading moves on when it and the start of what follows don't fit together.
-        if flow.keep_with_next && !page.lines.is_empty() {
+        if flow.keep_with_next && !page.is_empty() {
             let own: f32 = lines.iter().map(|l| l.height).sum();
-            let next = blocks[bi + 1..].iter().find(|(_, l)| !l.is_empty());
-            let next_start =
-                next.map_or(0.0, |(f, l)| f.space_before + l.iter().take(MIN_LINES).map(|l| l.height).sum::<f32>());
+            let next = blocks[bi + 1..].iter().find(|(f, l)| !l.is_empty() || f.image.is_some());
+            let next_start = next.map_or(0.0, |(f, l)| {
+                let start = match f.image {
+                    Some(img) => img.height,
+                    None => l.iter().take(MIN_LINES).map(|l| l.height).sum::<f32>(),
+                };
+                f.space_before + start
+            });
             if y + own + next_start > height {
                 new_page(&mut page, &mut pages, &mut y);
             }
@@ -139,7 +220,7 @@ pub fn paginate(blocks: impl IntoIterator<Item = (Flow, Vec<Line>)>, height: f32
                 if i == 0 && (take < MIN_LINES || flow.avoid_break_inside) {
                     take = 0;
                 }
-                if take == 0 && page.lines.is_empty() {
+                if take == 0 && page.is_empty() {
                     take = fit.max(1); // nothing fits better on a fresh page: make progress
                 }
             }
@@ -158,7 +239,7 @@ pub fn paginate(blocks: impl IntoIterator<Item = (Flow, Vec<Line>)>, height: f32
             }
         }
     }
-    if !page.lines.is_empty() {
+    if !page.is_empty() {
         pages.push(page);
     }
     pages
@@ -214,5 +295,46 @@ mod tests {
         // A block taller than a page still makes progress.
         let p = paginate([(f, lines(25))], 100.0);
         assert_eq!(p.iter().map(|p| p.lines.len()).collect::<Vec<_>>(), [10, 10, 5]);
+    }
+
+    #[test]
+    fn images_never_split_and_shrink_on_a_fresh_page() {
+        let f = Flow::default();
+        let img = |height| Flow { image: Some(ImageBox { x: 10.0, width: 40.0, height }), ..f };
+        // 30 px image after 8 lines (80 px): doesn't fit, moves on; text continues below it.
+        let p = paginate([(f, lines(8)), (img(30.0), Vec::new()), (f, lines(3))], 100.0);
+        assert_eq!(shape(&p), [vec![0; 8], vec![2; 3]]);
+        assert_eq!(p[1].images, [PageImage { block: 1, x: 10.0, y: 0.0, width: 40.0, height: 30.0 }]);
+        assert_eq!(p[1].lines[0].baseline, 30.0 + 8.0);
+        assert_eq!(p[1].first_block(), Some(1));
+        // Fits after 5 lines: same page.
+        let p = paginate([(f, lines(5)), (img(30.0), Vec::new())], 100.0);
+        assert_eq!((p.len(), p[0].images[0].y), (1, 50.0));
+        // Taller than a page on an empty page: scaled down, centred, not dropped.
+        let p = paginate([(img(200.0), Vec::new()), (f, lines(1))], 100.0);
+        assert_eq!(p[0].images, [PageImage { block: 0, x: 20.0, y: 0.0, width: 20.0, height: 100.0 }]);
+        assert_eq!(p.len(), 2);
+        // A heading followed by an image that won't fit beside it moves on with it.
+        let heading = Flow { keep_with_next: true, ..f };
+        let p = paginate([(f, lines(5)), (heading, lines(1)), (img(45.0), Vec::new())], 100.0);
+        assert_eq!(shape(&p), [vec![0; 5], vec![1]]);
+        assert_eq!(p[1].images.len(), 1);
+    }
+
+    #[test]
+    fn image_sizing() {
+        let img = |intrinsic, width, height| ImageRef { src: String::new(), width, height, intrinsic };
+        // Small ornament: at most 2x.
+        assert_eq!(image_size(&img(Some((50, 20)), None, None), 1000.0, 1000.0), Some((100.0, 40.0)));
+        // Wide photo: column width.
+        assert_eq!(image_size(&img(Some((2000, 1000)), None, None), 1000.0, 1000.0), Some((1000.0, 500.0)));
+        // Tall cover: page height (minus a little).
+        let (w, h) = image_size(&img(Some((600, 1200)), None, None), 1000.0, 1000.0).expect("size");
+        assert!((h - 960.0).abs() < 0.01 && (w - 480.0).abs() < 0.01, "{w}x{h}");
+        // CSS width (already resolved to pixels), still capped at 2x the pixels.
+        assert_eq!(image_size(&img(Some((400, 200)), Some(500.0), None), 1000.0, 1000.0), Some((500.0, 250.0)));
+        assert_eq!(image_size(&img(Some((100, 50)), Some(900.0), None), 1000.0, 1000.0), Some((200.0, 100.0)));
+        assert_eq!(image_size(&img(Some((400, 200)), None, Some(100.0)), 1000.0, 1000.0), Some((200.0, 100.0)));
+        assert_eq!(image_size(&img(None, Some(500.0), None), 1000.0, 1000.0), None);
     }
 }
