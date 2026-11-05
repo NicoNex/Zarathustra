@@ -6,7 +6,7 @@ use std::io::BufReader;
 use std::path::Path;
 
 use crate::dom::{Dom, NodeKind};
-use crate::epub::{resolve, Epub, EpubError, Metadata};
+use crate::epub::{resolve, Epub, EpubError, Metadata, TocEntry};
 use crate::fonts::FontLibrary;
 use crate::image;
 use crate::layout::flow::{self, Block};
@@ -38,6 +38,8 @@ pub struct Book {
     metadata: Metadata,
     /// Archive paths of the linear XHTML chapters, in reading order.
     pub chapters: Vec<String>,
+    /// Table of contents; targets are archive paths (as in `chapters`) plus `#fragment`.
+    pub toc: Vec<TocEntry>,
 }
 
 pub struct Chapter {
@@ -51,14 +53,14 @@ impl Book {
         let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
         if matches!(ext.as_deref(), Some("azw3" | "azw" | "mobi" | "prc")) {
             let mobi = Mobi::open(path)?;
-            let (chapters, metadata) = (mobi.chapters.clone(), mobi.metadata.clone());
-            return Ok(Book { source: RefCell::new(Source::Mobi(mobi)), metadata, chapters });
+            let (chapters, metadata, toc) = (mobi.chapters.clone(), mobi.metadata.clone(), mobi.toc.clone());
+            return Ok(Book { source: RefCell::new(Source::Mobi(mobi)), metadata, chapters, toc });
         }
         let epub = Epub::open(BufReader::new(File::open(path).map_err(EpubError::from)?))?;
         let chapters =
             (epub.spine.iter()).filter(|s| s.linear && s.media_type.contains("html")).map(|s| s.path.clone()).collect();
-        let metadata = epub.metadata.clone();
-        Ok(Book { source: RefCell::new(Source::Epub(epub)), metadata, chapters })
+        let (metadata, toc) = (epub.metadata.clone(), epub.toc.clone());
+        Ok(Book { source: RefCell::new(Source::Epub(epub)), metadata, chapters, toc })
     }
 
     pub fn metadata(&self) -> &Metadata {
@@ -77,8 +79,8 @@ impl Book {
         }
     }
 
-    fn read_dom(&mut self, path: &str) -> Result<Dom, BookError> {
-        match self.source.get_mut() {
+    fn read_dom(&self, path: &str) -> Result<Dom, BookError> {
+        match &mut *self.source.borrow_mut() {
             Source::Epub(e) => Ok(e.read_dom(path)?),
             Source::Mobi(m) => {
                 let bytes = m.read(path)?;
@@ -125,6 +127,13 @@ impl Book {
         }
         let pages = page::layout(&blocks, &styles, fonts, ts, height);
         Ok(Chapter { blocks, pages })
+    }
+
+    /// The blocks of laid-out chapter `i` that the elements with `ids` (link fragments) land in.
+    pub fn fragment_blocks(&self, i: usize, chapter: &Chapter, ids: &[&str]) -> Vec<Option<usize>> {
+        let Some(dom) = self.chapters.get(i).and_then(|p| self.read_dom(p).ok()) else { return vec![None; ids.len()] };
+        let by_id = |id: &str| dom.descendants(Dom::ROOT).find(|&n| dom.attr(n, "id") == Some(id));
+        ids.iter().map(|id| flow::block_of(&dom, &chapter.blocks, by_id(id)?)).collect()
     }
 
     /// The chapter's `<link rel=stylesheet>` and `<style>` sheets, in document order.
@@ -182,6 +191,48 @@ mod tests {
             .map(|i| book.chapter(i, &prefs, &fonts, &mut ts, 1420.0).expect("chapter lays out").pages.len())
             .sum();
         assert!(total > 200, "{total} pages");
+    }
+
+    /// The table-of-contents targets of the local books name chapters, and their fragments
+    /// land in blocks.
+    #[test]
+    fn dev_books_toc_targets_resolve() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let fonts = FontLibrary::new("Bookerly");
+        let mut ts = Typesetter::new(Hyphenators::new(root.join("assets/hyphenation")));
+        let prefs = Preferences {
+            font_size: 40.0,
+            font_family: None,
+            line_height: None,
+            justify: None,
+            hyphenate: false,
+            page_width: 1000.0,
+        };
+        let books = ["dev-books", "dev-books/azw3"].iter().filter_map(|d| std::fs::read_dir(root.join(d)).ok());
+        for path in books.flatten().flatten().map(|e| e.path()).take(8) {
+            let Ok(mut book) = Book::open(&path) else { continue };
+            let mut flat = Vec::new();
+            let mut stack: Vec<&TocEntry> = book.toc.iter().collect();
+            while let Some(e) = stack.pop() {
+                flat.push(e.target.clone());
+                stack.extend(&e.children);
+            }
+            let (mut found, mut total) = (0, 0);
+            for target in flat {
+                let (file, id) = target.split_once('#').unwrap_or((&target, ""));
+                let Some(i) = book.chapters.iter().position(|c| c == file) else { continue };
+                // Some books link to ids that are not there; those open at the chapter start.
+                let source = book.resource(file).map(|b| String::from_utf8_lossy(&b).into_owned());
+                if id.is_empty() || !source.is_some_and(|s| s.contains(&format!("\"{id}\""))) {
+                    continue;
+                }
+                let ch = book.chapter(i, &prefs, &fonts, &mut ts, 1400.0).expect("chapter lays out");
+                total += 1;
+                found += usize::from(book.fragment_blocks(i, &ch, &[id])[0].is_some());
+            }
+            eprintln!("{}: {found}/{total} toc fragments resolve", path.display());
+            assert_eq!(found, total, "{}", path.display());
+        }
     }
 
     /// Every chapter of every local book lays out, and the images in them land on pages.

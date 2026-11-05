@@ -80,6 +80,48 @@ pub fn rounded_outline(c: &mut Canvas, r: Rect, radius: i32, width: i32, color: 
     rounded_rect(c, inner, (radius - width).max(0), inside);
 }
 
+/// Corner radius and border width of buttons and segmented controls.
+pub const RADIUS: i32 = 20;
+pub const BORDER: i32 = 2;
+
+/// A button: a black outline, or solid black when `on`. Solid black edges stay crisp on
+/// e-ink under fast waveforms, where thin gray lines ghost.
+pub fn button(c: &mut Canvas, r: Rect, on: bool) {
+    if on {
+        rounded_rect(c, r, RADIUS, INK);
+    } else {
+        rounded_outline(c, r, RADIUS, BORDER, INK, PAPER);
+    }
+}
+
+/// A row of `n` equal segments in one outline, `on` filled black. Returns the segment rects.
+pub fn segmented(c: &mut Canvas, r: Rect, n: usize, on: Option<usize>) -> Vec<Rect> {
+    let segs = segments(r, n);
+    rounded_outline(c, r, RADIUS, BORDER, INK, PAPER);
+    for (i, s) in segs.iter().enumerate() {
+        if on == Some(i) {
+            // Round only the outer corners: a rounded fill squared off on its inner sides.
+            rounded_rect(c, *s, RADIUS, INK);
+            if i > 0 {
+                c.fill(Rect::new(s.x, s.y, RADIUS, s.h), INK);
+            }
+            if i + 1 < n {
+                c.fill(Rect::new(s.right() - RADIUS, s.y, RADIUS, s.h), INK);
+            }
+        }
+        if i > 0 {
+            c.fill(Rect::new(s.x - BORDER / 2, r.y, BORDER, r.h), INK);
+        }
+    }
+    segs
+}
+
+/// `r` split into `n` equal columns (the last takes the rounding remainder).
+pub fn segments(r: Rect, n: usize) -> Vec<Rect> {
+    let n = n.max(1) as i32;
+    (0..n).map(|i| Rect::new(r.x + i * r.w / n, r.y, (i + 1) * r.w / n - i * r.w / n, r.h)).collect()
+}
+
 /// Single-line text in one face and size.
 pub struct Label<'a> {
     pub face: &'a Face,
@@ -108,6 +150,19 @@ impl Label<'_> {
             }
         }
         "…".into()
+    }
+
+    /// Draws `text` centred in `r` (fitted to its width), with the baseline set for a
+    /// capital height of about 0.7 em.
+    pub fn centered(&self, c: &mut Canvas, raster: &mut Rasterizer, text: &str, r: Rect) {
+        let text = self.fit(text, (r.w - 24) as f32);
+        let x = r.x as f32 + (r.w as f32 - self.width(&text)) / 2.0;
+        self.draw(c, raster, &text, x, self.baseline(r));
+    }
+
+    /// Baseline that centres capitals vertically in `r`.
+    pub fn baseline(&self, r: Rect) -> i32 {
+        r.y + r.h / 2 + (self.size * 0.35).round() as i32
     }
 
     /// Draws `text` with its baseline at `y`; returns the advance.

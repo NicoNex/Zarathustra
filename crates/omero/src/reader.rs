@@ -14,6 +14,7 @@ use omero_engine::style::cascade::Preferences;
 
 use crate::menu::{self, Control, Typography};
 use crate::pace::Pace;
+use crate::toc::{self, Toc};
 use crate::ui::{Label, INK_SOFT, LINE};
 use crate::{Action, Ctx, H, W};
 
@@ -36,6 +37,9 @@ pub struct Reader {
     typo: Typography,
     /// The menu (top bar + typography sheet) is shown over the page.
     pub menu: bool,
+    /// The table of contents, flattened, and the open list over the page.
+    contents: Vec<toc::Entry>,
+    toc: Option<Toc>,
     chapter: Chapter,
     chapter_index: usize,
     pub page: usize,
@@ -76,12 +80,15 @@ impl Reader {
         let prefs = preferences(&typo);
         let state_file = ctx.state_file(path);
         let saved = Position::load(&state_file);
+        let contents = toc::entries(&book);
         let mut r = Reader {
             chapter_index: saved.as_ref().map_or(0, |p| p.chapter.min(book.chapters.len() - 1)),
             book,
             prefs,
             typo,
             menu: false,
+            contents,
+            toc: None,
             chapter: Chapter { blocks: Vec::new(), pages: Vec::new() },
             page: 0,
             state_file,
@@ -172,6 +179,9 @@ impl Reader {
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Result<Action> {
+        if self.toc.is_some() {
+            return self.toc_tap((x0, y0), x, ctx);
+        }
         if self.menu {
             return self.menu_tap((x0, y0), ctx);
         }
@@ -204,6 +214,10 @@ impl Reader {
                 self.menu = false;
                 Ok(Action::Home)
             }
+            Some((Control::Contents, _)) if !self.contents.is_empty() => {
+                self.show_contents();
+                Ok(Action::Redraw { turn: None })
+            }
             Some((ctl, _)) => {
                 if menu::apply(&mut self.typo, &ctl) {
                     self.typo.save(&ctx.state_dir);
@@ -218,6 +232,49 @@ impl Reader {
                 Ok(Action::Redraw { turn: None })
             }
         }
+    }
+
+    /// Opens the table of contents over the page.
+    pub fn show_contents(&mut self) {
+        self.toc = Some(Toc::new(self.current_entry()));
+    }
+
+    fn toc_tap(&mut self, start: (i32, i32), x: i32, ctx: &mut Ctx) -> Result<Action> {
+        let Some(view) = &mut self.toc else { return Ok(Action::None) };
+        Ok(match view.tap(&self.contents, start, x) {
+            toc::Tap::None => Action::None,
+            toc::Tap::Redraw => Action::Redraw { turn: None },
+            toc::Tap::Back => {
+                self.toc = None;
+                Action::Redraw { turn: None }
+            }
+            toc::Tap::Jump(i) => {
+                self.jump(i, ctx)?;
+                Action::Redraw { turn: None }
+            }
+        })
+    }
+
+    /// Opens table-of-contents entry `i` and closes the list and the menu.
+    fn jump(&mut self, i: usize, ctx: &mut Ctx) -> Result<()> {
+        let Some(e) = self.contents.get(i).cloned() else { return Ok(()) };
+        self.load(e.chapter, ctx)?;
+        if let Some(f) = e.fragment.as_deref() {
+            let block = self.book.fragment_blocks(e.chapter, &self.chapter, &[f]).pop().flatten();
+            self.page = block.map_or(0, |b| self.page_of(b));
+        }
+        if self.chapter.pages.is_empty() {
+            self.turn(true, ctx)?;
+        }
+        self.toc = None;
+        self.menu = false;
+        self.save();
+        Ok(())
+    }
+
+    /// The table-of-contents entry being read.
+    fn current_entry(&self) -> Option<usize> {
+        toc::current(&self.contents, &self.book, self.chapter_index, &self.chapter, self.page)
     }
 
     /// Lays the chapter out again with the current typography, keeping the reading position.
@@ -235,6 +292,9 @@ impl Reader {
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        if let Some(view) = &self.toc {
+            return view.render(c, ctx, &self.contents);
+        }
         c.fill(c.bounds(), 255);
         if let Some(page) = self.chapter.pages.get(self.page) {
             let mut images = self.images.borrow_mut();
@@ -262,7 +322,9 @@ impl Reader {
         self.header(c, ctx);
         self.footer(c, ctx);
         if self.menu {
-            menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""));
+            let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
+            let chapter = chapter.or((!self.contents.is_empty()).then_some(""));
+            menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""), chapter);
         }
     }
 
