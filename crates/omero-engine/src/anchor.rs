@@ -244,6 +244,19 @@ impl TextMap {
         let (start, node) = self.starts[i];
         Some((node, pos - start))
     }
+
+    /// Like [`to_dom`](Self::to_dom), but a position between two nodes maps to the end of the
+    /// earlier one: the end of a range that stops at a paragraph's end stays in that
+    /// paragraph instead of landing in the whitespace between blocks.
+    pub fn to_dom_end(&self, pos: usize) -> Option<(NodeId, usize)> {
+        if pos > self.text.len() {
+            return None;
+        }
+        match self.starts.partition_point(|&(s, _)| s < pos).checked_sub(1) {
+            Some(i) => Some((self.starts[i].1, pos - self.starts[i].0)),
+            None => self.to_dom(pos),
+        }
+    }
 }
 
 /// W3C text-quote selector: the selected text and its context, whitespace-collapsed.
@@ -489,6 +502,11 @@ mod tests {
         assert_eq!((node, off), (text_node(&dom, "cammin"), 0));
         assert_eq!(map.to_text(node, off), Some(pos));
         assert_eq!(map.to_dom(map.text().len() + 1), None);
+        // At a node boundary the end mapping stays in the earlier node.
+        let (prev, len) = map.to_dom(pos - 1).map(|(n, o)| (n, o + 1)).expect("maps");
+        assert_ne!(prev, node);
+        assert_eq!(map.to_dom_end(pos), Some((prev, len)));
+        assert_eq!(map.to_dom_end(0), map.to_dom(0));
     }
 
     fn quote_of(text: &str, exact: &str) -> TextQuote {

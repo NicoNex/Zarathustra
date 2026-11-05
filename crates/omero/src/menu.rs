@@ -76,7 +76,9 @@ impl Typography {
             "size={}\nfamily={family}\nspacing={}\nmargin={}\njustify={}\n",
             self.size, self.spacing, self.margin, self.justify
         );
-        std::fs::write(Self::path(state_dir), text).ok();
+        if let Err(e) = crate::write_atomic(&Self::path(state_dir), text) {
+            eprintln!("typography: {e}");
+        }
     }
 
     pub fn font_size(&self) -> f32 {

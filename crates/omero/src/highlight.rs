@@ -44,7 +44,7 @@ pub struct TextPos {
 }
 
 impl TextPos {
-    fn new(block: usize, offset: usize) -> TextPos {
+    pub fn new(block: usize, offset: usize) -> TextPos {
         TextPos { block: u32::try_from(block).unwrap_or(u32::MAX), offset: u32::try_from(offset).unwrap_or(u32::MAX) }
     }
 }
@@ -52,6 +52,16 @@ impl TextPos {
 fn glyph_pos(blocks: &[Block], line: &PageLine, run: u32, offset: u32) -> TextPos {
     let start = blocks.get(line.block as usize).and_then(|b| b.spans.get(run as usize)).map_or(0, |s| s.start);
     TextPos::new(line.block as usize, start + offset as usize)
+}
+
+/// Where page `page` starts: its first line's first glyph, or its first image's block.
+pub fn page_start(page: &Page, blocks: &[Block]) -> Option<TextPos> {
+    let line = page.lines.first().map(|l| match l.glyphs.iter().find(|g| !g.inserted) {
+        Some(g) => glyph_pos(blocks, l, g.run, g.offset),
+        None => TextPos::new(l.block as usize, 0),
+    });
+    let image = page.images.first().map(|i| TextPos::new(i.block as usize, 0));
+    line.into_iter().chain(image).min()
 }
 
 /// Vertical extent of a line's ink (relative to the text area), from its largest glyph.
@@ -205,7 +215,8 @@ pub fn resolve(dom: &Dom, map: &TextMap, blocks: &[Block], data: &AnnotationData
     };
     let text = by_cfi().or_else(|| reanchor(map.text(), quote?))?;
     let (sn, so) = map.to_dom(text.start)?;
-    let (en, eo) = map.to_dom(text.end)?;
+    // The end leans left: a range ending a paragraph stays in it.
+    let (en, eo) = map.to_dom_end(text.end)?;
     let range = block_pos(blocks, sn, so)?..block_pos(blocks, en, eo)?;
     (range.start < range.end).then_some(range)
 }
@@ -289,10 +300,10 @@ impl Highlights {
     pub fn open(path: &Path, book: &Book, state_dir: &Path) -> Highlights {
         let store = Store::open(&state_dir.join("omero.db")).and_then(|store| {
             let meta = book.metadata();
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            // ponytail: without a dc:identifier the key hashes the file name, so a renamed
-            // file loses its highlights; hash the OPF bytes once the book exposes them.
-            let key = book_key(meta.identifier.as_deref(), name.as_bytes());
+            // ponytail: without a dc:identifier the key hashes the full path (books with the
+            // same file name stay apart), so a moved file loses its highlights; hash the OPF
+            // bytes once the book exposes them.
+            let key = book_key(meta.identifier.as_deref(), path.as_os_str().as_encoded_bytes());
             let entry = BookEntry {
                 path: path.to_path_buf(),
                 title: meta.title.clone().unwrap_or_default(),
@@ -347,12 +358,19 @@ impl Highlights {
     /// top-left corner on screen.
     pub fn long_press(&mut self, chapter: &Chapter, page: usize, origin: (i32, i32), (x, y): (i32, i32)) -> Outcome {
         let Some(p) = chapter.pages.get(page) else { return Outcome::Ignored };
+        if self.popup.as_ref().is_some_and(|popup| contains(&popup.rect, x, y)) {
+            return Outcome::Ignored; // a press on the popup is for its buttons
+        }
         let Some(pos) = hit(p, &chapter.blocks, (x - origin.0) as f32, (y - origin.1) as f32) else {
             return Outcome::Ignored;
         };
-        self.popup = None;
+        // The popup and selection this press replaces are erased too.
+        let mut damage = self.popup.take().map_or(Rect::default(), |popup| popup.rect);
+        if let Some(old) = self.selection.take() {
+            damage = damage.union(&self.bounds(p, &chapter.blocks, &old.range, origin));
+        }
         let sel = Selection::new(word_range(&chapter.blocks, pos));
-        let damage = self.bounds(p, &chapter.blocks, &sel.range, origin);
+        let damage = damage.union(&self.bounds(p, &chapter.blocks, &sel.range, origin));
         self.selection = Some(sel);
         Outcome::Redraw(damage)
     }
@@ -647,6 +665,14 @@ mod tests {
         let span = pos_of(&blocks, "del cammin di nostra vita mi");
         let d = anchor_range(&dom, &blocks, 0, &span).expect("anchors");
         assert_eq!(resolve(&dom, &map, &blocks, &d), Some(span));
+
+        // Ranges ending exactly at a paragraph's end (inter-block whitespace follows).
+        for end in ["selva oscura,", "era smarrita."] {
+            let r = pos_of(&blocks, end);
+            assert_eq!(r.end.offset as usize, blocks[r.end.block as usize].text.len(), "{end} ends its block");
+            let d = anchor_range(&dom, &blocks, 0, &r).expect("anchors");
+            assert_eq!(resolve(&dom, &map, &blocks, &d), Some(r), "{end}");
+        }
 
         // The book changed: markup inserted before (CFI points elsewhere), text reflowed.
         let edited = CHAPTER.replace("<p>Nel", "<p>Premessa.</p><p>Nel").replace("selva oscura", "selva\n oscura");
