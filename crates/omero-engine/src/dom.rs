@@ -120,6 +120,11 @@ impl Dom {
         (id.0 + 1..end).map(NodeId)
     }
 
+    /// `id` and every node after it, in document order.
+    pub fn nodes_from(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        (id.0..self.nodes.len() as u32).map(NodeId)
+    }
+
     fn subtree_end(&self, mut id: NodeId) -> u32 {
         loop {
             if let Some(next) = self.node(id).next_sibling {

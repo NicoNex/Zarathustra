@@ -1,3 +1,4 @@
+pub mod anchor;
 pub mod book;
 pub mod dom;
 pub mod epub;

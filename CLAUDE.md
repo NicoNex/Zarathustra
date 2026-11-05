@@ -28,5 +28,6 @@ Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 
 
 - `crates/omero-device`: `Device` trait; Kindle MTK backend (`kindle/`), emulator, touch decoding, sysfs light/battery.
 - `crates/omero-engine`: fonts (harfrust + skrifa + zeno), DOM, EPUB container; style, layout and pagination are next.
+- `crates/omero-store`: SQLite (rusqlite, bundled): books, annotations, `events` change feed; schema migrations in `src/v*.sql`. Positions (CFI, text-quote re-anchoring) live in `omero-engine::anchor`.
 - `crates/omero`: binaries (probes now, the app later).
 - `dist/kual/omero`: KUAL extension; `run.sh` stops/restores the Amazon UI.
