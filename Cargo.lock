@@ -651,6 +651,7 @@ name = "omero-engine"
 version = "0.1.0"
 dependencies = [
  "cssparser",
+ "flate2",
  "harfrust",
  "hyphenation",
  "icu_segmenter",
