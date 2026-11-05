@@ -15,6 +15,18 @@ Merged and deployed: highlights store + UX (long press, drag, popup; `highlight.
 
 Review/simplify of d9c7840..HEAD DONE and merged (engine: 9942ffb, 234c71f; shell: b985cbc + shared UI helpers/clock.rs/lazy covers). **Last reviewed: 08ca9a6.** Merged fixes NOT yet deployed (device was offline): deploy and let the user test light mix, center alignment, broken-chapter skip, exact positions, highlight edges.
 
+## In flight (2026-11-05 evening) — check `git branch | grep worktree-agent` and `git log master..BRANCH`
+
+Merged today: review fixes, notebook (home long press → highlights), 2-row grid, wait-before-draw fix (selection glitch), TXT/kepub (agent), Italian i18n (agent, `i18n.rs`, `lang=` in settings.txt), reading stats recording + `library::details` (7a046c1), swipe up from bottom → typography menu, power partial (d20115a).
+
+Running agents (worktrees, merge when done; expect conflicts in reader.rs/app.rs):
+- PDF via MuPDF (`engine/pdf`, reader fixed-layout path).
+- Device agent: power button (powerd says "Splash screen is on. Ignoring power button" with the framework stopped; KOReader keeps the framework alive instead — see notes/kindle-power.md) + slider smoothness vs Amazon's. Owns the device.
+- Footnotes popup in the reader (noteref detection, paginated popup over the page).
+
+Mine, next: book context menu on long press (Open / About this book (blurb) / Highlights / Mark read-unread) + About screen with per-book stats + global stats screen. Spec: docs/superpowers/specs/2026-11-05-book-menu-stats.md. Store API ready (`add_reading`, `reading_days`), engine `library::details`.
+Review rule: code-review + simplify every ~2000 added lines (`git diff --shortstat 08ca9a6..HEAD`).
+
 ## Next steps (user priorities)
 
 1. Fix bugs 1–2, merge menu redesign, deploy, let the user test.
