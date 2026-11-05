@@ -42,7 +42,10 @@ pub struct Book {
     pub toc: Vec<TocEntry>,
 }
 
+#[derive(Default)]
 pub struct Chapter {
+    /// The chapter document, kept to anchor highlights and positions (see [`crate::anchor`]).
+    pub dom: Dom,
     pub blocks: Vec<Block>,
     pub pages: Vec<Page>,
 }
@@ -126,7 +129,7 @@ impl Book {
             img.intrinsic = self.resource(&img.src).and_then(|b| image::dimensions(&b));
         }
         let pages = page::layout(&blocks, &styles, fonts, ts, height);
-        Ok(Chapter { blocks, pages })
+        Ok(Chapter { dom, blocks, pages })
     }
 
     /// The blocks of laid-out chapter `i` that the elements with `ids` (link fragments) land in.

@@ -14,6 +14,7 @@ emulator = ["omero-device/emulator"]
 [dependencies]
 omero-device = { path = "../omero-device" }
 omero-engine = { path = "../omero-engine" }
+omero-store = { path = "../omero-store" }
 anyhow = "1"
 
 [[bin]]

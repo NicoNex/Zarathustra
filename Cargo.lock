@@ -682,6 +682,7 @@ dependencies = [
  "anyhow",
  "omero-device",
  "omero-engine",
+ "omero-store",
 ]
 
 [[package]]
