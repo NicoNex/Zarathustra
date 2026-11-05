@@ -705,6 +705,7 @@ dependencies = [
  "hyphenation",
  "icu_segmenter",
  "jpeg-encoder",
+ "memchr",
  "omero-device",
  "percent-encoding",
  "precomputed-hash",

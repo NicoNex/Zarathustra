@@ -71,10 +71,7 @@ impl Fixer<'_> {
             self.out.push_str("]]>");
             return body.get(end + 3..).unwrap_or("");
         }
-        if s.starts_with("<!") {
-            return after(">", 2);
-        }
-        if s.starts_with("<?") {
+        if s.starts_with("<!") || s.starts_with("<?") {
             return after(">", 2);
         }
         let closing = s.as_bytes().get(1) == Some(&b'/');
@@ -233,7 +230,9 @@ fn escape(out: &mut String, s: &str, attr: bool) {
 
 /// Whether `s` (starting at `&`) begins with a character or entity reference that resolves.
 fn valid_reference(s: &str) -> bool {
-    let Some(end) = s.get(..s.len().min(40)).and_then(|h| h.find(';')) else { return false };
+    // Bytes, not `str::get`: 40 bytes in may fall inside a multi-byte character. `;` is ASCII,
+    // so `end` is a char boundary.
+    let Some(end) = s.as_bytes().iter().take(40).position(|&b| b == b';') else { return false };
     let body = &s[1..end];
     if let Some(num) = body.strip_prefix('#') {
         let (digits, radix) = match num.strip_prefix(['x', 'X']) {
@@ -280,6 +279,9 @@ mod tests {
         assert_eq!(html("<html><body><mbp:pagebreak/>t</body></html>"), "t");
         assert_eq!(html("<a href=\"x\">dangling <b"), "<a href=\"x\">dangling &lt;b</a>");
         assert_eq!(html("<1>"), "&lt;1>");
+        // Byte 40 after the `&` falls inside a multi-byte character: the entity is still kept.
+        let accented = format!("&amp;{}", "é".repeat(30));
+        assert_eq!(html(&accented), accented);
         assert_eq!(html("a <b <i>c</i>"), "a &lt;b <i>c</i>");
         assert_eq!(html(r#"<p title="open>x</p>"#), r#"<p title="open">x</p>"#);
     }

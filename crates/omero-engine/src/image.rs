@@ -30,6 +30,42 @@ pub struct GrayImage {
     pub pixels: Vec<u8>,
 }
 
+/// Image file formats we recognise by their magic bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Jpeg,
+    Png,
+    Gif,
+    /// Recognised (for file names) but not decoded.
+    Bmp,
+}
+
+impl Kind {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Kind::Jpeg => "jpg",
+            Kind::Png => "png",
+            Kind::Gif => "gif",
+            Kind::Bmp => "bmp",
+        }
+    }
+}
+
+/// The image format of `bytes`, by magic: the one sniff [`decode`] and [`dimensions`] agree on.
+pub fn kind(bytes: &[u8]) -> Option<Kind> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(Kind::Jpeg)
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(Kind::Png)
+    } else if bytes.starts_with(b"GIF8") {
+        Some(Kind::Gif)
+    } else if bytes.starts_with(b"BM") {
+        Some(Kind::Bmp)
+    } else {
+        None
+    }
+}
+
 /// Decodes a JPEG, PNG or GIF (first frame) and fits it inside `max_w`×`max_h`, keeping the
 /// aspect ratio and enlarging at most 2×. Returns `None` for unsupported formats (WebP, SVG),
 /// corrupt data, or images larger than [`MAX_DIM`].
@@ -37,33 +73,31 @@ pub fn decode(bytes: &[u8], max_w: u32, max_h: u32) -> Option<GrayImage> {
     if max_w == 0 || max_h == 0 {
         return None;
     }
-    let src = if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        decode_jpeg(bytes)?
-    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        decode_png(bytes)?
-    } else if bytes.starts_with(b"GIF8") {
-        decode_gif(bytes)?
-    } else {
-        return None;
+    let src = match kind(bytes)? {
+        Kind::Jpeg => decode_jpeg(bytes)?,
+        Kind::Png => decode_png(bytes)?,
+        Kind::Gif => decode_gif(bytes)?,
+        Kind::Bmp => return None,
     };
     let (w, h) = fit(src.width, src.height, max_w, max_h);
-    Some(resample(&src, w, h))
+    Some(resample(src, w, h))
 }
 
 /// Pixel size of a JPEG, PNG or GIF read from its header, without decoding. `None` for other
 /// formats, truncated headers, or sizes [`decode`] would refuse.
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let be16 = |i: usize| Some(u32::from(u16::from_be_bytes(bytes.get(i..i + 2)?.try_into().ok()?)));
-    let (w, h) = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.get(12..16) == Some(b"IHDR") {
-        let be32 = |i: usize| Some(u32::from_be_bytes(bytes.get(i..i + 4)?.try_into().ok()?));
-        (be32(16)?, be32(20)?)
-    } else if bytes.starts_with(b"GIF8") {
-        let le16 = |i: usize| Some(u32::from(u16::from_le_bytes(bytes.get(i..i + 2)?.try_into().ok()?)));
-        (le16(6)?, le16(8)?)
-    } else if bytes.starts_with(&[0xFF, 0xD8]) {
-        jpeg_frame(bytes, be16)?
-    } else {
-        return None;
+    let (w, h) = match kind(bytes)? {
+        Kind::Png if bytes.get(12..16) == Some(b"IHDR") => {
+            let be32 = |i: usize| Some(u32::from_be_bytes(bytes.get(i..i + 4)?.try_into().ok()?));
+            (be32(16)?, be32(20)?)
+        }
+        Kind::Gif => {
+            let le16 = |i: usize| Some(u32::from(u16::from_le_bytes(bytes.get(i..i + 2)?.try_into().ok()?)));
+            (le16(6)?, le16(8)?)
+        }
+        Kind::Jpeg => jpeg_frame(bytes, be16)?,
+        Kind::Png | Kind::Bmp => return None,
     };
     within_limits(w as usize, h as usize).then_some((w, h))
 }
@@ -266,10 +300,12 @@ fn taps(src_len: u32, dst_len: u32) -> Vec<(usize, Vec<f32>)> {
 
 /// Separable resample in linear light: horizontal pass row by row (never materializing the
 /// full-size float image), then vertical.
-fn resample(src: &Raw, dst_w: u32, dst_h: u32) -> GrayImage {
+fn resample(src: Raw, dst_w: u32, dst_h: u32) -> GrayImage {
     let (sw, sh, ch) = (src.width as usize, src.height as usize, src.channels);
     if ch == 1 && (dst_w, dst_h) == (src.width, src.height) {
-        return GrayImage { width: dst_w, height: dst_h, pixels: src.data[..sw * sh].to_vec() };
+        let mut pixels = src.data;
+        pixels.truncate(sw * sh);
+        return GrayImage { width: dst_w, height: dst_h, pixels };
     }
     let (dw, dh) = (dst_w as usize, dst_h as usize);
     let htaps = taps(src.width, dst_w);

@@ -87,26 +87,34 @@ impl FontLibrary {
 
     /// Best face for a CSS family list, weight and style: the first listed family that is
     /// installed, else the default; within it the matching style, then the closest weight.
+    /// A face whose file fails to load gives way to the next best one.
     pub fn pick(&self, families: &[String], weight: u16, italic: bool) -> Option<&Face> {
-        let installed = |f: &str| self.entries.iter().any(|e| e.family == f);
-        let wanted = families
-            .iter()
-            .map(|f| f.trim().to_lowercase())
-            .find_map(|f| match f.as_str() {
-                "serif" => Some(self.default_family.clone()),
-                "sans-serif" => SANS.iter().find(|s| installed(s)).map(|s| s.to_string()),
-                _ if installed(&f) => Some(f),
-                _ => None,
+        // Called per text run: no allocation on the hit path. Family names are matched
+        // ignoring ASCII case only (CSS family names are ASCII in practice).
+        let installed =
+            |f: &str| self.entries.iter().find(|e| e.family.eq_ignore_ascii_case(f)).map(|e| e.family.as_str());
+        let wanted = (families.iter().map(|f| f.trim()))
+            .find_map(|f| {
+                if f.eq_ignore_ascii_case("serif") {
+                    Some(self.default_family.as_str())
+                } else if f.eq_ignore_ascii_case("sans-serif") {
+                    SANS.iter().find_map(|s| installed(s))
+                } else {
+                    installed(f)
+                }
             })
-            .unwrap_or_else(|| self.default_family.clone());
-        let best = |family: &str| {
-            (self.entries.iter().enumerate())
-                .filter(|(_, e)| e.family == family)
-                .min_by_key(|(_, e)| ((e.italic != italic) as u16, e.weight.abs_diff(weight)))
-                .map(|(i, _)| i)
+            .unwrap_or(&self.default_family);
+        let rank = |i: &usize| {
+            let e = &self.entries[*i];
+            (e.family != wanted, e.family != self.default_family, e.italic != italic, e.weight.abs_diff(weight))
         };
-        let id = best(&wanted).or_else(|| best(&self.default_family)).or((!self.entries.is_empty()).then_some(0))?;
-        self.face(id as u32)
+        let best = (0..self.entries.len()).min_by_key(rank)?;
+        if let Some(face) = self.face(best as u32) {
+            return Some(face);
+        }
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        order.sort_by_key(rank);
+        order.into_iter().find_map(|i| self.face(i as u32))
     }
 }
 
@@ -159,5 +167,22 @@ mod tests {
         assert_eq!(id(&["Baskerville"], 400, false).as_deref(), Some("Baskerville-Regular.ttf"));
         assert_eq!(id(&["Baskerville"], 700, false).as_deref(), Some("Baskerville-Regular.ttf"), "closest weight");
         assert_eq!(id(&["unknown"], 400, true).as_deref(), Some("Bookerly-Italic.ttf"), "default family");
+        assert_eq!(id(&["BASKERVILLE "], 400, false).as_deref(), Some("Baskerville-Regular.ttf"), "case, spaces");
+
+        // A perfect match whose file is gone gives way to the next best face. (Fresh library:
+        // faces loaded above carry their entry index as id.)
+        let mut lib = FontLibrary::new("Bookerly");
+        lib.add_dir(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../dev-fonts")));
+        let broken = Entry {
+            path: PathBuf::from("/nonexistent/Bookerly-Gone.ttf"),
+            family: "bookerly".into(),
+            weight: 400,
+            italic: false,
+            face: OnceCell::new(),
+        };
+        lib.entries.insert(0, broken);
+        let face = lib.pick(&["serif".to_string()], 400, false).expect("a face");
+        let name = lib.entries[face.id as usize].path.file_name().and_then(|n| n.to_str());
+        assert_eq!(name, Some("Bookerly-Regular.ttf"));
     }
 }

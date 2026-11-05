@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::BufReader;
+use std::mem::take;
 use std::path::Path;
 
 use crate::dom::{Dom, NodeKind};
@@ -12,6 +13,7 @@ use crate::image;
 use crate::layout::flow::{self, Block};
 use crate::layout::page::{self, Page};
 use crate::layout::paragraph::Typesetter;
+use crate::library::Format;
 use crate::mobi::{Mobi, MobiError};
 use crate::style::cascade::{compute, Preferences, Stylesheets};
 
@@ -53,16 +55,15 @@ pub struct Chapter {
 impl Book {
     /// Opens an EPUB, or an AZW3/MOBI/AZW file by extension.
     pub fn open(path: &Path) -> Result<Book, BookError> {
-        let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-        if matches!(ext.as_deref(), Some("azw3" | "azw" | "mobi" | "prc")) {
-            let mobi = Mobi::open(path)?;
-            let (chapters, metadata, toc) = (mobi.chapters.clone(), mobi.metadata.clone(), mobi.toc.clone());
+        if matches!(Format::from_path(path), Some(Format::Azw3 | Format::Mobi)) {
+            let mut mobi = Mobi::open(path)?;
+            let (chapters, metadata, toc) = (take(&mut mobi.chapters), take(&mut mobi.metadata), take(&mut mobi.toc));
             return Ok(Book { source: RefCell::new(Source::Mobi(mobi)), metadata, chapters, toc });
         }
-        let epub = Epub::open(BufReader::new(File::open(path).map_err(EpubError::from)?))?;
+        let mut epub = Epub::open(BufReader::new(File::open(path).map_err(EpubError::from)?))?;
         let chapters =
             (epub.spine.iter()).filter(|s| s.linear && s.media_type.contains("html")).map(|s| s.path.clone()).collect();
-        let (metadata, toc) = (epub.metadata.clone(), epub.toc.clone());
+        let (metadata, toc) = (take(&mut epub.metadata), take(&mut epub.toc));
         Ok(Book { source: RefCell::new(Source::Epub(epub)), metadata, chapters, toc })
     }
 
@@ -79,6 +80,15 @@ impl Book {
         match &mut *self.source.borrow_mut() {
             Source::Epub(e) => e.read(path).ok(),
             Source::Mobi(m) => m.read(path).ok(),
+        }
+    }
+
+    /// Pixel size of an image member, from its header.
+    fn image_size(&self, path: &str) -> Option<(u32, u32)> {
+        match &mut *self.source.borrow_mut() {
+            // ponytail: the whole entry is inflated for its header; read a prefix if it shows up.
+            Source::Epub(e) => image::dimensions(&e.read(path).ok()?),
+            Source::Mobi(m) => m.image_size(path),
         }
     }
 
@@ -125,8 +135,7 @@ impl Book {
         let mut blocks = flow::blocks(&dom, &styles, self.metadata.language.as_deref());
         for img in blocks.iter_mut().filter_map(|b| b.image.as_mut()) {
             img.src = resolve(&path, &img.src);
-            // ponytail: the whole entry is inflated for its header; read a prefix if it shows up.
-            img.intrinsic = self.resource(&img.src).and_then(|b| image::dimensions(&b));
+            img.intrinsic = self.image_size(&img.src);
         }
         let pages = page::layout(&blocks, &styles, fonts, ts, height);
         Ok(Chapter { dom, blocks, pages })

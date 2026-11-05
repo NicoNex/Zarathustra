@@ -2,17 +2,22 @@
 //! its fragments. The SKEL index locates skeletons, the FRAG index says where each fragment is
 //! inserted. Flows (CSS, SVG) follow the text, delimited by the FDST record.
 
-use std::collections::HashMap;
+use std::cell::OnceCell;
+use std::collections::VecDeque;
 use std::ops::Range;
 
+use memchr::{memchr, memmem};
+
 use super::index::Index;
-use super::{attr_value, be_u32, find, part_path, MobiError};
+use super::{attr_value, be_u32, part_path, MobiError};
 
 pub struct Kf8 {
     text: Vec<u8>,
     flows: Vec<Range<usize>>,
     files: Vec<File>,
     frags: Vec<Frag>,
+    /// Per file, its anchors once a link or TOC entry needed them (`None`: it did not assemble).
+    anchors: Vec<OnceCell<Option<Anchors>>>,
 }
 
 struct File {
@@ -32,8 +37,6 @@ struct Frag {
 
 /// Ids of a part's elements as (offset of the start tag's `<`, id), in document order.
 type Anchors = Vec<(usize, String)>;
-/// Anchors of the parts seen while resolving the links of one part.
-type Cache = HashMap<usize, Anchors>;
 
 impl Kf8 {
     pub fn new(text: Vec<u8>, fdst: Option<&[u8]>, skel: &Index, frag: &Index) -> Result<Kf8, MobiError> {
@@ -74,7 +77,8 @@ impl Kf8 {
             });
             next_frag = range.end;
         }
-        Ok(Kf8 { text, flows, files, frags })
+        let anchors = files.iter().map(|_| OnceCell::new()).collect();
+        Ok(Kf8 { text, flows, files, frags, anchors })
     }
 
     pub fn parts(&self) -> usize {
@@ -84,15 +88,40 @@ impl Kf8 {
     /// Raw XHTML of part `i`: the skeleton with its fragments spliced in.
     fn assemble(&self, i: usize) -> Result<Vec<u8>, MobiError> {
         let f = self.files.get(i).ok_or_else(|| MobiError::NotFound(part_path(i)))?;
-        // Bounds were checked in `new`.
+        let bad = || MobiError::Malformed("fragment insert position");
+        // Bounds were checked in `new`. Insert positions normally only move forward, so the
+        // part is built in one pass: `part` is final, `pending` holds (in order) the text
+        // ranges still to come, and each fragment is queued at the front of `pending` once
+        // everything before its position has been emitted.
         let mut part = Vec::with_capacity(f.len);
-        part.extend_from_slice(&self.text[f.start..f.start + f.skel_len]);
+        let mut pending = VecDeque::new();
+        pending.push_back(f.start..f.start + f.skel_len);
         let mut at = f.start + f.skel_len;
         for fr in &self.frags[f.frags.clone()] {
-            let pos = fr.insert.checked_sub(f.start).filter(|&p| p <= part.len());
-            let pos = pos.ok_or(MobiError::Malformed("fragment insert position"))?;
-            part.splice(pos..pos, self.text[at..at + fr.len].iter().copied());
+            let src = at..at + fr.len;
             at += fr.len;
+            let pos = fr.insert.checked_sub(f.start).ok_or_else(bad)?;
+            if pos < part.len() {
+                // Backwards: flush and splice (quadratic, but no known book does this).
+                for r in pending.drain(..) {
+                    part.extend_from_slice(&self.text[r]);
+                }
+                part.splice(pos..pos, self.text[src].iter().copied());
+                continue;
+            }
+            while part.len() < pos {
+                let r = pending.front_mut().ok_or_else(bad)?;
+                let take = r.len().min(pos - part.len());
+                part.extend_from_slice(&self.text[r.start..r.start + take]);
+                r.start += take;
+                if r.start == r.end {
+                    pending.pop_front();
+                }
+            }
+            pending.push_front(src);
+        }
+        for r in pending {
+            part.extend_from_slice(&self.text[r]);
         }
         Ok(part)
     }
@@ -100,21 +129,20 @@ impl Kf8 {
     /// Part `i` with `kindle:` references rewritten to `partNNNN.xhtml#id`, `flowNNNN.css`
     /// and resource paths (from `res`, given the 0-based resource index).
     pub fn part(&self, i: usize, res: &dyn Fn(usize) -> String) -> Result<Vec<u8>, MobiError> {
-        let raw = self.assemble(i)?;
-        let mut cache = Cache::new();
-        Ok(self.rewrite(&raw, res, &mut cache))
+        Ok(self.rewrite(&self.assemble(i)?, res))
     }
 
     /// Flow `i` (flow 0 is the text itself) with resource references rewritten.
     pub fn flow(&self, i: usize, res: &dyn Fn(usize) -> String) -> Result<Vec<u8>, MobiError> {
         let r = self.flows.get(i).ok_or_else(|| MobiError::NotFound(format!("flow {i}")))?;
-        Ok(self.rewrite(&self.text[r.clone()], res, &mut Cache::new()))
+        Ok(self.rewrite(&self.text[r.clone()], res))
     }
 
-    fn rewrite(&self, src: &[u8], res: &dyn Fn(usize) -> String, cache: &mut Cache) -> Vec<u8> {
+    fn rewrite(&self, src: &[u8], res: &dyn Fn(usize) -> String) -> Vec<u8> {
         let mut out = Vec::with_capacity(src.len());
         let mut i = 0;
-        while let Some(k) = find(&src[i..], b"kindle:") {
+        let finder = memmem::Finder::new(b"kindle:");
+        while let Some(k) = finder.find(&src[i..]) {
             let at = i + k;
             out.extend_from_slice(&src[i..at]);
             let end = src[at..]
@@ -122,7 +150,7 @@ impl Kf8 {
                 .position(|&b| matches!(b, b'"' | b'\'' | b'(' | b')' | b'<' | b'>') || b.is_ascii_whitespace())
                 .map_or(src.len(), |p| at + p);
             let token = &src[at..end];
-            match std::str::from_utf8(token).ok().and_then(|t| self.resolve(t, res, cache)) {
+            match std::str::from_utf8(token).ok().and_then(|t| self.resolve(t, res)) {
                 Some(s) => out.extend_from_slice(s.as_bytes()),
                 None => out.extend_from_slice(token),
             }
@@ -132,12 +160,12 @@ impl Kf8 {
         out
     }
 
-    fn resolve(&self, token: &str, res: &dyn Fn(usize) -> String, cache: &mut Cache) -> Option<String> {
+    fn resolve(&self, token: &str, res: &dyn Fn(usize) -> String) -> Option<String> {
         if let Some(r) = token.strip_prefix("kindle:pos:fid:") {
             let (fid, off) = r.split_once(":off:")?;
             let off = base32(off.split(['?', '#']).next()?)?;
             let pos = self.frags.get(base32(fid)?)?.insert.checked_add(off)?;
-            return self.target(pos, cache);
+            return self.target(pos);
         }
         if let Some(r) = token.strip_prefix("kindle:embed:") {
             return Some(res(base32(r.split(['?', '#']).next()?)?.checked_sub(1)?));
@@ -153,12 +181,10 @@ impl Kf8 {
     }
 
     /// Link target for a text position: the part containing it plus the nearest preceding id.
-    fn target(&self, pos: usize, cache: &mut Cache) -> Option<String> {
+    fn target(&self, pos: usize) -> Option<String> {
         let fi = self.files.iter().position(|f| pos >= f.start && pos < f.start + f.len)?;
-        if let std::collections::hash_map::Entry::Vacant(v) = cache.entry(fi) {
-            v.insert(anchors(&self.assemble(fi).ok()?));
-        }
-        Some(match anchor_at(cache.get(&fi)?, pos - self.files[fi].start) {
+        let ids = self.anchors[fi].get_or_init(|| self.assemble(fi).ok().map(|p| anchors(&p))).as_ref()?;
+        Some(match anchor_at(ids, pos - self.files[fi].start) {
             Some(id) => format!("{}#{id}", part_path(fi)),
             None => part_path(fi),
         })
@@ -170,7 +196,7 @@ impl Kf8 {
             Some((fid, off)) => self.frags.get(fid as usize).and_then(|f| f.insert.checked_add(off as usize)),
             None => pos.map(|p| p as usize),
         };
-        pos.and_then(|p| self.target(p, &mut Cache::new())).unwrap_or_default()
+        pos.and_then(|p| self.target(p)).unwrap_or_default()
     }
 }
 
@@ -192,9 +218,9 @@ fn flows(fdst: &[u8], text_len: usize) -> Option<Vec<Range<usize>>> {
 fn anchors(part: &[u8]) -> Anchors {
     let mut out = Vec::new();
     let mut i = 0;
-    while let Some(l) = find(&part[i..], b"<") {
+    while let Some(l) = memchr(b'<', &part[i..]) {
         let start = i + l;
-        let Some(g) = find(&part[start..], b">") else { break };
+        let Some(g) = memchr(b'>', &part[start..]) else { break };
         let tag = &part[start + 1..start + g];
         if !tag.starts_with(b"/") {
             // `name` anchors only on <a>: <meta name=…> is not a link target.
@@ -221,7 +247,7 @@ fn base32(s: &str) -> Option<usize> {
     if s.is_empty() || s.len() > 12 {
         return None;
     }
-    s.chars().try_fold(0usize, |acc, c| Some(acc * 32 + c.to_digit(32)? as usize))
+    s.chars().try_fold(0usize, |acc, c| acc.checked_mul(32)?.checked_add(c.to_digit(32)? as usize))
 }
 
 #[cfg(test)]
@@ -237,30 +263,48 @@ mod tests {
 
     /// One file: `SKEL` with `FRAG1` inserted after `<p id="a">` (offset 22) and `FRAG2` after it.
     fn sample() -> Kf8 {
-        let text = [SKEL, FRAG1, FRAG2, CSS].concat();
-        let (s, f1, f2) = (SKEL.len() as u32, FRAG1.len() as u32, FRAG2.len() as u32);
+        build(SKEL, &[(b"22", FRAG1), (b"28", FRAG2)], CSS)
+    }
+
+    /// One file: `skel`, then `frags` as (insert position label, bytes), then a CSS flow.
+    fn build(skel_text: &[u8], frags: &[(&[u8], &[u8])], css: &[u8]) -> Kf8 {
+        let mut text = skel_text.to_vec();
+        let s = skel_text.len() as u32;
         let skel_tagx = [[1, 1, 0x01, 0], [6, 2, 0x02, 0], [0, 0, 0, 1]];
         let mut e = vec![0x03];
-        for v in [2, 0, s] {
+        for v in [frags.len() as u32, 0, s] {
             e.extend(enc(v));
         }
         let skel = build_index(&skel_tagx, 1, &[(b"SKEL0000000000", e)], None);
         let frag_tagx = [[6, 2, 0x01, 0], [0, 0, 0, 1]];
-        let frag_entry = |start: u32, len: u32| {
-            let mut e = vec![0x01];
-            e.extend(enc(start));
-            e.extend(enc(len));
-            e
-        };
-        let frag = build_index(&frag_tagx, 1, &[(b"22", frag_entry(s, f1)), (b"28", frag_entry(s + f1, f2))], None);
+        let entries: Vec<(&[u8], Vec<u8>)> = frags
+            .iter()
+            .map(|&(label, bytes)| {
+                let mut e = vec![0x01];
+                e.extend(enc(text.len() as u32));
+                e.extend(enc(bytes.len() as u32));
+                text.extend_from_slice(bytes);
+                (label, e)
+            })
+            .collect();
+        let frag = build_index(&frag_tagx, 1, &entries, None);
         let skel = read(|i| skel.get(i).map(Vec::as_slice), 0).expect("skel");
         let frag = read(|i| frag.get(i).map(Vec::as_slice), 0).expect("frag");
         let mut fdst = b"FDST".to_vec();
-        let flow0 = s + f1 + f2;
+        let flow0 = text.len() as u32;
+        text.extend_from_slice(css);
         for v in [12u32, 2, 0, flow0, flow0, text.len() as u32] {
             fdst.extend_from_slice(&v.to_be_bytes());
         }
         Kf8::new(text, Some(&fdst), &skel, &frag).expect("kf8")
+    }
+
+    #[test]
+    fn fragments_insert_forwards_backwards_and_inside_each_other() {
+        let kf8 = build(b"<p>ab</p>", &[(b"5", b"[1]"), (b"6", b"<2>"), (b"3", b"Y")], b"");
+        let part = kf8.assemble(0).expect("assembles");
+        assert_eq!(String::from_utf8(part).expect("utf8"), "<p>Yab[<2>1]</p>");
+        assert!(build(b"<p></p>", &[(b"99", b"x")], b"").assemble(0).is_err(), "past the end");
     }
 
     #[test]
