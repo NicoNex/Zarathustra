@@ -9,9 +9,12 @@ use omero_engine::font::{Face, Rasterizer};
 use omero_engine::image::{self, GrayImage};
 use omero_engine::library::{BookEntry, Library, SortBy};
 
+use crate::about::About;
+use crate::bookmenu::{self, BookMenu, Item};
 use crate::i18n::t;
 use crate::notebook::{self, Notebook};
 use crate::reader::Position;
+use crate::stats::StatsScreen;
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
 use crate::{Action, Ctx, H, W};
 
@@ -35,6 +38,7 @@ const ROW_COVER: (i32, i32) = (100, 150);
 const RADIUS: i32 = 10;
 const EXIT: Rect = Rect { x: W - PAD - 150, y: 82, w: 150, h: 72 };
 const VIEW: Rect = Rect { x: W - PAD - 150 - 32 - 192, y: 82, w: 192, h: 72 };
+const STATS: Rect = Rect { x: VIEW.x - 32 - 72, y: 82, w: 72, h: 72 };
 /// Progress from which a book counts as read.
 const FINISHED: f32 = 0.99;
 
@@ -72,6 +76,14 @@ impl Entry {
     }
 }
 
+/// A screen or sheet over the library; `usize` is the book's index in `books`.
+enum Overlay {
+    Menu(usize, BookMenu),
+    Notebook(usize, Notebook),
+    About(usize, Box<About>),
+    Stats(StatsScreen),
+}
+
 pub struct Home {
     books: Vec<Entry>,
     /// The book in the "continue reading" card, if any, and its card-size cover.
@@ -83,7 +95,7 @@ pub struct Home {
     page: usize,
     view_file: PathBuf,
     /// A book's highlights over the library: index into `books`, the list.
-    notebook: Option<(usize, Notebook)>,
+    overlay: Option<Overlay>,
 }
 
 fn cover(thumb: Option<&Path>, (w, h): (i32, i32)) -> Option<GrayImage> {
@@ -116,7 +128,7 @@ impl Home {
         let view_file = ctx.state_dir.join("home_view.txt");
         let grid = std::fs::read_to_string(&view_file).map_or(true, |v| v.trim() != "list");
         let mut home =
-            Home { books, current, filter: Filter::All, grid, shown: Vec::new(), page: 0, view_file, notebook: None };
+            Home { books, current, filter: Filter::All, grid, shown: Vec::new(), page: 0, view_file, overlay: None };
         home.set_filter(Filter::All);
         home
     }
@@ -200,9 +212,19 @@ impl Home {
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
-        if let Some((_, nb)) = &self.notebook {
-            return nb.render(c, ctx);
+        match &self.overlay {
+            None => self.render_library(c, ctx),
+            Some(Overlay::Menu(i, menu)) => {
+                self.render_library(c, ctx);
+                menu.render(c, ctx, self.books[*i].small.as_ref());
+            }
+            Some(Overlay::Notebook(_, nb)) => nb.render(c, ctx),
+            Some(Overlay::About(i, about)) => about.render(c, ctx, self.books[*i].cover.as_ref()),
+            Some(Overlay::Stats(stats)) => stats.render(c, ctx),
         }
+    }
+
+    fn render_library(&self, c: &mut Canvas, ctx: &mut Ctx) {
         c.fill(c.bounds(), PAPER);
         let Ctx { fonts, raster, .. } = ctx;
         let (Some(serif), Some(serif_bold), Some(sans), Some(sans_bold)) = (
@@ -217,6 +239,7 @@ impl Home {
 
         Label { face: serif_bold, size: 66.0, ink: INK }.draw(c, raster, t().library, PAD as f32, 150);
         self.view_toggle(c);
+        stats_button(c);
         rounded_outline(c, EXIT, EXIT.h / 2, 3, INK, PAPER);
         let exit = Label { face: sans, size: 30.0, ink: INK };
         exit.draw_centred(c, raster, t().exit, (EXIT.x + EXIT.w / 2) as f32, EXIT.y + 47);
@@ -309,35 +332,104 @@ impl Home {
         self.items().into_iter().find(|(_, r)| r.contains(x, y)).map(|(i, _)| i)
     }
 
-    /// A long press: a book's highlights.
+    /// A long press on a book: its menu.
     pub fn long_press(&mut self, at: (i32, i32), ctx: &Ctx) -> Action {
-        if self.notebook.is_some() {
+        if self.overlay.is_some() {
             return Action::None;
         }
         let Some(i) = self.book_at(at) else { return Action::None };
         let b = &self.books[i];
-        let highlights = notebook::load(&ctx.state_dir, &b.book.path);
-        self.notebook = Some((i, Notebook::new(ctx, &b.book.title, &b.author(), highlights)));
+        let highlights = notebook::load(&ctx.state_dir, &b.book.path).len();
+        let finished = b.status() == Filter::Finished;
+        let menu = BookMenu::new(&b.book.title, &b.author(), b.progress.map(|p| p.0), finished, highlights);
+        self.overlay = Some(Overlay::Menu(i, menu));
         Action::Redraw { turn: None }
     }
 
-    /// Handles a completed touch from `(x0, y0)` to `(x, y)`.
-    pub fn tap(&mut self, (x0, y0): (i32, i32), (x, y): (i32, i32), ctx: &Ctx) -> Action {
-        if let Some((i, nb)) = &mut self.notebook {
-            return match nb.tap((x0, y0), x) {
+    /// Touches while a sheet or screen covers the library.
+    fn overlay_tap(&mut self, start: (i32, i32), x: i32, ctx: &Ctx) -> Action {
+        let redraw = Action::Redraw { turn: None };
+        let Some(overlay) = &mut self.overlay else { return Action::None };
+        match overlay {
+            Overlay::Menu(i, menu) => {
+                let i = *i;
+                let b = &self.books[i];
+                match menu.tap(start) {
+                    bookmenu::Tap::None => return Action::None,
+                    bookmenu::Tap::Close => self.overlay = None,
+                    bookmenu::Tap::Item(Item::Open) => {
+                        self.overlay = None;
+                        return Action::Open(b.book.path.clone());
+                    }
+                    bookmenu::Tap::Item(Item::About) => {
+                        let about = About::new(&ctx.state_dir, &b.book.path, &b.book.title, &b.author());
+                        self.overlay = Some(Overlay::About(i, Box::new(about)));
+                    }
+                    bookmenu::Tap::Item(Item::Highlights) => {
+                        let list = notebook::load(&ctx.state_dir, &b.book.path);
+                        self.overlay = Some(Overlay::Notebook(i, Notebook::new(ctx, &b.book.title, &b.author(), list)));
+                    }
+                    bookmenu::Tap::Item(Item::MarkRead(read)) => {
+                        self.overlay = None;
+                        self.mark_read(i, read, ctx);
+                    }
+                }
+                redraw
+            }
+            Overlay::Notebook(i, nb) => match nb.tap(start, x) {
                 notebook::Tap::None => Action::None,
-                notebook::Tap::Redraw => Action::Redraw { turn: None },
+                notebook::Tap::Redraw => redraw,
                 notebook::Tap::Back => {
-                    self.notebook = None;
-                    Action::Redraw { turn: None }
+                    self.overlay = None;
+                    redraw
                 }
                 notebook::Tap::Open(n) => {
                     let path = self.books[*i].book.path.clone();
                     let data = nb.highlights[n].data.clone();
-                    self.notebook = None;
+                    self.overlay = None;
                     Action::OpenAt(path, Box::new(data))
                 }
-            };
+            },
+            Overlay::About(_, about) if about.back(start) => {
+                self.overlay = None;
+                redraw
+            }
+            Overlay::Stats(stats) if stats.back(start) => {
+                self.overlay = None;
+                redraw
+            }
+            Overlay::About(..) | Overlay::Stats(_) => Action::None,
+        }
+    }
+
+    /// Marks book `i` as read (progress 100%, the position kept) or unread (the saved
+    /// position removed: the book starts over).
+    fn mark_read(&mut self, i: usize, read: bool, ctx: &Ctx) {
+        let state = ctx.state_file(&self.books[i].book.path);
+        let done = if read {
+            let p = Position::load(&state);
+            let (chapter, block, offset) = p.map_or((0, 0, 0), |p| (p.chapter, p.block, p.offset));
+            crate::write_atomic(&state, format!("{chapter} {block} 1.0000 {offset}\n"))
+        } else {
+            std::fs::remove_file(&state)
+                .or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+        };
+        if let Err(e) = done {
+            return eprintln!("mark read: {e}");
+        }
+        self.books[i].progress = read.then(|| (1.0, SystemTime::now()));
+        if self.current.as_ref().is_some_and(|(c, _)| *c == i) {
+            self.current = None;
+        }
+        let page = self.page;
+        self.set_filter(self.filter);
+        self.page = page.min(self.pages() - 1);
+    }
+
+    /// Handles a completed touch from `(x0, y0)` to `(x, y)`.
+    pub fn tap(&mut self, (x0, y0): (i32, i32), (x, y): (i32, i32), ctx: &Ctx) -> Action {
+        if self.overlay.is_some() {
+            return self.overlay_tap((x0, y0), x, ctx);
         }
         let (dx, dy) = (x - x0, y - y0);
         let pages = self.pages();
@@ -356,6 +448,11 @@ impl Home {
             return turn(&mut self.page, forward);
         }
         let inside = |r: Rect| r.contains(x0, y0);
+        if inside(STATS) {
+            let finished = self.books.iter().filter(|b| b.status() == Filter::Finished).count();
+            self.overlay = Some(Overlay::Stats(StatsScreen::new(&ctx.state_dir, finished)));
+            return Action::Redraw { turn: None };
+        }
         if inside(EXIT) {
             return Action::Quit;
         }
@@ -384,6 +481,15 @@ impl Home {
             Some(i) => Action::Open(self.books[i].book.path.clone()),
             None => Action::None,
         }
+    }
+}
+
+/// The statistics button: three rising bars in a ring.
+fn stats_button(c: &mut Canvas) {
+    rounded_outline(c, STATS, STATS.h / 2, 2, LINE, PAPER);
+    let (x, base) = (STATS.x + STATS.w / 2 - 17, STATS.y + STATS.h / 2 + 14);
+    for (n, h) in [14, 22, 30].into_iter().enumerate() {
+        rounded_rect(c, Rect::new(x + n as i32 * 12, base - h, 8, h), 2, INK);
     }
 }
 

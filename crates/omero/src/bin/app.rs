@@ -121,6 +121,20 @@ fn main() -> Result<()> {
         home.tap((900, 800), (300, 800), &ctx); // swipe to the second page
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("home2.pgm"), &px)?;
+        // Book menu on the first cover, its About screen, then the statistics.
+        let mut shot = |home: &mut Home, ctx: &mut Ctx, at: Option<(i32, i32)>, name: &str| {
+            if let Some(at) = at {
+                home.tap(at, at, ctx);
+            }
+            home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, ctx);
+            write_pgm(dir.join(name), &px)
+        };
+        home.long_press((150, 400), &ctx);
+        shot(&mut home, &mut ctx, None, "bookmenu.pgm")?;
+        shot(&mut home, &mut ctx, Some((600, 1313)), "about.pgm")?;
+        home.tap((100, 75), (100, 75), &ctx);
+        shot(&mut home, &mut ctx, Some((722, 118)), "stats.pgm")?;
+        home.tap((100, 75), (100, 75), &ctx);
         if let Screen::Pdf(p) = &mut screen {
             for n in 0..3 {
                 p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);

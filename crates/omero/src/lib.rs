@@ -1,5 +1,7 @@
 //! The Omero shell: home, reader and the state they share.
 
+pub mod about;
+pub mod bookmenu;
 pub mod clock;
 pub mod highlight;
 pub mod home;
