@@ -84,7 +84,9 @@ impl Typography {
             "size={}\nfamily={family}\nspacing={}\nmargin={}\nalign={}\n",
             self.size, self.spacing, self.margin, self.align
         );
-        crate::write_atomic(&Self::path(state_dir), text).ok();
+        if let Err(e) = crate::write_atomic(&Self::path(state_dir), text) {
+            eprintln!("typography: {e}");
+        }
     }
 
     pub fn font_size(&self) -> f32 {
@@ -225,11 +227,9 @@ pub fn covers(ctx: &Ctx, y: i32) -> bool {
 pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, chapter: Option<&str>) {
     let l = Layout::new(families(ctx));
     let Ctx { fonts, raster, .. } = ctx;
-    let (Some(sans), Some(sans_bold), Some(serif_bold)) = (
-        fonts.pick(&["sans-serif".into()], 400, false),
-        fonts.pick(&["sans-serif".into()], 700, false),
-        fonts.pick(&["serif".into()], 700, false),
-    ) else {
+    let (Some(sans), Some(sans_bold), Some(serif_bold)) =
+        (crate::sans(fonts, false), crate::sans(fonts, true), crate::serif(fonts, true))
+    else {
         return;
     };
 
@@ -297,7 +297,7 @@ pub fn topbar(c: &mut Canvas, raster: &mut Rasterizer, sans: &Face, serif_bold: 
     b.draw(c, raster, back, PAD as f32, 92);
     let t = Label { face: serif_bold, size: 34.0, ink: INK };
     let text = t.fit(title, (W - 2 * 380) as f32);
-    t.draw(c, raster, &text, (W as f32 - t.width(&text)) / 2.0, 92);
+    t.draw_centred(c, raster, &text, W as f32 / 2.0, 92);
 }
 
 fn title_case(s: &str) -> String {

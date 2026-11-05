@@ -2,7 +2,7 @@
 //! lines of text, in the grayscale palette of the design spec.
 
 use omero_device::{Canvas, Rect};
-use omero_engine::font::{draw_glyph, Face, Rasterizer};
+use omero_engine::font::{draw_glyph, Face, Rasterizer, ShapedGlyph};
 
 /// Palette (0 = black).
 pub const INK: u8 = 0;
@@ -130,34 +130,78 @@ pub struct Label<'a> {
 }
 
 impl Label<'_> {
-    pub fn width(&self, text: &str) -> f32 {
+    fn shape(&self, text: &str) -> Vec<ShapedGlyph> {
         let mut shaped = Vec::new();
         self.face.shape(text, self.size, None, &mut shaped);
-        shaped.iter().map(|g| g.x_advance).sum()
+        shaped
+    }
+
+    pub fn width(&self, text: &str) -> f32 {
+        advance(&self.shape(text))
     }
 
     /// `text` cut with an ellipsis so it fits in `max_width`.
     pub fn fit(&self, text: &str, max_width: f32) -> String {
-        if self.width(text) <= max_width {
-            return text.to_string();
+        self.cut(text, &self.shape(text), max_width).unwrap_or_else(|| text.to_string())
+    }
+
+    /// `text` (shaped as `shaped`) cut with an ellipsis to fit `max_width`, `None` when it
+    /// fits whole: one shaping, cut at the first cluster that would cross the ellipsis.
+    // ponytail: ignores kerning across the cut, a pixel or two at UI sizes.
+    fn cut(&self, text: &str, shaped: &[ShapedGlyph], max_width: f32) -> Option<String> {
+        if advance(shaped) <= max_width {
+            return None;
         }
-        let mut cut: Vec<char> = text.chars().collect();
-        while !cut.is_empty() {
-            cut.pop();
-            let s: String = cut.iter().collect::<String>().trim_end().to_string() + "…";
-            if self.width(&s) <= max_width {
-                return s;
+        let budget = max_width - self.width("…");
+        let mut pen = 0.0;
+        let over = shaped.iter().find(|g| {
+            pen += g.x_advance;
+            pen > budget
+        });
+        let at = over.map_or(text.len(), |g| g.cluster as usize);
+        Some(format!("{}…", text.get(..at).unwrap_or("").trim_end()))
+    }
+
+    /// Greedy word wrap into at most `max` lines, the last one ellipsized when text is left.
+    pub fn wrap(&self, text: &str, width: f32, max: usize) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        let mut words = text.split_whitespace().peekable();
+        while let Some(w) = words.next() {
+            let mut line = w.to_string();
+            while let Some(next) = words.peek() {
+                let candidate = format!("{line} {next}");
+                if self.width(&candidate) > width {
+                    break;
+                }
+                line = candidate;
+                words.next();
             }
+            if lines.len() + 1 >= max {
+                let rest: Vec<&str> = words.collect();
+                let full = if rest.is_empty() { line } else { format!("{line} {}", rest.join(" ")) };
+                lines.push(self.fit(&full, width));
+                break;
+            }
+            lines.push(self.fit(&line, width));
         }
-        "…".into()
+        lines
     }
 
     /// Draws `text` centred in `r` (fitted to its width), with the baseline set for a
     /// capital height of about 0.7 em.
     pub fn centered(&self, c: &mut Canvas, raster: &mut Rasterizer, text: &str, r: Rect) {
-        let text = self.fit(text, (r.w - 24) as f32);
-        let x = r.x as f32 + (r.w as f32 - self.width(&text)) / 2.0;
-        self.draw(c, raster, &text, x, self.baseline(r));
+        let mut shaped = self.shape(text);
+        if let Some(cut) = self.cut(text, &shaped, (r.w - 24) as f32) {
+            shaped = self.shape(&cut);
+        }
+        let x = r.x as f32 + (r.w as f32 - advance(&shaped)) / 2.0;
+        self.draw_glyphs(c, raster, &shaped, x, self.baseline(r));
+    }
+
+    /// Draws `text` centred on `cx`, with its baseline at `y`.
+    pub fn draw_centred(&self, c: &mut Canvas, raster: &mut Rasterizer, text: &str, cx: f32, y: i32) {
+        let shaped = self.shape(text);
+        self.draw_glyphs(c, raster, &shaped, cx - advance(&shaped) / 2.0, y);
     }
 
     /// Baseline that centres capitals vertically in `r`.
@@ -167,16 +211,22 @@ impl Label<'_> {
 
     /// Draws `text` with its baseline at `y`; returns the advance.
     pub fn draw(&self, c: &mut Canvas, raster: &mut Rasterizer, text: &str, x: f32, y: i32) -> f32 {
-        let mut shaped = Vec::new();
-        self.face.shape(text, self.size, None, &mut shaped);
+        self.draw_glyphs(c, raster, &self.shape(text), x, y)
+    }
+
+    fn draw_glyphs(&self, c: &mut Canvas, raster: &mut Rasterizer, shaped: &[ShapedGlyph], x: f32, y: i32) -> f32 {
         let mut pen = x;
-        for g in &shaped {
+        for g in shaped {
             let (gx, glyph) = raster.glyph(self.face, g.gid, self.size, pen + g.x_offset);
             draw_glyph(c, glyph, gx, y - g.y_offset.round() as i32, self.ink);
             pen += g.x_advance;
         }
         pen - x
     }
+}
+
+fn advance(shaped: &[ShapedGlyph]) -> f32 {
+    shaped.iter().map(|g| g.x_advance).sum()
 }
 
 #[cfg(test)]

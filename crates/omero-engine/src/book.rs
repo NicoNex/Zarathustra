@@ -40,6 +40,9 @@ pub struct Book {
     metadata: Metadata,
     /// Archive paths of the linear XHTML chapters, in reading order.
     pub chapters: Vec<String>,
+    /// Spine position of each chapter (the CFI's package step); the spine also holds
+    /// non-linear and non-XHTML items that `chapters` leaves out.
+    pub spine: Vec<usize>,
     /// Table of contents; targets are archive paths (as in `chapters`) plus `#fragment`.
     pub toc: Vec<TocEntry>,
 }
@@ -58,13 +61,16 @@ impl Book {
         if matches!(Format::from_path(path), Some(Format::Azw3 | Format::Mobi)) {
             let mut mobi = Mobi::open(path)?;
             let (chapters, metadata, toc) = (take(&mut mobi.chapters), take(&mut mobi.metadata), take(&mut mobi.toc));
-            return Ok(Book { source: RefCell::new(Source::Mobi(mobi)), metadata, chapters, toc });
+            let spine = (0..chapters.len()).collect();
+            return Ok(Book { source: RefCell::new(Source::Mobi(mobi)), metadata, chapters, spine, toc });
         }
         let mut epub = Epub::open(BufReader::new(File::open(path).map_err(EpubError::from)?))?;
-        let chapters =
-            (epub.spine.iter()).filter(|s| s.linear && s.media_type.contains("html")).map(|s| s.path.clone()).collect();
+        let (spine, chapters) = (epub.spine.iter().enumerate())
+            .filter(|(_, s)| s.linear && s.media_type.contains("html"))
+            .map(|(i, s)| (i, s.path.clone()))
+            .unzip();
         let (metadata, toc) = (take(&mut epub.metadata), take(&mut epub.toc));
-        Ok(Book { source: RefCell::new(Source::Epub(epub)), metadata, chapters, toc })
+        Ok(Book { source: RefCell::new(Source::Epub(epub)), metadata, chapters, spine, toc })
     }
 
     pub fn metadata(&self) -> &Metadata {

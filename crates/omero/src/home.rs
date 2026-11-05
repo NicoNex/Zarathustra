@@ -196,10 +196,10 @@ impl Home {
         c.fill(c.bounds(), PAPER);
         let Ctx { fonts, raster, .. } = ctx;
         let (Some(serif), Some(serif_bold), Some(sans), Some(sans_bold)) = (
-            fonts.pick(&["serif".into()], 400, false),
-            fonts.pick(&["serif".into()], 700, false),
-            fonts.pick(&["sans-serif".into()], 400, false),
-            fonts.pick(&["sans-serif".into()], 700, false),
+            crate::serif(fonts, false),
+            crate::serif(fonts, true),
+            crate::sans(fonts, false),
+            crate::sans(fonts, true),
         ) else {
             return;
         };
@@ -209,8 +209,7 @@ impl Home {
         self.view_toggle(c);
         rounded_outline(c, EXIT, EXIT.h / 2, 3, INK, PAPER);
         let exit = Label { face: sans, size: 30.0, ink: INK };
-        let x = EXIT.x as f32 + (EXIT.w as f32 - exit.width("Exit")) / 2.0;
-        exit.draw(c, raster, "Exit", x, EXIT.y + 47);
+        exit.draw_centred(c, raster, "Exit", (EXIT.x + EXIT.w / 2) as f32, EXIT.y + 47);
 
         if let (true, Some((i, big))) = (self.card(self.page), &self.current) {
             self.continue_card(c, raster, &faces, &self.books[*i], big.as_ref());
@@ -241,8 +240,7 @@ impl Home {
 
         if self.pages() > 1 {
             let label = format!("‹   {} / {}   ›", self.page + 1, self.pages());
-            let x = (W as f32 - soft.width(&label)) / 2.0;
-            soft.draw(c, raster, &label, x, H - FOOTER / 2 + 10);
+            soft.draw_centred(c, raster, &label, W as f32 / 2.0, H - FOOTER / 2 + 10);
         }
     }
 
@@ -309,7 +307,7 @@ impl Home {
             let forward = if dx.abs() > dy.abs() { dx < 0 } else { dy < 0 };
             return turn(&mut self.page, forward);
         }
-        let inside = |r: Rect| x0 >= r.x && x0 < r.right() && y0 >= r.y && y0 < r.bottom();
+        let inside = |r: Rect| r.contains(x0, y0);
         if inside(EXIT) {
             return Action::Quit;
         }
@@ -375,7 +373,7 @@ fn grid_cell(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r
         _ => {}
     }
     let title = Label { face: f.serif, size: 31.0, ink: INK };
-    let lines = wrap(&title, &book.book.title, CELL_W as f32, 2);
+    let lines = title.wrap(&book.book.title, CELL_W as f32, 2);
     for (n, line) in lines.iter().enumerate() {
         title.draw(c, raster, line, r.x as f32, y + 30 + n as i32 * 38);
     }
@@ -405,31 +403,6 @@ fn list_row(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r:
         soft.draw(c, raster, &s, right - soft.width(&s), r.y + 84);
     }
     c.fill(Rect::new(x as i32, r.bottom() - 1, r.right() - x as i32, 1), LINE);
-}
-
-/// Greedy word wrap into at most `max` lines, the last one ellipsized.
-fn wrap(label: &Label, text: &str, width: f32, max: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut words = text.split_whitespace().peekable();
-    while let Some(w) = words.next() {
-        let mut line = w.to_string();
-        while let Some(next) = words.peek() {
-            let candidate = format!("{line} {next}");
-            if label.width(&candidate) > width {
-                break;
-            }
-            line = candidate;
-            words.next();
-        }
-        if lines.len() + 1 == max {
-            let rest: Vec<&str> = words.collect();
-            let full = if rest.is_empty() { line } else { format!("{line} {}", rest.join(" ")) };
-            lines.push(label.fit(&full, width));
-            break;
-        }
-        lines.push(label.fit(&line, width));
-    }
-    lines
 }
 
 /// Draws the cover bottom-aligned and centred in `r` with rounded corners and a flat offset
@@ -464,16 +437,16 @@ fn draw_cover(
             rounded_rect(c, at, RADIUS, 60);
             let size = (at.w as f32 * 0.13).clamp(16.0, 40.0);
             let title = Label { face: f.serif_bold, size, ink: PAPER };
-            let lines = wrap(&title, &book.book.title, at.w as f32 * 0.8, 4);
+            let lines = title.wrap(&book.book.title, at.w as f32 * 0.8, 4);
             let line_h = (size * 1.25) as i32;
+            let cx = (at.x + at.w / 2) as f32;
             let top = at.y + at.h / 3 - lines.len() as i32 * line_h / 2;
             for (n, line) in lines.iter().enumerate() {
-                let x = at.x as f32 + (at.w as f32 - title.width(line)) / 2.0;
-                title.draw(c, raster, line, x, top + n as i32 * line_h);
+                title.draw_centred(c, raster, line, cx, top + n as i32 * line_h);
             }
             let author = Label { face: f.sans, size: size * 0.6, ink: 210 };
             let a = author.fit(&book.author(), at.w as f32 * 0.8);
-            author.draw(c, raster, &a, at.x as f32 + (at.w as f32 - author.width(&a)) / 2.0, at.bottom() - at.h / 8);
+            author.draw_centred(c, raster, &a, cx, at.bottom() - at.h / 8);
         }
     }
     at

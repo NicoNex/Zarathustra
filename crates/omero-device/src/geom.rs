@@ -24,6 +24,11 @@ impl Rect {
         self.y + self.h
     }
 
+    /// Whether the pixel `(x, y)` lies inside.
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
+    }
+
     /// Overlap of both rects; empty (all zero) when they don't overlap.
     pub fn intersect(&self, o: &Rect) -> Rect {
         let (x, y) = (self.x.max(o.x), self.y.max(o.y));

@@ -10,9 +10,10 @@ use anyhow::{bail, Context, Result};
 use omero_device::{Canvas, Rect};
 use omero_engine::book::{Book, Chapter};
 use omero_engine::font::draw_glyph;
+use omero_engine::layout::page::Page;
 use omero_engine::style::cascade::Preferences;
 
-use crate::highlight::{Highlights, Outcome};
+use crate::highlight::{page_start, Highlights, Outcome, TextPos};
 use crate::menu::{self, Control, Typography};
 use crate::pace::Pace;
 use crate::toc::{self, Toc};
@@ -54,11 +55,14 @@ pub struct Reader {
     hl: Highlights,
 }
 
-/// A saved reading position: chapter, first block on the page, progress through the book.
+/// A saved reading position: chapter, where the page starts (block and byte offset in the
+/// block's text), progress through the book.
 pub struct Position {
     pub chapter: usize,
     pub block: usize,
     pub progress: f32,
+    /// Files written before offsets were saved have none: the block's start.
+    pub offset: usize,
 }
 
 impl Position {
@@ -69,6 +73,7 @@ impl Position {
             chapter: it.next()?.parse().ok()?,
             block: it.next()?.parse().ok()?,
             progress: it.next().and_then(|p| p.parse().ok()).unwrap_or(0.0),
+            offset: it.next().and_then(|o| o.parse().ok()).unwrap_or(0),
         })
     }
 }
@@ -103,12 +108,13 @@ impl Reader {
             hl,
         };
         r.pace.restart(Instant::now());
-        r.load(r.chapter_index, ctx)?;
-        if let Some(block) = saved.map(|p| p.block) {
-            r.page = r.page_of(block);
+        // A cover-only, empty or broken chapter: start at the nearest one with pages.
+        let start = r.chapter_index;
+        if !r.load_readable(start, true, ctx) && !r.load_readable(start, false, ctx) {
+            bail!("no readable chapter");
         }
-        if r.chapter.pages.is_empty() {
-            r.turn(true, ctx)?; // cover-only or empty chapter: start at the first page with text
+        if let Some(p) = saved.filter(|p| p.chapter == r.chapter_index) {
+            r.page = r.page_of(TextPos::new(p.block, p.offset));
         }
         Ok(r)
     }
@@ -130,48 +136,89 @@ impl Reader {
         self.chapter = self.book.chapter(i, &self.prefs, &ctx.fonts, &mut ctx.ts, height)?;
         self.chapter_index = i;
         self.page = 0;
-        self.hl.chapter_loaded(&self.chapter, u32::try_from(i).unwrap_or(u32::MAX));
+        let spine = self.book.spine.get(i).copied().unwrap_or(i);
+        self.hl.chapter_loaded(&self.chapter, u32::try_from(spine).unwrap_or(u32::MAX));
         eprintln!("chapter {i}: {} pages in {:?}", self.chapter.pages.len(), t.elapsed());
         Ok(())
     }
 
-    /// The page showing block `block`: the last page starting at or before it.
-    fn page_of(&self, block: usize) -> usize {
-        (self.chapter.pages.iter()).rposition(|p| p.first_block().is_some_and(|b| b as usize <= block)).unwrap_or(0)
+    /// Loads the first chapter with pages from `i` on (`forward`) or back, skipping empty
+    /// chapters and ones that fail to load. False when there is none; an empty chapter may
+    /// then be loaded (see [`Reader::restore`]).
+    fn load_readable(&mut self, mut i: usize, forward: bool, ctx: &mut Ctx) -> bool {
+        loop {
+            match self.load(i, ctx) {
+                Ok(()) if !self.chapter.pages.is_empty() => return true,
+                Ok(()) => {}
+                Err(e) => eprintln!("chapter {i}: {e:#}"),
+            }
+            i = match (forward, i) {
+                (true, i) if i + 1 < self.book.chapters.len() => i + 1,
+                (false, i) if i > 0 => i - 1,
+                _ => return false,
+            };
+        }
     }
 
-    fn first_block(&self) -> usize {
-        self.chapter.pages.get(self.page).and_then(|p| p.first_block()).map_or(0, |b| b as usize)
+    /// Back to page `page` of chapter `chapter` after a move found nothing to show.
+    fn restore(&mut self, chapter: usize, page: usize, ctx: &mut Ctx) {
+        if self.chapter_index != chapter || self.chapter.pages.is_empty() {
+            if let Err(e) = self.load(chapter, ctx) {
+                eprintln!("chapter {chapter}: {e:#}");
+            }
+        }
+        self.page = page.min(self.chapter.pages.len().saturating_sub(1));
+    }
+
+    /// The page showing position `pos`: the last page starting at or before it.
+    fn page_of(&self, pos: TextPos) -> usize {
+        let blocks = &self.chapter.blocks;
+        (self.chapter.pages.iter()).rposition(|p| page_start(p, blocks).is_some_and(|s| s <= pos)).unwrap_or(0)
+    }
+
+    /// The first page showing block `block` (or what follows it, for a block without text).
+    fn first_page_of(&self, block: usize) -> usize {
+        let shows = |p: &Page| {
+            let lines = p.lines.iter().map(|l| l.block);
+            lines.chain(p.images.iter().map(|i| i.block)).any(|b| b as usize >= block)
+        };
+        self.chapter.pages.iter().position(shows).unwrap_or(self.chapter.pages.len().saturating_sub(1))
+    }
+
+    /// Where the page shown starts.
+    fn start(&self) -> TextPos {
+        let page = self.chapter.pages.get(self.page);
+        page.and_then(|p| page_start(p, &self.chapter.blocks)).unwrap_or(TextPos::new(0, 0))
     }
 
     pub fn pages(&self) -> usize {
         self.chapter.pages.len()
     }
 
-    /// Moves one page forward or back across chapters; false at either end of the book.
-    pub fn turn(&mut self, forward: bool, ctx: &mut Ctx) -> Result<bool> {
-        self.hl.dismiss();
+    /// Moves one page forward or back across chapters, skipping chapters that are empty or
+    /// fail to load; false (and the page unchanged) at either end of the book.
+    pub fn turn(&mut self, forward: bool, ctx: &mut Ctx) -> bool {
         if forward && self.page + 1 < self.chapter.pages.len() {
             self.page += 1;
+            self.hl.dismiss();
         } else if !forward && self.page > 0 {
             self.page -= 1;
+            self.hl.dismiss();
         } else {
-            let mut i = self.chapter_index;
-            loop {
-                i = match (forward, i) {
-                    (true, i) if i + 1 < self.book.chapters.len() => i + 1,
-                    (false, i) if i > 0 => i - 1,
-                    _ => return Ok(false),
-                };
-                self.load(i, ctx)?;
-                if !self.chapter.pages.is_empty() {
-                    break;
-                }
+            let (chapter, page) = (self.chapter_index, self.page);
+            let next = match forward {
+                true if chapter + 1 < self.book.chapters.len() => chapter + 1,
+                false if chapter > 0 => chapter - 1,
+                _ => return false,
+            };
+            if !self.load_readable(next, forward, ctx) {
+                self.restore(chapter, page, ctx);
+                return false;
             }
             self.page = if forward { 0 } else { self.chapter.pages.len() - 1 };
         }
         self.save();
-        Ok(true)
+        true
     }
 
     /// Progress through the book, 0–1, by chapters and pages.
@@ -181,12 +228,15 @@ impl Reader {
     }
 
     pub fn save(&self) {
-        let line = format!("{} {} {:.4}\n", self.chapter_index, self.first_block(), self.progress());
-        std::fs::write(&self.state_file, line).ok();
+        let TextPos { block, offset } = self.start();
+        let line = format!("{} {block} {:.4} {offset}\n", self.chapter_index, self.progress());
+        if let Err(e) = crate::write_atomic(&self.state_file, line) {
+            eprintln!("position: {e}");
+        }
     }
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
-    pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Result<Action> {
+    pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
         if self.toc.is_some() {
             return self.toc_tap((x0, y0), x, ctx);
         }
@@ -195,7 +245,7 @@ impl Reader {
         }
         if (x - x0).abs() <= SWIPE {
             if let Outcome::Redraw(rect) = self.hl.tap(&self.chapter, self.page, self.origin(), (x0, y0)) {
-                return Ok(Action::Region(rect));
+                return Action::Region(rect);
             }
         }
         let forward = match x - x0 {
@@ -203,46 +253,47 @@ impl Reader {
             dx if dx > SWIPE => false,
             _ if y0 < TOP_BAND => {
                 self.menu = true;
-                return Ok(Action::Redraw { turn: None });
+                return Action::Redraw { turn: None };
             }
             _ => x0 >= BACK_ZONE,
         };
-        if !self.turn(forward, ctx)? {
-            return Ok(Action::None);
+        let active = self.hl.is_active();
+        if !self.turn(forward, ctx) {
+            // At either end of the book; a chapter reload on the way may have dropped the popup.
+            return if active && !self.hl.is_active() { Action::Redraw { turn: None } } else { Action::None };
         }
         if forward {
             self.pace.turned(Instant::now());
         } else {
             self.pace.restart(Instant::now()); // re-reading a page isn't reading speed
         }
-        Ok(Action::Redraw { turn: Some(forward) })
+        Action::Redraw { turn: Some(forward) }
     }
 
-    fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Result<Action> {
-        let hit =
-            menu::controls(ctx).into_iter().find(|(_, r)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom());
+    fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Action {
+        let hit = menu::controls(ctx).into_iter().find(|(_, r)| r.contains(x, y));
         match hit {
             Some((Control::Library, _)) => {
                 self.save();
                 self.menu = false;
-                Ok(Action::Home)
+                Action::Home
             }
             Some((Control::Contents, _)) if !self.contents.is_empty() => {
                 self.show_contents();
-                Ok(Action::Redraw { turn: None })
+                Action::Redraw { turn: None }
             }
             Some((ctl, _)) => {
                 if menu::apply(&mut self.typo, &ctl) {
                     self.typo.save(&ctx.state_dir);
-                    self.relayout(ctx)?;
-                    return Ok(Action::Redraw { turn: None });
+                    self.relayout(ctx);
+                    return Action::Redraw { turn: None };
                 }
-                Ok(Action::None)
+                Action::None
             }
-            None if menu::covers(ctx, y) => Ok(Action::None),
+            None if menu::covers(ctx, y) => Action::None,
             None => {
                 self.menu = false;
-                Ok(Action::Redraw { turn: None })
+                Action::Redraw { turn: None }
             }
         }
     }
@@ -252,9 +303,9 @@ impl Reader {
         self.toc = Some(Toc::new(self.current_entry()));
     }
 
-    fn toc_tap(&mut self, start: (i32, i32), x: i32, ctx: &mut Ctx) -> Result<Action> {
-        let Some(view) = &mut self.toc else { return Ok(Action::None) };
-        Ok(match view.tap(&self.contents, start, x) {
+    fn toc_tap(&mut self, start: (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
+        let Some(view) = &mut self.toc else { return Action::None };
+        match view.tap(&self.contents, start, x) {
             toc::Tap::None => Action::None,
             toc::Tap::Redraw => Action::Redraw { turn: None },
             toc::Tap::Back => {
@@ -262,27 +313,26 @@ impl Reader {
                 Action::Redraw { turn: None }
             }
             toc::Tap::Jump(i) => {
-                self.jump(i, ctx)?;
+                self.jump(i, ctx);
                 Action::Redraw { turn: None }
             }
-        })
+        }
     }
 
-    /// Opens table-of-contents entry `i` and closes the list and the menu.
-    fn jump(&mut self, i: usize, ctx: &mut Ctx) -> Result<()> {
-        let Some(e) = self.contents.get(i).cloned() else { return Ok(()) };
-        self.load(e.chapter, ctx)?;
-        if let Some(f) = e.fragment.as_deref() {
+    /// Opens table-of-contents entry `i` (or the next readable chapter) and closes the list
+    /// and the menu. When nothing from there on loads, the page shown stays.
+    fn jump(&mut self, i: usize, ctx: &mut Ctx) {
+        let Some(e) = self.contents.get(i).cloned() else { return };
+        let (chapter, page) = (self.chapter_index, self.page);
+        if !self.load_readable(e.chapter, true, ctx) {
+            self.restore(chapter, page, ctx);
+        } else if let Some(f) = e.fragment.as_deref().filter(|_| self.chapter_index == e.chapter) {
             let block = self.book.fragment_blocks(e.chapter, &self.chapter, &[f]).pop().flatten();
-            self.page = block.map_or(0, |b| self.page_of(b));
-        }
-        if self.chapter.pages.is_empty() {
-            self.turn(true, ctx)?;
+            self.page = block.map_or(0, |b| self.first_page_of(b));
         }
         self.toc = None;
         self.menu = false;
         self.save();
-        Ok(())
     }
 
     /// The table-of-contents entry being read.
@@ -291,13 +341,15 @@ impl Reader {
     }
 
     /// Lays the chapter out again with the current typography, keeping the reading position.
-    fn relayout(&mut self, ctx: &mut Ctx) -> Result<()> {
-        let block = self.first_block();
+    fn relayout(&mut self, ctx: &mut Ctx) {
+        let start = self.start();
         self.prefs = preferences(&self.typo);
-        self.load(self.chapter_index, ctx)?;
-        self.page = self.page_of(block);
+        // On failure the old layout stays up.
+        match self.load(self.chapter_index, ctx) {
+            Ok(()) => self.page = self.page_of(start),
+            Err(e) => eprintln!("chapter {}: {e:#}", self.chapter_index),
+        }
         self.save();
-        Ok(())
     }
 
     fn margin_x(&self) -> i32 {
@@ -380,11 +432,10 @@ impl Reader {
             return;
         }
         let Ctx { fonts, raster, .. } = ctx;
-        let Some(face) = fonts.pick(&["sans-serif".into()], 400, false) else { return };
+        let Some(face) = crate::sans(fonts, false) else { return };
         let label = Label { face, size: 24.0, ink: INK_SOFT };
-        let minutes = crate::quick::local_now().1;
-        let text = format!("{:02}:{:02}", minutes / 60, minutes % 60);
-        label.draw(c, raster, &text, (W as f32 - label.width(&text)) / 2.0, HEADER_BASELINE);
+        let text = crate::clock::hhmm(crate::clock::local_now().1);
+        label.draw_centred(c, raster, &text, W as f32 / 2.0, HEADER_BASELINE);
     }
 
     /// Page count and time left in the chapter, and a thin progress bar through the book.
@@ -396,13 +447,13 @@ impl Reader {
         c.fill(Rect::new(margin, y - 1, (width as f32 * self.progress()) as i32, 4), 60);
 
         let Ctx { fonts, raster, .. } = ctx;
-        let Some(face) = fonts.pick(&["serif".into()], 400, false) else { return };
+        let Some(face) = crate::serif(fonts, false) else { return };
         let label = Label { face, size: 26.0, ink: INK_SOFT };
         let text = format!("{} / {}", self.page + 1, self.chapter.pages.len());
         let x = (W - margin) as f32 - label.width(&text);
         label.draw(c, raster, &text, x, y + 44);
 
-        let Some(face) = fonts.pick(&["sans-serif".into()], 400, false) else { return };
+        let Some(face) = crate::sans(fonts, false) else { return };
         let label = Label { face, size: 24.0, ink: INK_SOFT };
         let left = self.pace.minutes(self.chapter.pages.len().saturating_sub(self.page));
         label.draw(c, raster, &format!("{left} min left in chapter"), margin as f32, y + 44);
@@ -424,5 +475,23 @@ fn preferences(t: &Typography) -> Preferences {
         align: Some(t.text_align()),
         hyphenate: true,
         page_width: (W - 2 * t.margin_x()) as f32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positions_load_with_and_without_offset() {
+        let dir = std::env::temp_dir().join(format!("omero-pos-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("book.pos");
+        std::fs::write(&file, "3 7 0.5000\n").expect("write");
+        let p = Position::load(&file).expect("old format");
+        assert_eq!((p.chapter, p.block, p.offset), (3, 7, 0));
+        std::fs::write(&file, "3 7 0.5000 42\n").expect("write");
+        assert_eq!(Position::load(&file).map(|p| p.offset), Some(42));
+        std::fs::remove_dir_all(dir).ok();
     }
 }

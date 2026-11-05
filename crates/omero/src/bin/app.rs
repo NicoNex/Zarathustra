@@ -53,14 +53,12 @@ impl Press {
         self.at.filter(|_| !self.fired)
     }
 
-    /// Turns the press into a long press at `start`: selects the word there, if any.
+    /// Turns the press into a long press at `start` when there is a word there to select;
+    /// otherwise the lift stays a plain tap (menu controls, margins, the popup's buttons).
     fn fire(&mut self, r: &mut Reader, start: (i32, i32), selection: &mut Option<Rect>) {
-        if r.menu {
-            self.at = None; // menu controls take plain taps, however long
-            return;
-        }
-        self.fired = true;
+        self.at = None;
         if let Some(rect) = r.long_press(start) {
+            self.fired = true;
             self.selecting = true;
             *selection = Some(selection.map_or(rect, |s| s.union(&rect)));
         }
@@ -93,7 +91,10 @@ fn main() -> Result<()> {
     let mut screen = Screen::Home(home(&ctx));
     eprintln!("home ready in {:?}", t.elapsed());
     if let Some(path) = &book {
-        screen = Screen::Reader(Box::new(Reader::open(path, &mut ctx)?));
+        match Reader::open(path, &mut ctx) {
+            Ok(r) => screen = Screen::Reader(Box::new(r)),
+            Err(e) => eprintln!("{e:#}"),
+        }
     }
 
     if let Some(dir) = pgm {
@@ -106,7 +107,7 @@ fn main() -> Result<()> {
             for n in 0..3 {
                 r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
                 write_pgm(dir.join(format!("page{n}.pgm")), &px)?;
-                r.turn(true, &mut ctx)?;
+                r.turn(true, &mut ctx);
             }
             // The highlight flow on the page shown: select, save, tap it, delete it again.
             let mut snap = |r: &mut Reader, ctx: &mut Ctx, name: &str| {
@@ -120,13 +121,13 @@ fn main() -> Result<()> {
             r.release();
             snap(r, &mut ctx, "select.pgm")?;
             if let Some(b) = r.popup_button(Button::Highlight) {
-                r.tap(centre(b), centre(b).0, &mut ctx)?;
+                r.tap(centre(b), centre(b).0, &mut ctx);
             }
             snap(r, &mut ctx, "highlight.pgm")?;
-            r.tap((x, y), x, &mut ctx)?;
+            r.tap((x, y), x, &mut ctx);
             snap(r, &mut ctx, "delete.pgm")?;
             if let Some(b) = r.popup_button(Button::Delete) {
-                r.tap(centre(b), centre(b).0, &mut ctx)?;
+                r.tap(centre(b), centre(b).0, &mut ctx);
             }
             r.menu = true;
             r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -152,12 +153,14 @@ fn main() -> Result<()> {
         events.clear();
         // Wake every few minutes so automatic warmth follows the clock, or when a finger held
         // still on a page becomes a long press.
-        let timeout = match (&screen, press.pending()) {
-            (Screen::Reader(_), Some(at)) if !quick.is_open() => LONG_PRESS.saturating_sub(at.elapsed()),
-            _ => Duration::from_secs(300),
+        let long_press = match (&screen, press.pending()) {
+            (Screen::Reader(_), Some(at)) if !quick.is_open() => Some(LONG_PRESS.saturating_sub(at.elapsed())),
+            _ => None,
         };
-        dev.wait_events(Some(timeout), &mut events)?;
+        dev.wait_events(Some(long_press.unwrap_or(Duration::from_secs(300))), &mut events)?;
+        let mut power = false;
         while let Some(ev) = dev.power_event() {
+            power = true;
             match ev {
                 PowerEvent::Sleep => {
                     asleep = true;
@@ -179,8 +182,9 @@ fn main() -> Result<()> {
             down = None;
             press = Press::default();
         }
-        // The periodic wake-up: bring the reader's clock up to date.
-        if events.is_empty() && !asleep && !quick.is_open() && quick.settings().clock {
+        // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
+        let periodic = events.is_empty() && long_press.is_none() && !power;
+        if periodic && !asleep && !quick.is_open() && quick.settings().clock {
             if let Screen::Reader(_) = screen {
                 screen.render(&mut dev.canvas(), &mut ctx, true);
                 dev.wait_refresh(marker)?;
@@ -263,7 +267,7 @@ fn main() -> Result<()> {
             }
             let action = match &mut screen {
                 Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
-                Screen::Reader(r) => r.tap(start, t.x, &mut ctx)?,
+                Screen::Reader(r) => r.tap(start, t.x, &mut ctx),
             };
             // Screen changes flash (clean slate); page turns animate and flash now and then.
             let (turn, flash) = match action {

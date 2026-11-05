@@ -5,7 +5,7 @@ use omero_device::{Battery, Canvas, Rect};
 use omero_engine::font::{Face, Rasterizer};
 use omero_engine::image;
 
-use crate::quick::{date_text, local_now};
+use crate::clock::{date_text, hhmm, local_now};
 use crate::ui::{Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
@@ -29,14 +29,13 @@ pub fn render_sleep(
 ) {
     c.fill(Rect::new(0, 0, W, H), PAPER);
     let Ctx { fonts, raster, .. } = ctx;
-    let pick = |family: &str, weight| fonts.pick(&[family.into()], weight, false);
-    let (Some(sans), Some(bold), Some(serif)) = (pick("sans-serif", 400), pick("sans-serif", 700), pick("serif", 400))
+    let (Some(sans), Some(bold), Some(serif)) =
+        (crate::sans(fonts, false), crate::sans(fonts, true), crate::serif(fonts, false))
     else {
         return;
     };
     let hint = Label { face: sans, size: 28.0, ink: INK_SOFT };
-    let hint_x = (W as f32 - hint.width(HINT)) / 2.0;
-    hint.draw(c, raster, HINT, hint_x, H - 48);
+    hint.draw_centred(c, raster, HINT, W as f32 / 2.0, H - 48);
 
     if title.is_empty() {
         return clock(c, raster, sans, bold, battery);
@@ -62,63 +61,38 @@ pub fn render_sleep(
     let line = if author.is_empty() { title.to_string() } else { format!("{title} · {author}") };
     let label = Label { face: bold, size: 30.0, ink: INK };
     let line = label.fit(&line, (W - 2 * MARGIN) as f32);
-    label.draw(c, raster, &line, (W as f32 - label.width(&line)) / 2.0, H - 100);
+    label.draw_centred(c, raster, &line, W as f32 / 2.0, H - 100);
 }
 
 /// No usable cover: the title typeset large in the book font, the author under it.
 fn title_page(c: &mut Canvas, raster: &mut Rasterizer, serif: &Face, area: Rect, title: &str, author: &str) {
     let big = Label { face: serif, size: 88.0, ink: INK };
-    let lines = wrap(&big, title, (area.w - 2 * MARGIN) as f32, 4);
+    let lines = big.wrap(title, (area.w - 2 * MARGIN) as f32, 4);
     let lead = 112;
     let mut y = area.y + area.h * 2 / 5 - (lines.len() as i32 - 1) * lead / 2;
     for l in &lines {
-        big.draw(c, raster, l, (W as f32 - big.width(l)) / 2.0, y);
+        big.draw_centred(c, raster, l, W as f32 / 2.0, y);
         y += lead;
     }
     if !author.is_empty() {
         let small = Label { face: serif, size: 44.0, ink: INK_SOFT };
         let a = small.fit(author, area.w as f32);
-        small.draw(c, raster, &a, (W as f32 - small.width(&a)) / 2.0, y + 24);
+        small.draw_centred(c, raster, &a, W as f32 / 2.0, y + 24);
     }
 }
 
 /// No book: the time it went to sleep, the date and the battery.
 fn clock(c: &mut Canvas, raster: &mut Rasterizer, sans: &Face, bold: &Face, battery: Option<Battery>) {
     let (days, minutes) = local_now();
-    let time = format!("{:02}:{:02}", minutes / 60, minutes % 60);
+    let time = hhmm(minutes);
     let center = |label: &Label, text: &str, y: i32, c: &mut Canvas, raster: &mut Rasterizer| {
-        label.draw(c, raster, text, (W as f32 - label.width(text)) / 2.0, y);
+        label.draw_centred(c, raster, text, W as f32 / 2.0, y);
     };
     center(&Label { face: bold, size: 200.0, ink: INK }, &time, H * 2 / 5, c, raster);
     center(&Label { face: sans, size: 44.0, ink: INK_SOFT }, &date_text(days), H * 2 / 5 + 96, c, raster);
     if let Some(b) = battery {
         center(&Label { face: sans, size: 32.0, ink: INK_SOFT }, &format!("{}%", b.percent), H - 120, c, raster);
     }
-}
-
-/// Greedy word wrap into at most `max_lines`, the last one cut with an ellipsis.
-fn wrap(label: &Label, text: &str, width: f32, max_lines: usize) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut cur = String::new();
-    for word in text.split_whitespace() {
-        let candidate = if cur.is_empty() { word.to_string() } else { format!("{cur} {word}") };
-        if cur.is_empty() || label.width(&candidate) <= width {
-            cur = candidate;
-        } else {
-            lines.push(std::mem::replace(&mut cur, word.to_string()));
-        }
-    }
-    if !cur.is_empty() {
-        lines.push(cur);
-    }
-    if lines.len() > max_lines {
-        let rest = lines.split_off(max_lines - 1).join(" ");
-        lines.push(rest);
-    }
-    if let Some(last) = lines.last_mut() {
-        *last = label.fit(last, width);
-    }
-    lines
 }
 
 #[cfg(test)]

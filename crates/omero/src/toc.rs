@@ -119,7 +119,7 @@ impl Toc {
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
     pub fn tap(&mut self, entries: &[Entry], (x0, y0): (i32, i32), x: i32) -> Tap {
-        let inside = |r: Rect| x0 >= r.x && x0 < r.right() && y0 >= r.y && y0 < r.bottom();
+        let inside = |r: Rect| r.contains(x0, y0);
         match x - x0 {
             dx if dx < -SWIPE => return self.flip(entries, true),
             dx if dx > SWIPE => return self.flip(entries, false),
@@ -147,11 +147,9 @@ impl Toc {
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx, entries: &[Entry]) {
         c.fill(c.bounds(), crate::ui::PAPER);
         let Ctx { fonts, raster, .. } = ctx;
-        let (Some(sans), Some(serif), Some(serif_bold)) = (
-            fonts.pick(&["sans-serif".into()], 400, false),
-            fonts.pick(&["serif".into()], 400, false),
-            fonts.pick(&["serif".into()], 700, false),
-        ) else {
+        let (Some(sans), Some(serif), Some(serif_bold)) =
+            (crate::sans(fonts, false), crate::serif(fonts, false), crate::serif(fonts, true))
+        else {
             return;
         };
         topbar(c, raster, sans, serif_bold, "‹  Back", "Contents");
