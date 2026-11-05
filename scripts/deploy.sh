@@ -7,20 +7,21 @@ set -e
 cd "$(dirname "$0")/.."
 cargo build --release --target armv7-unknown-linux-musleabihf -p omero
 BIN=target/armv7-unknown-linux-musleabihf/release
-BINS="omero-probe omero-textprobe"
+BINS="omero-probe omero-textprobe omero-reader"
 
 # Stage the device layout (omero/bin/*, extensions/omero/*) and ship it as one tar stream.
 STAGE=target/kindle-stage
 rm -rf "$STAGE" && mkdir -p "$STAGE/omero/bin" "$STAGE/extensions"
 for b in $BINS; do cp "$BIN/$b" "$STAGE/omero/bin/"; done
 cp -r dist/kual/omero "$STAGE/extensions/"
+mkdir -p "$STAGE/omero/hyph" && cp assets/hyphenation/*.bincode "$STAGE/omero/hyph/"
 bundle() { tar -cf - -C "$STAGE" omero extensions; }
 
 if [ -n "$KINDLE_HOST" ]; then
 	k() { ssh -p "${KINDLE_PORT:-2222}" -o BatchMode=yes "root@$KINDLE_HOST" "$@"; }
 	bundle | k 'tar -xf - -C /mnt/us'
 	echo "Deployed to $KINDLE_HOST."
-	[ -z "$1" ] || k "/mnt/us/extensions/omero/run.sh $1; cat /mnt/us/omero/$1.log"
+	[ -z "$1" ] || k "/mnt/us/extensions/omero/run.sh $*; cat /mnt/us/omero/$1.log"
 else
 	KINDLE="${KINDLE:-/run/media/$USER/Kindle}"
 	[ -d "$KINDLE" ] || { echo "Kindle not mounted at $KINDLE (or set KINDLE_HOST)" >&2; exit 1; }

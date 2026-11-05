@@ -5,6 +5,7 @@ use super::flow::Block;
 use super::paragraph::{LayoutParams, Line, Placed, Run, Typesetter};
 use crate::fonts::FontLibrary;
 use crate::style::cascade::ComputedStyle;
+use crate::style::css::TextAlign;
 
 /// Fewest lines of a paragraph left at a page bottom (orphans) or carried to the next top (widows).
 const MIN_LINES: usize = 2;
@@ -65,7 +66,12 @@ pub fn layout(
             .collect();
         let lines = match (runs, style(b.node)) {
             (Some(runs), Some(s)) => {
-                ts.layout(&runs, &LayoutParams { measure: b.width, indent: s.text_indent, align: s.text_align })
+                // Headings are never stretched to the measure, whatever the justify preference.
+                let align = match s.text_align {
+                    TextAlign::Justify if b.keep_with_next => TextAlign::Start,
+                    a => a,
+                };
+                ts.layout(&runs, &LayoutParams { measure: b.width, indent: s.text_indent, align })
             }
             _ => Vec::new(),
         };

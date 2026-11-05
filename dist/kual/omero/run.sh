@@ -2,6 +2,7 @@
 # Runs an Omero binary with the Amazon UI stopped, and always brings the UI back.
 BIN="/mnt/us/omero/bin/$1"
 LOG="/mnt/us/omero/$1.log"
+shift
 
 restore() {
 	lipc-set-prop com.lab126.powerd preventScreenSaver 0
@@ -17,5 +18,5 @@ trap restore EXIT
 trap "exit 1" INT TERM
 
 lipc-set-prop com.lab126.powerd preventScreenSaver 1
-"$BIN" >"$LOG" 2>&1
+"$BIN" "$@" >"$LOG" 2>&1
 echo "exit status $?" >>"$LOG"

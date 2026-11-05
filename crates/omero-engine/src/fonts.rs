@@ -33,9 +33,8 @@ impl FontLibrary {
         FontLibrary { entries: Vec::new(), default_family: default_family.to_lowercase() }
     }
 
-    /// Indexes the `.ttf`/`.otf` files in `dir`; unreadable files are skipped.
-    // ponytail: reads each file once to get its names (~0.5 s for the Kindle's 80 system fonts);
-    // cache the index on disk if startup time matters.
+    /// Indexes the `.ttf`/`.otf` files in `dir`; unreadable files are skipped. Only the
+    /// table directory and the `name`/`OS/2` tables are read (the Kindle has 128 MB of fonts).
     pub fn add_dir(&mut self, dir: &Path) {
         let Ok(read) = std::fs::read_dir(dir) else { return };
         let mut paths: Vec<PathBuf> = read.flatten().map(|e| e.path()).collect();
@@ -45,7 +44,7 @@ impl FontLibrary {
             if !matches!(ext.as_deref(), Some("ttf" | "otf")) {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Some(bytes) = read_sparse(&path, &[*b"name", *b"OS/2", *b"head"]) else { continue };
             let Ok(font) = FontRef::new(&bytes) else { continue };
             let name = |id| font.localized_strings(id).english_or_first().map(|s| s.to_string());
             let Some(family) = name(StringId::TYPOGRAPHIC_FAMILY_NAME).or_else(|| name(StringId::FAMILY_NAME)) else {
@@ -102,6 +101,34 @@ impl FontLibrary {
         let id = best(&wanted).or_else(|| best(&self.default_family)).or((!self.entries.is_empty()).then_some(0))?;
         self.face(id as u32)
     }
+}
+
+/// The font file as a buffer of its full length where only the table directory and the
+/// `tables` are read; the rest stays zero (and, being freshly allocated zeroes, mostly unmapped).
+fn read_sparse(path: &Path, tables: &[[u8; 4]]) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len > 256 << 20 {
+        return None;
+    }
+    let mut buf = vec![0u8; len as usize];
+    let header = buf.get_mut(..12)?;
+    file.read_exact(header).ok()?;
+    let tables_n = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let dir_end = 12 + 16 * tables_n;
+    file.read_exact(buf.get_mut(12..dir_end)?).ok()?;
+    for record in buf[12..dir_end].to_vec().chunks_exact(16) {
+        if !tables.iter().any(|t| t[..] == record[..4]) {
+            continue;
+        }
+        let offset = u32::from_be_bytes([record[8], record[9], record[10], record[11]]) as usize;
+        let length = u32::from_be_bytes([record[12], record[13], record[14], record[15]]) as usize;
+        let dst = buf.get_mut(offset..offset.checked_add(length)?)?;
+        file.seek(SeekFrom::Start(offset as u64)).ok()?;
+        file.read_exact(dst).ok()?;
+    }
+    Some(buf)
 }
 
 #[cfg(test)]

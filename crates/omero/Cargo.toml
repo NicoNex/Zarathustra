@@ -19,3 +19,7 @@ anyhow = "1"
 [[bin]]
 name = "omero-textprobe"
 path = "src/bin/textprobe.rs"
+
+[[bin]]
+name = "omero-reader"
+path = "src/bin/reader.rs"
