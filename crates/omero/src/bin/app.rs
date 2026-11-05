@@ -282,9 +282,12 @@ fn main() -> Result<()> {
                 continue;
             }
             let action = match &mut screen {
+                Screen::Reader(r) => match r.swipe_up(start, (t.x, t.y)) {
+                    true => Action::Redraw { turn: None },
+                    false => r.tap(start, t.x, &mut ctx),
+                },
                 Screen::Home(h) if held => h.long_press(start, &ctx),
                 Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
-                Screen::Reader(r) => r.tap(start, t.x, &mut ctx),
             };
             // Screen changes flash (clean slate); page turns animate and flash now and then.
             let (turn, flash) = match action {

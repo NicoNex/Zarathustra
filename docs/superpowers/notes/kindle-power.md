@@ -25,7 +25,7 @@ Findings from the device (read-only inspection, plus `powerprobe` runs) and from
 - `powerButton` (w, int) on powerd simulates a press: `lipc-set-prop -i com.lab126.powerd
   powerButton 1`. KOReader's "suspend" action uses exactly this; there's no difference
   between it and the real key for powerd.
-- `preventScreenSaver 1` (what `run.sh` sets) blocks the idle timeout
+- `preventScreenSaver 1` blocks the idle timeout AND the power button ("Prevent screen saver set. Ignoring power button" in /var/log/messages; only the cover still works). Omero instead restarts the idle timer on touches with `touchScreenSaverTimeout 1` (at most every 30 s). Was:
   (`screenSaverTimeout`, 600 s). powerd can't see our touches, so Omero keeps it set and runs
   its own sleep timer through `powerButton`.
 - `deferSuspend`, `suspendGrace`, `abortSuspend`, `wakeUp`: writable knobs; not needed.
@@ -63,3 +63,10 @@ prints one line per event, `name arg`, **line-buffered even into a pipe** (verif
 - If the blanket module were left unloaded (run.sh killed with SIGKILL), the Amazon UI would
   sleep with a white screen until the next reboot or `lipc-set-prop com.lab126.blanket load
   ad_screensaver`. Harmless.
+
+## Boot splash trap (2026-11-05)
+
+powerd ignores the button ("Splash screen is on. Ignoring power button") when the framework
+was stopped while booting, e.g. Omero restarted right after an exit restarted the framework.
+It asks `com.lab126.kaf` over D-Bus, which is gone. `lipc-send-event com.lab126.kaf
+bootSplashCleanup` clears it; `run.sh` sends it after stopping the framework.

@@ -33,6 +33,8 @@ const TOP_BAND: i32 = 150;
 const BACK_ZONE: i32 = W / 4;
 /// Horizontal travel that makes a touch a swipe.
 const SWIPE: i32 = 100;
+/// Swipes starting this close to the bottom edge open the menu.
+const BOTTOM_EDGE: i32 = 120;
 
 pub struct Reader {
     book: Book,
@@ -252,6 +254,17 @@ impl Reader {
         if let Err(e) = crate::write_atomic(&self.state_file, line) {
             eprintln!("position: {e}");
         }
+    }
+
+    /// A swipe up from the bottom edge opens the menu (typography sheet), as the quick panel
+    /// opens from the top. True when it did.
+    pub fn swipe_up(&mut self, (_, y0): (i32, i32), (_, y): (i32, i32)) -> bool {
+        let opens = !self.menu && self.toc.is_none() && y0 >= H - BOTTOM_EDGE && y0 - y > SWIPE;
+        if opens {
+            self.hl.dismiss();
+            self.menu = true;
+        }
+        opens
     }
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.

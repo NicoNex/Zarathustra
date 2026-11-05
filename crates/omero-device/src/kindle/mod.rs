@@ -6,7 +6,10 @@ mod power;
 use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// How often touches restart powerd's idle timeout (a spawned `lipc-set-prop` each time).
+const IDLE_RESET_EVERY: Duration = Duration::from_secs(30);
 
 use crate::input::{Touch, TouchPanel, Transform};
 use crate::sysfs::{self, Led, SysfsLight};
@@ -47,6 +50,8 @@ pub struct Kindle {
     power_events: VecDeque<PowerEvent>,
     /// Set while the sleep screen shows: the light to restore on wake.
     asleep: Option<Option<Light>>,
+    /// When touches last restarted powerd's idle timeout.
+    idle_reset: Option<Instant>,
 }
 
 impl Kindle {
@@ -65,7 +70,17 @@ impl Kindle {
         // ponytail: one-time bring-up log; drop once more models are verified.
         eprintln!("{} {}x{} rotate={}", model.name, fb.width, fb.height, fb.rotate);
         let powerd = power::Powerd::spawn().map_err(|e| eprintln!("powerd events unavailable: {e}")).ok();
-        Ok(Kindle { model, fb, touch, light, touches: Vec::new(), powerd, power_events: VecDeque::new(), asleep: None })
+        Ok(Kindle {
+            model,
+            fb,
+            touch,
+            light,
+            touches: Vec::new(),
+            powerd,
+            power_events: VecDeque::new(),
+            asleep: None,
+            idle_reset: None,
+        })
     }
 
     fn read_power(&mut self) {
@@ -153,8 +168,14 @@ impl Device for Kindle {
         }
         self.touches.clear();
         self.touch.read(&mut self.touches)?;
-        if self.asleep.is_none() {
+        if self.asleep.is_none() && !self.touches.is_empty() {
             out.extend(self.touches.iter().copied().map(Event::Touch));
+            // powerd can't see our touches: restart its idle timeout (10 min to sleep) now
+            // and then, as the framework would.
+            if self.idle_reset.is_none_or(|t| t.elapsed() >= IDLE_RESET_EVERY) {
+                self.idle_reset = Some(Instant::now());
+                power::set_prop("touchScreenSaverTimeout", 1).map_err(|e| eprintln!("powerd idle reset: {e}")).ok();
+            }
         }
         Ok(())
     }
