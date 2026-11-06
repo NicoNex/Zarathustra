@@ -357,6 +357,7 @@ pub fn quantize16(img: &mut GrayImage) {
 }
 
 /// Copies `img` onto `canvas` with its top-left corner at (`x`, `y`), clipped to the canvas.
+/// In night mode the copy is inverted, so the whole-frame inversion shows the picture as it is.
 pub fn draw(canvas: &mut Canvas, img: &GrayImage, x: i32, y: i32) {
     let (iw, ih) = (img.width as i64, img.height as i64);
     let (x, y) = (i64::from(x), i64::from(y));
@@ -368,10 +369,16 @@ pub fn draw(canvas: &mut Canvas, img: &GrayImage, x: i32, y: i32) {
         return;
     }
     let n = (x1 - x0) as usize;
+    let night = zarathustra_device::night();
     for cy in y0..y1 {
         let src = ((cy - y) * iw + (x0 - x)) as usize;
         let dst = cy as usize * canvas.stride + x0 as usize;
-        canvas.pixels[dst..dst + n].copy_from_slice(&img.pixels[src..src + n]);
+        let (to, from) = (&mut canvas.pixels[dst..dst + n], &img.pixels[src..src + n]);
+        if night {
+            to.iter_mut().zip(from).for_each(|(t, f)| *t = !f);
+        } else {
+            to.copy_from_slice(from);
+        }
     }
 }
 

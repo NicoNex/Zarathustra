@@ -19,7 +19,7 @@ use std::time::Duration;
 pub use canvas::Canvas;
 pub use geom::Rect;
 pub use input::{Phase, Touch};
-pub use night::Night;
+pub use night::{night, set_night, Night};
 pub use wifi::Wifi;
 
 /// What a refresh is for; each backend maps it to its own waveforms.

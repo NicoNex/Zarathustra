@@ -103,6 +103,13 @@ fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
     Ok(std::fs::write(path, out)?)
 }
 
+/// Writes `px` as the panel shows it in night mode: the whole frame inverted (the pictures
+/// were drawn pre-inverted, so they come out as they are).
+fn write_night_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
+    let inverted: Vec<u8> = px.iter().map(|p| !p).collect();
+    write_pgm(path, &inverted)
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let (mut book, mut swipe, mut pgm, mut query) = (None, true, None, "natura".to_string());
@@ -150,15 +157,14 @@ fn main() -> Result<()> {
             .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("quick.pgm"), &px)?;
         // Night mode: the tile on, the whole screen inverted as the device shows it.
-        let mut night = vec![0u8; (W * H) as usize];
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut night }, &mut ctx);
+        zarathustra_device::set_night(true);
+        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         zarathustra::quick::QuickPanel::preview(&ctx.state_dir, true)
-            .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut night }, &mut ctx);
-        night.iter_mut().for_each(|p| *p = !*p);
-        write_pgm(dir.join("quick-night.pgm"), &night)?;
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut night }, &mut ctx);
-        night.iter_mut().for_each(|p| *p = !*p);
-        write_pgm(dir.join("home-night.pgm"), &night)?;
+            .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        write_night_pgm(dir.join("quick-night.pgm"), &px)?;
+        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        write_night_pgm(dir.join("home-night.pgm"), &px)?;
+        zarathustra_device::set_night(false);
         // The Wi-Fi screen on the pretend networks, then a password being typed (caps on).
         {
             use zarathustra::keyboard::{Key, Keyboard};
@@ -242,6 +248,10 @@ fn main() -> Result<()> {
         write_pgm(dir.join("transfer-qr.pgm"), &px)?;
         drop(tr);
         if let Screen::Pdf(p) = &mut screen {
+            zarathustra_device::set_night(true);
+            p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_night_pgm(dir.join("page0-night.pgm"), &px)?;
+            zarathustra_device::set_night(false);
             for n in 0..3 {
                 p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
                 write_pgm(dir.join(format!("page{n}.pgm")), &px)?;
@@ -252,6 +262,10 @@ fn main() -> Result<()> {
             write_pgm(dir.join("menu.pgm"), &px)?;
         }
         if let Screen::Reader(r) = &mut screen {
+            zarathustra_device::set_night(true);
+            r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_night_pgm(dir.join("page0-night.pgm"), &px)?;
+            zarathustra_device::set_night(false);
             for n in 0..3 {
                 r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
                 write_pgm(dir.join(format!("page{n}.pgm")), &px)?;
@@ -366,7 +380,7 @@ fn main() -> Result<()> {
 
     let mut dev = zarathustra_device::Night::new(zarathustra_device::open_default()?);
     let mut quick = QuickPanel::new(&ctx.state_dir, &mut dev);
-    dev.on = quick.settings().night;
+    zarathustra_device::set_night(quick.settings().night);
     let full = Rect::new(0, 0, W, H);
     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
     let mut marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
@@ -474,7 +488,7 @@ fn main() -> Result<()> {
                         dev.sleep()?;
                     }
                     QuickResult::Repaint { flash } => {
-                        dev.on = quick.settings().night;
+                        zarathustra_device::set_night(quick.settings().night);
                         repaint = Some(repaint.unwrap_or(false) || flash);
                     }
                     QuickResult::Transfer => {
