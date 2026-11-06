@@ -53,3 +53,12 @@ PW5, FW 5.17.1, MTK hwtcon, fb 8bpp rotate=3 handled by driver, touch `/dev/inpu
 - KUAL: "Wi-Fi probe" (dumps wifid incl. passwords — delete its output after reading), "System probe" (read-only inventory, output on the device at zarathustra/system-probe.txt).
 - De-Amazon plan: phase A (clean the Amazon system: USB, battery, clock, boot to Zarathustra with a safety file, services off; OTA may already be blocked by the jailbreak — check), phase B (Alpine with the Amazon kernel and nothing else Amazon: our own Wi-Fi bring-up and power management).
 - Never commit device data (SSIDs, passwords, MACs, IPs).
+
+## Next device: Kobo (soon; the user owns one). Decided 2026-11-06: one binary, drivers as modules
+
+- Keep a single static binary; device backends are modules/crates in this repo behind `zarathustra_device::Device` (+ `Wifi`), picked at startup by detecting the model. No dynamic `.so` drivers (no stable Rust ABI; would lose the single static binary).
+- Before the Kobo backend:
+  1. **Resolution-independent UI**: everything is laid out for 1236×1648 (`W`/`H` consts in `zarathustra/src/lib.rs`, absolute rects across home/menu/quick/wifi/keyboard…). Make layout derive from the device size (scale factor from dpi/size), then drop the consts.
+  2. **Platform bits into the driver**: `/mnt/us` paths (`on_device`, `library_dir`, state dir, fonts, dictionaries, hyphenation), lipc, KUAL/`run.sh` launch and exit, USB handling. A small platform part of the backend says where books/state live and how to launch/quit.
+  3. **"Add a device" guide**: trait to implement, testing with the emulator and `--pgm`, model detection.
+- Then `kobo/`: framebuffer (mxcfb or MTK per model), touch, light (sysfs), power (no powerd: own suspend), Wi-Fi (wpa_cli; Kobo scripts), launch via NickelMenu/KFMon.
