@@ -118,6 +118,14 @@ pub struct Strings {
     /// Weekday names, Monday first (the Italian week ends on Sunday).
     pub weekdays: [&'static str; 7],
     pub months: [&'static str; 12],
+    /// In-book search: the search key, the screen title, the empty-field hint, status lines;
+    /// the keyboard's space bar.
+    pub search: &'static str,
+    pub search_book: &'static str,
+    pub search_hint: &'static str,
+    pub searching: &'static str,
+    pub no_results: &'static str,
+    pub space: &'static str,
 }
 
 const IT: Strings = Strings {
@@ -205,6 +213,12 @@ const IT: Strings = Strings {
         "novembre",
         "dicembre",
     ],
+    search: "Cerca",
+    search_book: "Cerca nel libro",
+    search_hint: "Maiuscole e accenti non contano",
+    searching: "Ricerca in corso…",
+    no_results: "Nessun risultato",
+    space: "spazio",
 };
 
 const EN: Strings = Strings {
@@ -292,6 +306,12 @@ const EN: Strings = Strings {
         "November",
         "December",
     ],
+    search: "Search",
+    search_book: "Search this book",
+    search_hint: "Case and accents don't matter",
+    searching: "Searching…",
+    no_results: "No results",
+    space: "space",
 };
 
 /// The UI language for the whole process; set once from the settings at startup.
@@ -340,6 +360,18 @@ impl Lang {
         }
     }
 
+    /// Search status: "1 risultato", "12 risultati"; `capped` when the search stopped there.
+    pub fn results(self, n: usize, capped: bool) -> String {
+        match (self, n, capped) {
+            (Lang::It, n, true) => format!("Primi {n} risultati"),
+            (Lang::It, 1, false) => "1 risultato".into(),
+            (Lang::It, n, false) => format!("{n} risultati"),
+            (Lang::En, n, true) => format!("First {n} results"),
+            (Lang::En, 1, false) => "1 result".into(),
+            (Lang::En, n, false) => format!("{n} results"),
+        }
+    }
+
     /// Reader footer: minutes left in the chapter.
     pub fn minutes_left(self, n: u32) -> String {
         match (self, n) {
@@ -365,5 +397,7 @@ mod tests {
         assert_eq!(Lang::En.highlights(3), "3 highlights");
         assert_eq!(Lang::It.minutes_left(1), "1 min rimanente nel capitolo");
         assert_eq!(Lang::It.minutes_left(5), "5 min rimanenti nel capitolo");
+        assert_eq!(Lang::It.results(1, false), "1 risultato");
+        assert_eq!(Lang::En.results(200, true), "First 200 results");
     }
 }

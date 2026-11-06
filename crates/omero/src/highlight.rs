@@ -198,7 +198,7 @@ pub fn anchor_range(dom: &Dom, blocks: &[Block], spine: u32, range: &Range<TextP
 }
 
 /// Block position of a DOM position, searching every block's source map.
-fn block_pos(blocks: &[Block], node: NodeId, offset: usize) -> Option<TextPos> {
+pub(crate) fn block_pos(blocks: &[Block], node: NodeId, offset: usize) -> Option<TextPos> {
     blocks.iter().enumerate().find_map(|(i, b)| b.position_of(node, offset).map(|o| TextPos::new(i, o)))
 }
 

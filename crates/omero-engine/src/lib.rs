@@ -11,5 +11,6 @@ pub mod library;
 pub mod mobi;
 pub mod note;
 pub mod pdf;
+pub mod search;
 pub mod style;
 pub mod txt;

@@ -215,45 +215,7 @@ pub fn author_sort_key(name: &str) -> String {
 }
 
 /// Lowercases and strips Latin diacritics, for search and sorting.
-pub fn fold(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars().flat_map(char::to_lowercase) {
-        match c {
-            '\u{300}'..='\u{36f}' => {} // combining marks of decomposed text
-            'ß' => out.push_str("ss"),
-            'æ' => out.push_str("ae"),
-            'œ' => out.push_str("oe"),
-            'þ' => out.push_str("th"),
-            _ => out.push(fold_char(c)),
-        }
-    }
-    out
-}
-
-fn fold_char(c: char) -> char {
-    match c {
-        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
-        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
-        'ď' | 'đ' | 'ð' => 'd',
-        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
-        'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
-        'ĥ' | 'ħ' => 'h',
-        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => 'i',
-        'ĵ' => 'j',
-        'ķ' => 'k',
-        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => 'l',
-        'ñ' | 'ń' | 'ņ' | 'ň' => 'n',
-        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => 'o',
-        'ŕ' | 'ŗ' | 'ř' => 'r',
-        'ś' | 'ŝ' | 'ş' | 'š' | 'ș' => 's',
-        'ţ' | 'ť' | 'ŧ' | 'ț' => 't',
-        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => 'u',
-        'ŵ' => 'w',
-        'ý' | 'ÿ' | 'ŷ' => 'y',
-        'ź' | 'ż' | 'ž' => 'z',
-        _ => c,
-    }
-}
+pub use crate::search::fold;
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else { return };

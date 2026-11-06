@@ -14,6 +14,8 @@ use crate::{Ctx, H, W};
 
 pub const TOPBAR_H: i32 = 150;
 pub const PAD: i32 = 64;
+/// The search button, at the right end of the top bar.
+const SEARCH: Rect = Rect { x: W - 180, y: 0, w: 180, h: TOPBAR_H };
 /// Width of the row-label column left of the controls.
 const LABEL_W: i32 = 230;
 /// Touch targets: 96 px ≈ 8 mm at 300 dpi.
@@ -115,6 +117,7 @@ impl Typography {
 pub enum Control {
     Library,
     Contents,
+    Search,
     Smaller,
     Larger,
     Family(Option<String>),
@@ -217,6 +220,7 @@ pub fn controls(ctx: &Ctx) -> Vec<(Control, Rect)> {
     let size = segments(l.size, 3);
     let mut out = vec![
         (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
+        (Control::Search, SEARCH),
         (Control::Contents, l.contents),
         (Control::Smaller, size[0]),
         (Control::Larger, size[2]),
@@ -250,6 +254,9 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     };
 
     topbar(c, raster, sans, serif_bold, t().back_library, title);
+    // ponytail: also drawn over PDFs, where search is not wired; MuPDF can search page text.
+    let icon = Rect::new(SEARCH.x + (SEARCH.w - 52) / 2, SEARCH.y + (SEARCH.h - 52) / 2 + 4, 52, 52);
+    crate::search::icon(c, icon, INK, PAPER);
 
     // Sheet: rounded top corners over a black edge, like the quick panel.
     rounded_rect(c, Rect::new(0, l.top - 3, W, H - l.top + 40), 32, INK);
@@ -336,7 +343,7 @@ pub fn apply(typo: &mut Typography, ctl: &Control) -> bool {
         Control::Spacing(i) => typo.spacing = *i,
         Control::Margin(i) => typo.margin = *i,
         Control::Align(i) => typo.align = *i,
-        Control::Library | Control::Contents => {}
+        Control::Library | Control::Contents | Control::Search => {}
     }
     *typo != before
 }

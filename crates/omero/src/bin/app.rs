@@ -1,6 +1,6 @@
 //! Omero: home and reader on the device.
 //!
-//!   omero [BOOK] [--no-swipe] [--pgm DIR]
+//!   omero [BOOK] [--no-swipe] [--pgm DIR] [--search WORD]
 //!
 //! With `--pgm`, renders the home screen and the first pages of BOOK into DIR instead.
 
@@ -92,10 +92,11 @@ fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let (mut book, mut swipe, mut pgm) = (None, true, None);
+    let (mut book, mut swipe, mut pgm, mut query) = (None, true, None, "natura".to_string());
     while let Some(a) = args.next() {
         match a.as_str() {
             "--no-swipe" => swipe = false,
+            "--search" => query = args.next().context("--search WORD")?,
             "--pgm" => pgm = Some(PathBuf::from(args.next().context("--pgm DIR")?)),
             path => book = Some(PathBuf::from(path)),
         }
@@ -228,6 +229,31 @@ fn main() -> Result<()> {
             snap(r, &mut ctx, "toc.pgm")?;
             r.tap((W - 100, 200), W - 100, &mut ctx);
             snap(r, &mut ctx, "bookmarks.pgm")?;
+            // Search: type the query on the keyboard, run it, open the first hit.
+            r.show_search();
+            let keys = omero::keyboard::Keyboard::default().keys();
+            let key = |k: omero::keyboard::Key| keys.iter().find(|(key, _)| *key == k).map(|(_, r)| centre(*r));
+            for ch in query.chars() {
+                let k = if ch == ' ' { omero::keyboard::Key::Space } else { omero::keyboard::Key::Char(ch) };
+                if let Some(at) = key(k) {
+                    r.tap(at, at.0, &mut ctx);
+                }
+            }
+            snap(r, &mut ctx, "search_keyboard.pgm")?;
+            if let Some(at) = key(omero::keyboard::Key::Enter) {
+                r.tap(at, at.0, &mut ctx);
+            }
+            let t0 = Instant::now();
+            r.search_step();
+            eprintln!("search: first step {:?}", t0.elapsed());
+            while r.is_searching() {
+                r.search_step();
+            }
+            eprintln!("search: done in {:?}", t0.elapsed());
+            snap(r, &mut ctx, "search_results.pgm")?;
+            let row = omero::search::LIST_TOP + omero::search::ROW_H / 2;
+            r.tap((W / 2, row), W / 2, &mut ctx);
+            snap(r, &mut ctx, "search_hit.pgm")?;
         }
         return Ok(());
     }
@@ -250,7 +276,10 @@ fn main() -> Result<()> {
             (Screen::Reader(_), Some(at)) if !quick.is_open() => Some(LONG_PRESS.saturating_sub(at.elapsed())),
             _ => None,
         };
-        dev.wait_events(Some(long_press.unwrap_or(Duration::from_secs(300))), &mut events)?;
+        // A search under way only peeks at the input queue between chapters.
+        let searching = matches!(&screen, Screen::Reader(r) if r.is_searching()) && !quick.is_open();
+        let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(Duration::from_secs(300)) };
+        dev.wait_events(Some(timeout), &mut events)?;
         let mut power = false;
         while let Some(ev) = dev.power_event() {
             power = true;
@@ -277,7 +306,7 @@ fn main() -> Result<()> {
             press = Press::default();
         }
         // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
-        let periodic = events.is_empty() && long_press.is_none() && !power;
+        let periodic = events.is_empty() && long_press.is_none() && !power && !searching;
         if periodic && !asleep && !quick.is_open() && quick.settings().clock {
             if let Screen::Reader(_) | Screen::Pdf(_) = screen {
                 dev.wait_refresh(marker)?;
@@ -318,6 +347,15 @@ fn main() -> Result<()> {
                 Phase::Down => {
                     down = Some((t.x, t.y));
                     press = Press { at: Some(Instant::now()), ..Press::default() };
+                    // A search keyboard key under the finger inverts at once, black and white.
+                    if let Screen::Reader(r) = &mut screen {
+                        if let Some(rect) = r.press((t.x, t.y)) {
+                            dev.wait_refresh(marker)?;
+                            r.render(&mut dev.canvas(), &mut ctx);
+                            marker =
+                                dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
+                        }
+                    }
                     continue;
                 }
                 Phase::Move => {
@@ -444,6 +482,13 @@ fn main() -> Result<()> {
         if let (Screen::Reader(r), Some(start)) = (&mut screen, down) {
             if !quick.is_open() && press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) {
                 press.fire(r, start, &mut selection);
+            }
+        }
+        if let (Screen::Reader(r), false) = (&mut screen, quick.is_open()) {
+            if let Some(rect) = r.search_step() {
+                dev.wait_refresh(marker)?;
+                r.render(&mut dev.canvas(), &mut ctx);
+                marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
         if let Some(rect) = selection.filter(|r| !r.is_empty()) {
