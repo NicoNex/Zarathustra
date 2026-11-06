@@ -274,7 +274,9 @@ fn main() -> Result<()> {
         // Wake every few minutes so automatic warmth follows the clock, or when a finger held
         // still on a page becomes a long press.
         let long_press = match (&screen, press.pending()) {
-            (Screen::Reader(_), Some(at)) if !quick.is_open() => Some(LONG_PRESS.saturating_sub(at.elapsed())),
+            (Screen::Reader(_) | Screen::Home(_), Some(at)) if !quick.is_open() => {
+                Some(LONG_PRESS.saturating_sub(at.elapsed()))
+            }
             _ => None,
         };
         // A search under way only peeks at the input queue between chapters.
@@ -385,8 +387,6 @@ fn main() -> Result<()> {
                 Phase::Up => {}
             }
             let Some(start) = down.take() else { continue };
-            // ponytail: on the home a long press acts on lift, with no feedback while held.
-            let held = press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS);
             if std::mem::take(&mut press).fired {
                 // The end of a long press: show the actions for the selection, if any.
                 if let Screen::Reader(r) = &mut screen {
@@ -415,11 +415,7 @@ fn main() -> Result<()> {
                     true => Action::Redraw { turn: None },
                     false => r.tap(start, t.x, &mut ctx),
                 },
-                // A slow tap away from a book (chips, page turns) is still a tap.
-                Screen::Home(h) => match held.then(|| h.long_press(start, &ctx)) {
-                    Some(Action::None) | None => h.tap(start, (t.x, t.y), &ctx),
-                    Some(a) => a,
-                },
+                Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
                 Screen::Pdf(p) => p.tap(start, t.x, &mut ctx),
             };
             // Screen changes flash (clean slate); page turns animate and flash now and then.
@@ -477,9 +473,23 @@ fn main() -> Result<()> {
             eprintln!("drawn in {drawn:?}");
         }
         // A finger held still past the long-press delay (the timeout above woke us).
-        if let (Screen::Reader(r), Some(start)) = (&mut screen, down) {
-            if !quick.is_open() && press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) {
-                press.fire(r, start, &mut selection);
+        let held = press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) && !quick.is_open();
+        if let Some(start) = down.filter(|_| held) {
+            match &mut screen {
+                Screen::Reader(r) => press.fire(r, start, &mut selection),
+                // On a book: its menu, while the finger is still down. Elsewhere (chips, page
+                // turns) the press stays a tap.
+                Screen::Home(h) => {
+                    press.at = None;
+                    if let Action::Redraw { .. } = h.long_press(start, &ctx) {
+                        press.fired = true;
+                        dev.wait_refresh(marker)?;
+                        h.render(&mut dev.canvas(), &mut ctx);
+                        marker =
+                            dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
+                    }
+                }
+                Screen::Pdf(_) => {}
             }
         }
         if let (Screen::Reader(r), false) = (&mut screen, quick.is_open()) {
