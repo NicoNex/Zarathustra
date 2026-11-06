@@ -806,8 +806,11 @@ impl Home {
             return eprintln!("mark read: {e}");
         }
         self.books[i].progress = read.then(|| (1.0, SystemTime::now()));
+        // The card falls back to the book read before it, not to nothing.
         if self.current.as_ref().is_some_and(|(c, _)| *c == i) {
-            self.current = None;
+            self.current = current(&self.books);
+            let card = self.current.as_ref().map(|&(i, _)| &self.books[i].book);
+            (self.reading, self.quote) = band_data(ctx, card.map(|b| (b.path.as_path(), b.title.as_str())));
         }
         self.refilter(self.filter, self.page);
     }
@@ -1178,6 +1181,34 @@ mod tests {
         std::fs::remove_file(books.join("a.epub")).expect("remove");
         assert!(home.refresh(&ctx));
         assert_eq!(home.books.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn unmarking_the_book_on_the_card_shows_the_one_read_before() {
+        let book = Path::new("../../dev-books/etica.epub");
+        if !book.exists() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("zarathustra-unmark-{}", std::process::id()));
+        let (books, state) = (dir.join("books"), dir.join("state"));
+        std::fs::create_dir_all(&books).expect("dirs");
+        std::fs::create_dir_all(&state).expect("dirs");
+        let mut ctx = Ctx::new();
+        ctx.state_dir = state;
+        for (name, age) in [("a.epub", 3600), ("b.epub", 0)] {
+            std::fs::copy(book, books.join(name)).expect("copy");
+            let pos = ctx.state_file(&books.join(name));
+            std::fs::write(&pos, "1 0 0.3000 0\n").expect("write");
+            let when = SystemTime::now() - std::time::Duration::from_secs(age);
+            std::fs::File::options().write(true).open(&pos).and_then(|f| f.set_modified(when)).expect("mtime");
+        }
+        let mut home = Home::scan(std::slice::from_ref(&books), &ctx);
+        let on_card = |h: &Home| h.current.as_ref().map(|&(i, _)| h.books[i].book.path.clone());
+        assert_eq!(on_card(&home), Some(books.join("b.epub")));
+        let b = home.books.iter().position(|e| e.book.path == books.join("b.epub")).expect("b");
+        home.mark_read(b, false, &ctx);
+        assert_eq!(on_card(&home), Some(books.join("a.epub")), "the book still being read");
         std::fs::remove_dir_all(dir).ok();
     }
 }
