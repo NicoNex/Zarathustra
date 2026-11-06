@@ -17,7 +17,7 @@ use crate::ui::{rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE,
 use crate::{Ctx, W};
 
 /// The panel covers the top of the screen, full width.
-pub const PANEL: Rect = Rect { x: 0, y: 0, w: W, h: 792 };
+pub const PANEL: Rect = Rect { x: 0, y: 0, w: W, h: 1016 };
 /// A downward swipe that starts this close to the top edge opens the panel.
 pub const EDGE: i32 = 60;
 /// Minimum travel for a swipe; less is a tap.
@@ -59,8 +59,8 @@ impl Slider {
     /// Baseline of the label line.
     fn label_y(self) -> i32 {
         match self {
-            Slider::Brightness => 452,
-            Slider::Warmth => 636,
+            Slider::Brightness => 676,
+            Slider::Warmth => 860,
         }
     }
 
@@ -105,18 +105,26 @@ fn value_at(x: i32) -> u8 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tile {
+    Wifi,
+    Transfer,
+    /// A full flashing refresh, clearing e-ink ghosting now.
+    Clean,
+    Sleep,
     AutoWarmth,
     Animation,
     Clock,
-    Sleep,
+    /// White text on black.
+    Night,
 }
 
-const TILES: [Tile; 4] = [Tile::AutoWarmth, Tile::Animation, Tile::Clock, Tile::Sleep];
+/// Two rows of four: connections and actions first, then reading toggles.
+const TILES: [Tile; 8] =
+    [Tile::Wifi, Tile::Transfer, Tile::Clean, Tile::Sleep, Tile::AutoWarmth, Tile::Animation, Tile::Clock, Tile::Night];
 
 impl Tile {
     fn rect(self) -> Rect {
         let i = TILES.iter().position(|t| *t == self).unwrap_or(0) as i32;
-        Rect::new(PAD + i * (TILE_W + TILE_GAP), TILE_TOP, TILE_W, TILE_H)
+        Rect::new(PAD + (i % 4) * (TILE_W + TILE_GAP), TILE_TOP + (i / 4) * (TILE_H + TILE_GAP), TILE_W, TILE_H)
     }
 
     fn label(self) -> [&'static str; 2] {
@@ -147,6 +155,8 @@ pub struct QuickPanel {
     warmth: u8,
     has_warmth: bool,
     battery: Option<Battery>,
+    /// Wi-Fi: `None` off, else the network joined ("" while searching).
+    wifi: Option<String>,
     open: bool,
     down: Option<(i32, i32)>,
     drag: Option<Slider>,
@@ -169,6 +179,7 @@ impl QuickPanel {
             warmth: settings.warmth,
             has_warmth: current.is_none_or(|l| l.warmth.is_some()),
             battery: None,
+            wifi: None,
             open: false,
             down: None,
             drag: None,
@@ -179,6 +190,23 @@ impl QuickPanel {
         }
         panel.apply(dev);
         panel
+    }
+
+    /// The panel as it looks open with a sample battery and network, for `--pgm` reviews.
+    pub fn preview(state_dir: &Path) -> QuickPanel {
+        let settings = Settings::load(state_dir);
+        QuickPanel {
+            settings,
+            state_dir: state_dir.to_path_buf(),
+            warmth: settings.warmth,
+            has_warmth: true,
+            battery: Some(Battery { percent: 76, charging: false }),
+            wifi: Some("Casa".into()),
+            open: true,
+            down: None,
+            drag: None,
+            applied: None,
+        }
     }
 
     pub fn settings(&self) -> &Settings {
@@ -286,6 +314,8 @@ impl QuickPanel {
         let inside = |r: Rect| r.contains(x, y);
         let s = &mut self.settings;
         let rect = match TILES.into_iter().find(|t| inside(t.rect())) {
+            // ponytail: drawn for review, wired once the design is agreed.
+            Some(Tile::Wifi | Tile::Transfer | Tile::Clean | Tile::Night) => return QuickResult::None,
             Some(Tile::Sleep) => {
                 self.close();
                 return QuickResult::Sleep;
@@ -412,26 +442,60 @@ impl QuickPanel {
 
         for tile in TILES {
             let r = tile.rect();
+            // Toggles show their state; actions (transfer, clean, sleep) an icon.
             let on = match tile {
-                Tile::AutoWarmth => self.settings.auto_warmth,
-                Tile::Animation => self.settings.swipe_animation,
-                Tile::Clock => self.settings.clock,
-                Tile::Sleep => false,
+                Tile::Wifi => Some(self.wifi.is_some()),
+                Tile::AutoWarmth => Some(self.settings.auto_warmth),
+                Tile::Animation => Some(self.settings.swipe_animation),
+                Tile::Clock => Some(self.settings.clock),
+                Tile::Night => Some(false),
+                Tile::Transfer | Tile::Clean | Tile::Sleep => None,
             };
-            let (bg, ink) = if on { (INK, PAPER) } else { (FILL, INK) };
+            let (bg, ink) = if on == Some(true) { (INK, PAPER) } else { (FILL, INK) };
             rounded_rect(c, r, 24, bg);
             let (x, y) = (r.x + 26, r.y);
-            if tile == Tile::Sleep {
+            match (tile, on) {
+                (_, Some(on)) => {
+                    let state = Label { face: bold, size: 38.0, ink };
+                    state.draw(c, raster, if on { t().on } else { t().off }, x as f32, y + 66);
+                }
                 // A crescent moon: a disc with an offset disc of the background cut out.
-                rounded_rect(c, Rect::new(x, y + 26, 48, 48), 24, ink);
-                rounded_rect(c, Rect::new(x + 16, y + 16, 44, 44), 22, bg);
-            } else {
-                let state = Label { face: bold, size: 38.0, ink };
-                state.draw(c, raster, if on { t().on } else { t().off }, x as f32, y + 66);
+                (Tile::Sleep, _) => {
+                    rounded_rect(c, Rect::new(x, y + 26, 48, 48), 24, ink);
+                    rounded_rect(c, Rect::new(x + 16, y + 16, 44, 44), 22, bg);
+                }
+                // An arrow down into a tray.
+                (Tile::Transfer, _) => {
+                    c.fill(Rect::new(x + 21, y + 22, 6, 26), ink);
+                    for n in 0..12 {
+                        c.fill(Rect::new(x + 10 + n, y + 44 + n, 28 - 2 * n, 1), ink);
+                    }
+                    c.fill(Rect::new(x, y + 66, 48, 6), ink);
+                    c.fill(Rect::new(x, y + 54, 6, 14), ink);
+                    c.fill(Rect::new(x + 42, y + 54, 6, 14), ink);
+                }
+                // A ring with an arrowhead: refresh.
+                _ => {
+                    rounded_outline(c, Rect::new(x, y + 24, 48, 48), 24, 6, ink, bg);
+                    c.fill(Rect::new(x + 30, y + 20, 20, 18), bg);
+                    for n in 0..10 {
+                        c.fill(Rect::new(x + 26 + n, y + 18 + n, 20 - 2 * n, 1), ink);
+                    }
+                }
             }
             let label = Label { face: sans, size: 30.0, ink };
-            for (i, line) in tile.label().iter().enumerate() {
+            let [first, second] = tile.label();
+            // The Wi-Fi tile's second line is the network joined.
+            let second = match (tile, &self.wifi) {
+                (Tile::Wifi, Some(net)) => net.as_str(),
+                _ => second,
+            };
+            for (i, line) in [first, second].iter().enumerate() {
                 label.draw(c, raster, &label.fit(line, (r.w - 40) as f32), x as f32, y + 134 + i as i32 * 38);
+            }
+            if tile == Tile::Wifi {
+                // The way into the network list.
+                Label { face: bold, size: 44.0, ink }.draw(c, raster, "›", (r.right() - 44) as f32, y + 64);
             }
         }
 
