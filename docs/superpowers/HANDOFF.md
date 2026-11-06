@@ -17,18 +17,14 @@ Merged and deployed: highlights store + UX (long press, drag, popup; `highlight.
 
 Review/simplify of d9c7840..HEAD DONE and merged (engine: 9942ffb, 234c71f; shell: b985cbc + shared UI helpers/clock.rs/lazy covers). **Last reviewed: 2de82c5** (review of 08ca9a6..2de82c5 merged as 9ea4565^; f23799f home sort and later not yet). Merged fixes NOT yet deployed (device was offline): deploy and let the user test light mix, center alignment, broken-chapter skip, exact positions, highlight edges.
 
-## In flight (2026-11-05 night) — check `git branch | grep worktree-agent` and `git log master..BRANCH`
+## In flight (2026-11-06) — check `git branch | grep worktree-agent` and `git log master..BRANCH`
 
-Merged today: review fixes, notebook, 2-row grid, wait-before-draw, TXT/kepub, Italian i18n, reading stats, swipe-up typography menu, power partial, PDF via MuPDF (+3.6 MB binary; `.cargo/config.toml` env + `scripts/target-ld.sh`), book menu + About + statistics screen (6f33ee1). Last on-device deploy: before the PDF merge.
+Merged (not yet on the device): review fixes (2de82c5 reviewed), library sort, bookmarks + scrubber + back pill (`nav.rs`), footnote popup (`footnote.rs`, engine `note.rs`), dictionaries (StarDict, engine `dict/`, `dict.rs` card on long press of a word; Kindle .azw dicts are DRM → free Wiktionary dicts via `scripts/fetch-dicts.sh [push]` to /mnt/us/dictionaries), in-book search (`keyboard.rs`, `search.rs`, engine `search.rs`). Slow all-books note sweep test is `#[ignore]`.
 
-Running agents (worktrees; merge when done, expect conflicts in reader.rs / app.rs / highlight.rs / i18n.rs):
-- Device agent: power button (powerd "Splash screen is on. Ignoring power button" with framework stopped; KOReader keeps the framework alive) + slider smoothness. OWNS THE DEVICE until it reports.
-- Footnotes popup in the reader.
-- Dictionary lookup (StarDict; Kindle .azw dicts if not DRM, else free dictionaries + scripts/fetch-dicts.sh).
-- Review + simplify of 08ca9a6..HEAD (applies fixes; after merging it, last reviewed = its base).
-- (planned) bookmarks + go-to-position + back-to-previous; in-book search.
+Running: device agent (power button + slider smoothness), OWNS THE DEVICE. When it reports: merge, `scripts/fetch-dicts.sh push`, deploy, let the user test everything.
 
-User asks (2026-11-05): complete reader UI without KOReader-style settings bloat; parallelize; optimize for speed; review+simplify every ~2000 lines; Italian week starts Monday; handoff before usage limit.
+Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
+Review rule: next review+simplify from 2de82c5 when `git diff --shortstat 2de82c5..HEAD -- crates` passes ~2000 added lines.
 
 ## Next steps (user priorities)
 
