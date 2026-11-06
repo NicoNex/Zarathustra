@@ -336,6 +336,11 @@ impl Highlights {
             .collect();
     }
 
+    /// The book's database row, shared with the bookmarks; `None` without a database.
+    pub fn store(&self) -> Option<(&Store, BookId)> {
+        self.store.as_ref().map(|(s, b)| (s, *b))
+    }
+
     /// Logs `secs` of reading and one page for today in the reading statistics.
     pub fn log_page(&self, secs: u32) {
         let Some((store, book)) = &self.store else { return };

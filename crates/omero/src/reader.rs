@@ -1,7 +1,8 @@
 //! The reading view: an open book, its laid-out chapter and the page shown.
 //!
 //! Tap the right two thirds (or swipe left) for the next page, the left third (or swipe right)
-//! for the previous one, the top band to go back home. The position is saved per book.
+//! for the previous one, the top band to go back home, the top-right corner to bookmark the
+//! page (see [`crate::nav`]). The position is saved per book.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -12,10 +13,11 @@ use omero_engine::book::{Book, Chapter};
 use omero_engine::font::draw_glyph;
 use omero_engine::layout::page::Page;
 use omero_engine::style::cascade::Preferences;
-use omero_store::AnnotationData;
+use omero_store::{AnnotationData, Kind};
 
 use crate::highlight::{page_start, resolve, Highlights, Outcome, TextPos};
 use crate::menu::{self, Control, Typography};
+use crate::nav::{self, Back, Bookmarks, Mark};
 use crate::pace::Pace;
 use crate::toc::{self, Toc};
 use crate::ui::{Label, INK_SOFT, LINE};
@@ -56,6 +58,11 @@ pub struct Reader {
     pace: Pace,
     /// Saved highlights and the selection in progress.
     hl: Highlights,
+    marks: Bookmarks,
+    /// Where the reader was before the last jump.
+    back: Back,
+    /// The book fraction under the finger while dragging the menu's scrubber.
+    scrub: Option<f32>,
 }
 
 /// A saved reading position: chapter, where the page starts (block and byte offset in the
@@ -93,6 +100,7 @@ impl Reader {
         let saved = Position::load(&state_file);
         let contents = toc::entries(&book);
         let hl = Highlights::open(path, &book, &ctx.state_dir);
+        let marks = Bookmarks::load(hl.store());
         let mut r = Reader {
             chapter_index: saved.as_ref().map_or(0, |p| p.chapter.min(book.chapters.len() - 1)),
             book,
@@ -109,6 +117,9 @@ impl Reader {
             clock: false,
             pace: Pace::load(&ctx.state_dir),
             hl,
+            marks,
+            back: Back::default(),
+            scrub: None,
         };
         r.pace.restart(Instant::now());
         // A cover-only, empty or broken chapter: start at the nearest one with pages.
@@ -122,10 +133,12 @@ impl Reader {
         Ok(r)
     }
 
-    /// Goes to the page showing a saved highlight; stays put when its chapter doesn't load.
+    /// Goes to the page showing a saved highlight or bookmark; stays put when its chapter
+    /// doesn't load.
     pub fn goto(&mut self, data: &AnnotationData, ctx: &mut Ctx) {
         let Some(i) = self.book.spine.iter().position(|&s| u32::try_from(s) == Ok(data.start.spine)) else { return };
         let (chapter, page) = (self.chapter_index, self.page);
+        let from = self.mark();
         match self.load(i, ctx) {
             Ok(()) if !self.chapter.pages.is_empty() => {}
             Ok(()) => return self.restore(chapter, page, ctx),
@@ -135,8 +148,30 @@ impl Reader {
             }
         }
         let map = omero_engine::anchor::TextMap::new(&self.chapter.dom);
-        let range = resolve(&self.chapter.dom, &map, &self.chapter.blocks, data);
-        self.page = range.map_or(0, |r| self.page_of(r.start));
+        let (dom, blocks) = (&self.chapter.dom, &self.chapter.blocks);
+        let pos = match data.kind {
+            Kind::Bookmark => nav::resolve(dom, &map, blocks, data),
+            _ => resolve(dom, &map, blocks, data).map(|r| r.start),
+        };
+        self.page = pos.map_or(0, |p| self.page_of(p));
+        self.back.jumped(from, self.mark());
+        self.save();
+    }
+
+    /// Where the page shown is, to come back to.
+    fn mark(&self) -> Mark {
+        Mark { chapter: self.chapter_index, pos: self.start(), page: self.page }
+    }
+
+    /// Back to where the reader was before the last jump.
+    fn go_back(&mut self, ctx: &mut Ctx) {
+        let Some(m) = self.back.take() else { return };
+        if m.chapter != self.chapter_index {
+            if let Err(e) = self.load(m.chapter, ctx) {
+                return eprintln!("chapter {}: {e:#}", m.chapter);
+            }
+        }
+        self.page = self.page_of(m.pos);
         self.save();
     }
 
@@ -158,7 +193,9 @@ impl Reader {
         self.chapter_index = i;
         self.page = 0;
         let spine = self.book.spine.get(i).copied().unwrap_or(i);
-        self.hl.chapter_loaded(&self.chapter, u32::try_from(spine).unwrap_or(u32::MAX));
+        let spine = u32::try_from(spine).unwrap_or(u32::MAX);
+        self.hl.chapter_loaded(&self.chapter, spine);
+        self.marks.chapter_loaded(&self.chapter, spine);
         eprintln!("chapter {i}: {} pages in {:?}", self.chapter.pages.len(), t.elapsed());
         Ok(())
     }
@@ -193,8 +230,7 @@ impl Reader {
 
     /// The page showing position `pos`: the last page starting at or before it.
     fn page_of(&self, pos: TextPos) -> usize {
-        let blocks = &self.chapter.blocks;
-        (self.chapter.pages.iter()).rposition(|p| page_start(p, blocks).is_some_and(|s| s <= pos)).unwrap_or(0)
+        nav::page_of(&self.chapter, pos)
     }
 
     /// The first page showing block `block` (or what follows it, for a block without text).
@@ -238,6 +274,7 @@ impl Reader {
             }
             self.page = if forward { 0 } else { self.chapter.pages.len() - 1 };
         }
+        self.back.turned();
         self.save();
         true
     }
@@ -273,9 +310,25 @@ impl Reader {
             return self.toc_tap((x0, y0), x, ctx);
         }
         if self.menu {
+            if menu::scrubber(ctx).contains(x0, y0) {
+                return self.scrub_to(x, ctx);
+            }
             return self.menu_tap((x0, y0), ctx);
         }
-        if (x - x0).abs() <= SWIPE {
+        let still = (x - x0).abs() <= SWIPE;
+        if still && !self.hl.is_active() {
+            // The dog-ear corner wins over the top band that opens the menu.
+            if nav::in_corner((x0, y0)) {
+                let title = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.clone());
+                self.marks.toggle(self.hl.store(), &self.chapter, self.page, title);
+                return Action::Region(nav::ribbon_area());
+            }
+            if self.back.get().is_some() && nav::pill().contains(x0, y0) {
+                self.go_back(ctx);
+                return Action::Redraw { turn: None };
+            }
+        }
+        if still {
             if self.hl.is_active() {
                 // A highlight may be saved: file it under the chapter being read.
                 let entry = self.current_entry().and_then(|i| self.contents.get(i));
@@ -317,7 +370,7 @@ impl Reader {
                 self.menu = false;
                 Action::Home
             }
-            Some((Control::Contents, _)) if !self.contents.is_empty() => {
+            Some((Control::Contents, _)) => {
                 self.show_contents();
                 Action::Redraw { turn: None }
             }
@@ -337,14 +390,43 @@ impl Reader {
         }
     }
 
-    /// Opens the table of contents over the page.
+    /// Opens the table of contents (the bookmarks, for a book without one) over the page.
     pub fn show_contents(&mut self) {
-        self.toc = Some(Toc::new(self.current_entry()));
+        let tab = if self.contents.is_empty() { toc::Tab::Bookmarks } else { toc::Tab::Contents };
+        self.toc = Some(Toc::new(self.current_entry(), tab));
+    }
+
+    /// The finger moved from `start` to `at`: while it drags the menu's scrubber, the area
+    /// to redraw (the scrubber); `None` otherwise or when nothing changed.
+    pub fn scrub(&mut self, start: (i32, i32), (x, _): (i32, i32), ctx: &Ctx) -> Option<Rect> {
+        let r = menu::scrubber(ctx);
+        if !self.menu || self.toc.is_some() || !r.contains(start.0, start.1) {
+            return None;
+        }
+        let f = nav::fraction(r, x);
+        (self.scrub.replace(f) != Some(f)).then_some(r)
+    }
+
+    /// The finger lifted off the scrubber at `x`: goes to that point of the book, its chapter
+    /// and the page as far into it, and closes the menu.
+    fn scrub_to(&mut self, x: i32, ctx: &mut Ctx) -> Action {
+        self.scrub = None;
+        let from = self.mark();
+        let (chapter, within) = nav::target(nav::fraction(menu::scrubber(ctx), x), self.book.chapters.len());
+        if chapter != self.chapter_index && !self.load_readable(chapter, true, ctx) {
+            self.restore(from.chapter, from.page, ctx);
+        } else if self.chapter_index == chapter {
+            self.page = nav::page_in(within, self.chapter.pages.len());
+        }
+        self.menu = false;
+        self.back.jumped(from, self.mark());
+        self.save();
+        Action::Redraw { turn: None }
     }
 
     fn toc_tap(&mut self, start: (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
         let Some(view) = &mut self.toc else { return Action::None };
-        match view.tap(&self.contents, start, x) {
+        match view.tap(&self.contents, self.marks.list().len(), start, x) {
             toc::Tap::None => Action::None,
             toc::Tap::Redraw => Action::Redraw { turn: None },
             toc::Tap::Back => {
@@ -355,6 +437,18 @@ impl Reader {
                 self.jump(i, ctx);
                 Action::Redraw { turn: None }
             }
+            toc::Tap::Bookmark(i) => {
+                let Some(a) = self.marks.list().get(i) else { return Action::None };
+                let data = a.data.clone();
+                self.goto(&data, ctx);
+                self.toc = None;
+                self.menu = false;
+                Action::Redraw { turn: None }
+            }
+            toc::Tap::Remove(i) => {
+                self.marks.remove(self.hl.store(), i);
+                Action::Redraw { turn: None }
+            }
         }
     }
 
@@ -363,6 +457,7 @@ impl Reader {
     fn jump(&mut self, i: usize, ctx: &mut Ctx) {
         let Some(e) = self.contents.get(i).cloned() else { return };
         let (chapter, page) = (self.chapter_index, self.page);
+        let from = self.mark();
         if !self.load_readable(e.chapter, true, ctx) {
             self.restore(chapter, page, ctx);
         } else if let Some(f) = e.fragment.as_deref().filter(|_| self.chapter_index == e.chapter) {
@@ -371,6 +466,7 @@ impl Reader {
         }
         self.toc = None;
         self.menu = false;
+        self.back.jumped(from, self.mark());
         self.save();
     }
 
@@ -382,6 +478,9 @@ impl Reader {
     /// Lays the chapter out again with the current typography, keeping the reading position.
     fn relayout(&mut self, ctx: &mut Ctx) {
         let start = self.start();
+        // ponytail: the way back names a page of the old layout; dropped rather than
+        // recomputed, since a typography change mid-jump is rare.
+        self.back.turned();
         self.prefs = preferences(&self.typo);
         // On failure the old layout stays up.
         match self.load(self.chapter_index, ctx) {
@@ -426,7 +525,7 @@ impl Reader {
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
         if let Some(view) = &self.toc {
-            return view.render(c, ctx, &self.contents);
+            return view.render(c, ctx, &self.contents, self.marks.list());
         }
         c.fill(c.bounds(), 255);
         if let Some(page) = self.chapter.pages.get(self.page) {
@@ -455,11 +554,21 @@ impl Reader {
         }
         self.header(c, ctx);
         self.footer(c, ctx);
+        if self.marks.marked(&self.chapter, self.page) {
+            nav::draw_ribbon(c);
+        }
+        if let Some(m) = self.back.get() {
+            nav::draw_pill(c, ctx, m.page);
+        }
         self.hl.render_over(c, ctx);
         if self.menu {
             let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
             let chapter = chapter.or((!self.contents.is_empty()).then_some(""));
             menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""), chapter);
+            let f = self.scrub.unwrap_or_else(|| self.progress());
+            let chapters = self.book.chapters.len();
+            let title = nav::chapter_title(&self.contents, nav::target(f, chapters).0).unwrap_or("");
+            nav::draw_scrubber(c, ctx, menu::scrubber(ctx), f, self.scrub.is_some(), title, chapters);
         }
     }
 

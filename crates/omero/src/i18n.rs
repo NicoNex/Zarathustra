@@ -52,6 +52,12 @@ pub struct Strings {
     pub no_highlights_hint: &'static str,
     pub contents: &'static str,
     pub no_contents: &'static str,
+    pub bookmarks: &'static str,
+    pub bookmark: &'static str,
+    pub no_bookmarks: &'static str,
+    pub no_bookmarks_hint: &'static str,
+    /// Reader menu: the scrubber's label at rest.
+    pub position: &'static str,
     /// Typography menu: section headers, row labels, choices.
     pub text: &'static str,
     pub layout: &'static str,
@@ -124,6 +130,11 @@ const IT: Strings = Strings {
     no_highlights_hint: "Tieni premuta una parola durante la lettura per iniziare.",
     contents: "Indice",
     no_contents: "Nessun indice",
+    bookmarks: "Segnalibri",
+    bookmark: "Segnalibro",
+    no_bookmarks: "Ancora nessun segnalibro.",
+    no_bookmarks_hint: "Tocca l'angolo in alto a destra di una pagina per aggiungerne uno.",
+    position: "Posizione nel libro",
     text: "Testo",
     layout: "Impaginazione",
     size: "Dimensione",
@@ -202,6 +213,11 @@ const EN: Strings = Strings {
     no_highlights_hint: "Press and hold a word while reading to start one.",
     contents: "Contents",
     no_contents: "No table of contents",
+    bookmarks: "Bookmarks",
+    bookmark: "Bookmark",
+    no_bookmarks: "No bookmarks yet.",
+    no_bookmarks_hint: "Tap the top-right corner of a page to add one.",
+    position: "Position in book",
     text: "Text",
     layout: "Layout",
     size: "Size",
@@ -298,6 +314,14 @@ impl Lang {
             (Lang::It, n) => format!("{n} evidenziazioni"),
             (Lang::En, 1) => "1 highlight".into(),
             (Lang::En, n) => format!("{n} highlights"),
+        }
+    }
+
+    /// The pill offering the way back after a jump: "‹  Torna a p. 12".
+    pub fn back_to_page(self, page: usize) -> String {
+        match self {
+            Lang::It => format!("‹  Torna a p. {page}"),
+            Lang::En => format!("‹  Back to p. {page}"),
         }
     }
 

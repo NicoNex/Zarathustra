@@ -7,6 +7,7 @@ pub mod highlight;
 pub mod home;
 pub mod i18n;
 pub mod menu;
+pub mod nav;
 pub mod notebook;
 pub mod pace;
 pub mod pdfview;
