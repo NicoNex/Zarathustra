@@ -1,6 +1,7 @@
 //! Home: the book being read on top (first page only), filter chips, then the library as a
 //! gallery of covers or as a list, a page at a time.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -127,6 +128,14 @@ pub struct Home {
     dirs: Vec<PathBuf>,
 }
 
+/// A book's file time and its grid and list covers, kept across a refresh.
+type Covers = (SystemTime, Option<GrayImage>, Option<GrayImage>);
+
+fn library(dirs: &[PathBuf], ctx: &Ctx) -> Library {
+    let paths: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+    Library::scan(&paths, &ctx.state_dir.join("library"))
+}
+
 /// Reading progress of the book at `path` and when it was saved; `None` if never opened.
 fn progress(ctx: &Ctx, path: &Path) -> Option<(f32, SystemTime)> {
     let state = ctx.state_file(path);
@@ -149,8 +158,40 @@ fn cover(thumb: Option<&Path>, (w, h): (i32, i32)) -> Option<GrayImage> {
 
 impl Home {
     pub fn scan(dirs: &[PathBuf], ctx: &Ctx) -> Home {
-        let paths: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
-        let library = Library::scan(&paths, &ctx.state_dir.join("library"));
+        Self::build(library(dirs, ctx), dirs, ctx, HashMap::new())
+    }
+
+    /// Picks up books added, removed or replaced on disk since the last look (a wireless
+    /// transfer, a delete, a copy over USB); true if the library changed. Unchanged books keep
+    /// their decoded covers, and the view (filter, search, page) stays. Nothing changed costs a
+    /// walk of the library folders and a stat per file. Skipped while a sheet is open: it
+    /// holds a book's index.
+    pub fn refresh(&mut self, ctx: &Ctx) -> bool {
+        if self.overlay.is_some() {
+            return false;
+        }
+        let library = library(&self.dirs, ctx);
+        let known: HashMap<&Path, SystemTime> =
+            self.books.iter().map(|b| (b.book.path.as_path(), b.book.modified)).collect();
+        let same = library.books.len() == known.len()
+            && library.books.iter().all(|b| known.get(b.path.as_path()) == Some(&b.modified));
+        if same {
+            return false;
+        }
+        let covers = (std::mem::take(&mut self.books).into_iter())
+            .map(|e| (e.book.path, (e.book.modified, e.cover, e.small)))
+            .collect();
+        let old = std::mem::replace(self, Self::build(library, &self.dirs.clone(), ctx, covers));
+        self.query = old.query;
+        self.keyboard = old.keyboard;
+        self.set_filter(old.filter);
+        self.page = old.page.min(self.pages() - 1);
+        true
+    }
+
+    /// The home for `library`; covers come from `covers` (path → file time, grid and list
+    /// covers) when the file is unchanged, else are decoded.
+    fn build(library: Library, dirs: &[PathBuf], ctx: &Ctx, mut covers: HashMap<PathBuf, Covers>) -> Home {
         let order = library.sorted(SortBy::Title);
         // Library index → title position, to carry the author order over to `books`.
         let mut title_pos = vec![0u32; order.len()];
@@ -166,8 +207,13 @@ impl Home {
             .filter_map(|i| slots[i].take())
             .map(|book| {
                 let progress = progress(ctx, &book.path);
-                let thumb = book.cover_thumb.as_deref();
-                let (cover, small) = (cover(thumb, (CELL_W, COVER_H)), cover(thumb, ROW_COVER));
+                let (cover, small) = match covers.remove(&book.path).filter(|c| c.0 == book.modified) {
+                    Some((_, cover, small)) => (cover, small),
+                    None => {
+                        let thumb = book.cover_thumb.as_deref();
+                        (cover(thumb, (CELL_W, COVER_H)), cover(thumb, ROW_COVER))
+                    }
+                };
                 Entry { book, progress, cover, small }
             })
             .collect();
@@ -604,7 +650,7 @@ impl Home {
             return Action::Redraw { turn: None };
         }
         let _ = std::fs::remove_file(ctx.state_file(path)); // a never-opened book has none
-        *self = Home::scan(&self.dirs, ctx);
+        self.refresh(ctx);
         Action::Redraw { turn: None }
     }
 
@@ -881,4 +927,33 @@ fn draw_cover(
         }
     }
     at
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_picks_up_new_and_removed_books() {
+        let book = Path::new("../../dev-books/etica.epub");
+        if !book.exists() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("zarathustra-refresh-{}", std::process::id()));
+        let (books, state) = (dir.join("books"), dir.join("state"));
+        std::fs::create_dir_all(&books).expect("dirs");
+        std::fs::copy(book, books.join("a.epub")).expect("copy");
+        let mut ctx = Ctx::new();
+        ctx.state_dir = state;
+        let mut home = Home::scan(std::slice::from_ref(&books), &ctx);
+        assert_eq!(home.books.len(), 1);
+        assert!(!home.refresh(&ctx), "nothing changed");
+        std::fs::copy(book, books.join("b.epub")).expect("copy");
+        assert!(home.refresh(&ctx));
+        assert_eq!(home.books.len(), 2);
+        std::fs::remove_file(books.join("a.epub")).expect("remove");
+        assert!(home.refresh(&ctx));
+        assert_eq!(home.books.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

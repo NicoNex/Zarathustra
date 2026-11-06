@@ -305,7 +305,9 @@ fn main() -> Result<()> {
         };
         // A search under way only peeks at the input queue between chapters.
         let searching = matches!(&screen, Screen::Reader(r) if r.is_searching()) && !quick.is_open();
-        let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(Duration::from_secs(300)) };
+        // The home looks for new books every half minute (a walk and a stat per file).
+        let idle = Duration::from_secs(if matches!(screen, Screen::Home(_)) { 30 } else { 300 });
+        let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(idle) };
         dev.wait_events(Some(timeout), &mut events)?;
         let mut power = false;
         while let Some(ev) = dev.power_event() {
@@ -324,6 +326,9 @@ fn main() -> Result<()> {
                 }
                 PowerEvent::Wake => {
                     asleep = false;
+                    if let Screen::Home(h) = &mut screen {
+                        h.refresh(&ctx);
+                    }
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
                 PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
@@ -334,6 +339,14 @@ fn main() -> Result<()> {
         }
         // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
         let periodic = events.is_empty() && long_press.is_none() && !power && !searching;
+        // On the home, books that arrived meanwhile.
+        if let (true, false, Screen::Home(h)) = (periodic && !quick.is_open(), asleep, &mut screen) {
+            if h.refresh(&ctx) {
+                dev.wait_refresh(marker)?;
+                h.render(&mut dev.canvas(), &mut ctx);
+                marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
+            }
+        }
         if periodic && !asleep && !quick.is_open() && quick.settings().clock {
             if let Screen::Reader(_) | Screen::Pdf(_) = screen {
                 dev.wait_refresh(marker)?;
@@ -486,6 +499,7 @@ fn main() -> Result<()> {
                     let h = match shelf.take() {
                         Some((mut h, path)) => {
                             h.returned(&path, &ctx);
+                            h.refresh(&ctx);
                             h
                         }
                         None => Box::new(home(&ctx)),

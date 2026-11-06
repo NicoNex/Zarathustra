@@ -108,9 +108,14 @@ impl Library {
             })
             .unzip();
         let library = Library { books };
-        let cached: Vec<&BookEntry> = library.books.iter().zip(cacheable).filter_map(|(b, c)| c.then_some(b)).collect();
-        // ponytail: a read-only or full cache dir just means slower rescans; nothing to report.
-        let _ = save_cache(cache_dir, &cached);
+        // Rewritten only when a book was read afresh or one left: a rescan of an unchanged
+        // library (the home checks often) is just a walk and a stat per file.
+        if cacheable.contains(&false) || cache.len() != library.books.len() {
+            let cached: Vec<&BookEntry> =
+                library.books.iter().zip(cacheable).filter_map(|(b, c)| c.then_some(b)).collect();
+            // ponytail: a read-only or full cache dir just means slower rescans; nothing to report.
+            let _ = save_cache(cache_dir, &cached);
+        }
         library
     }
 
