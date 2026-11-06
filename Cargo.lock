@@ -786,62 +786,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "omero"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "omero-device",
- "omero-engine",
- "omero-store",
-]
-
-[[package]]
-name = "omero-device"
-version = "0.1.0"
-dependencies = [
- "libc",
- "minifb",
- "tempfile",
-]
-
-[[package]]
-name = "omero-engine"
-version = "0.1.0"
-dependencies = [
- "cssparser",
- "flate2",
- "gif",
- "harfrust",
- "hyphenation",
- "icu_segmenter",
- "jpeg-encoder",
- "memchr",
- "mupdf",
- "omero-device",
- "percent-encoding",
- "precomputed-hash",
- "quick-xml 0.42.0",
- "selectors",
- "skrifa",
- "thiserror",
- "zeno",
- "zip",
- "zune-core",
- "zune-jpeg",
- "zune-png",
-]
-
-[[package]]
-name = "omero-store"
-version = "0.1.0"
-dependencies = [
- "omero-engine",
- "rusqlite",
- "thiserror",
- "uuid",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1642,6 +1586,62 @@ dependencies = [
  "quote",
  "syn 3.0.9",
  "synstructure",
+]
+
+[[package]]
+name = "zarathustra"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "zarathustra-device",
+ "zarathustra-engine",
+ "zarathustra-store",
+]
+
+[[package]]
+name = "zarathustra-device"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "minifb",
+ "tempfile",
+]
+
+[[package]]
+name = "zarathustra-engine"
+version = "0.1.0"
+dependencies = [
+ "cssparser",
+ "flate2",
+ "gif",
+ "harfrust",
+ "hyphenation",
+ "icu_segmenter",
+ "jpeg-encoder",
+ "memchr",
+ "mupdf",
+ "percent-encoding",
+ "precomputed-hash",
+ "quick-xml 0.42.0",
+ "selectors",
+ "skrifa",
+ "thiserror",
+ "zarathustra-device",
+ "zeno",
+ "zip",
+ "zune-core",
+ "zune-jpeg",
+ "zune-png",
+]
+
+[[package]]
+name = "zarathustra-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "thiserror",
+ "uuid",
+ "zarathustra-engine",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+[package]
+name = "zarathustra-store"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+zarathustra-engine = { path = "../zarathustra-engine" }
+rusqlite = { version = "0.41", features = ["bundled"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v7"] }

@@ -1,0 +1,30 @@
+[package]
+name = "zarathustra"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "zarathustra-probe"
+path = "src/main.rs"
+
+[features]
+emulator = ["zarathustra-device/emulator"]
+
+[dependencies]
+zarathustra-device = { path = "../zarathustra-device" }
+zarathustra-engine = { path = "../zarathustra-engine" }
+zarathustra-store = { path = "../zarathustra-store" }
+anyhow = "1"
+
+[[bin]]
+name = "zarathustra-textprobe"
+path = "src/bin/textprobe.rs"
+
+[[bin]]
+name = "zarathustra"
+path = "src/bin/app.rs"
+
+[[bin]]
+name = "zarathustra-powerprobe"
+path = "src/bin/powerprobe.rs"

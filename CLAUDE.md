@@ -1,8 +1,8 @@
-# Omero
+# Zarathustra
 
 Start here: `docs/superpowers/HANDOFF.md` (current state, open bugs, next steps).
 
-Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 (portable to other e-ink devices). Design: `docs/superpowers/specs/2026-11-04-omero-reader-design.md`. Plans: `docs/superpowers/plans/`.
+Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 (portable to other e-ink devices). Design: `docs/superpowers/specs/2026-11-04-zarathustra-reader-design.md`. Plans: `docs/superpowers/plans/`.
 
 ## How we work (always)
 
@@ -19,15 +19,15 @@ Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 
 ## Build, deploy, test
 
 - Device build: `cargo build --release --target armv7-unknown-linux-musleabihf` (static musl, linked with `rust-lld`). C deps use the AUR `arm-linux-musleabihf-cross-bin` toolchain via `.cargo/config.toml`.
-- Emulator: `cargo run -p omero --features emulator --bin omero-probe`.
+- Emulator: `cargo run -p zarathustra --features emulator --bin zarathustra-probe`.
 - Deploy over SSH (KOReader's SSH server, port 2222, key auth): `KINDLE_HOST=192.168.1.116 scripts/deploy.sh [binary-to-run]`. Over USB: same script without `KINDLE_HOST`.
 - Screenshot of the device: `KINDLE_HOST=… scripts/screenshot.sh out.png`.
 - Local-only test assets (gitignored): `dev-fonts/` (Bookerly, Baskerville from the device), `dev-books/` (user's EPUBs). Tests skip silently when they are missing.
 
 ## Layout
 
-- `crates/omero-device`: `Device` trait; Kindle MTK backend (`kindle/`), emulator, touch decoding, sysfs light/battery.
-- `crates/omero-engine`: fonts (harfrust + skrifa + zeno), DOM, EPUB container; style, layout and pagination are next.
-- `crates/omero-store`: SQLite (rusqlite, bundled): books, annotations, `events` change feed; schema migrations in `src/v*.sql`. Positions (CFI, text-quote re-anchoring) live in `omero-engine::anchor`.
-- `crates/omero`: binaries (probes now, the app later).
-- `dist/kual/omero`: KUAL extension; `run.sh` stops/restores the Amazon UI.
+- `crates/zarathustra-device`: `Device` trait; Kindle MTK backend (`kindle/`), emulator, touch decoding, sysfs light/battery.
+- `crates/zarathustra-engine`: fonts (harfrust + skrifa + zeno), DOM, EPUB container; style, layout and pagination are next.
+- `crates/zarathustra-store`: SQLite (rusqlite, bundled): books, annotations, `events` change feed; schema migrations in `src/v*.sql`. Positions (CFI, text-quote re-anchoring) live in `zarathustra-engine::anchor`.
+- `crates/zarathustra`: binaries (probes now, the app later).
+- `dist/kual/zarathustra`: KUAL extension; `run.sh` stops/restores the Amazon UI.

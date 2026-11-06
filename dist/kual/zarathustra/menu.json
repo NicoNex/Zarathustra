@@ -1,0 +1,24 @@
+{
+	"items": [
+	{
+		"name": "Zarathustra",
+		"priority": 0,
+		"items": [
+		{
+			"name": "Open Zarathustra",
+			"priority": 0,
+			"action": "/mnt/us/extensions/zarathustra/run.sh",
+			"params": "zarathustra",
+			"status": false
+		},
+		{
+			"name": "Hardware probe",
+			"priority": 1,
+			"action": "/mnt/us/extensions/zarathustra/run.sh",
+			"params": "zarathustra-probe",
+			"status": false
+		}
+		]
+	}
+	]
+}

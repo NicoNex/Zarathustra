@@ -1,0 +1,15 @@
+[package]
+name = "zarathustra-device"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+emulator = ["dep:minifb"]
+
+[dependencies]
+libc = "0.2"
+minifb = { version = "0.29", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

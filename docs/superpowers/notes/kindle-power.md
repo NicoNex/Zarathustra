@@ -27,7 +27,7 @@ Findings from the device (read-only inspection, plus `powerprobe` runs) and from
   between it and the real key for powerd.
 - `preventScreenSaver 1` blocks the idle timeout AND the power button ("Prevent screen saver
   set. Ignoring power button"; only the cover still works): never set it. powerd can't see our
-  touches, so Omero restarts its idle timer (`screenSaverTimeout`, 600 s) with
+  touches, so Zarathustra restarts its idle timer (`screenSaverTimeout`, 600 s) with
   `touchScreenSaverTimeout 1` at most every 30 s while touches arrive.
 - `deferSuspend`, `suspendGrace`, `abortSuspend`, `wakeUp`: writable knobs; not needed.
 - `/sys/power/state` offers `freeze mem`. Writing it ourselves would bypass powerd's
@@ -37,11 +37,11 @@ Findings from the device (read-only inspection, plus `powerprobe` runs) and from
 
 `lipc-wait-event -m com.lab126.powerd goingToScreenSaver,outOfScreenSaver,readyToSuspend,wakeupFromSuspend`
 prints one line per event, `name arg`, **line-buffered even into a pipe** (verified with
-`lipc-send-event` on a private source). Omero spawns it as a child with
+`lipc-send-event` on a private source). Zarathustra spawns it as a child with
 `PR_SET_PDEATHSIG`, sets the pipe non-blocking and polls its fd next to the touch panel in
 `Device::wait_events`. No liblipc FFI is needed.
 
-## Sleep sequence (what Omero does)
+## Sleep sequence (what Zarathustra does)
 
 1. `goingToScreenSaver`: the device backend saves the light level and turns it off, and
    mutes touch. The app draws the sleep screen and refreshes it with a full flash.
@@ -59,7 +59,7 @@ prints one line per event, `name arg`, **line-buffered even into a pipe** (verif
 
 ## Risks
 
-- If Omero dies while asleep, `run.sh` restarts the framework; the next button press wakes
+- If Zarathustra dies while asleep, `run.sh` restarts the framework; the next button press wakes
   into the Amazon UI. The listener child dies with us (PDEATHSIG).
 - If the blanket module were left unloaded (run.sh killed with SIGKILL), the Amazon UI would
   sleep with a white screen until the next reboot or `lipc-set-prop com.lab126.blanket load
@@ -81,7 +81,7 @@ the `active` state handler calls a "boot finished?" check (at `0x14888`) that is
 With the framework stopped (1) fails, so the press is dropped. The hall-sensor branch never
 calls the check. `bootSplashCleanup` only affects (2), which is why sending it did nothing.
 
-Fix: Omero publishes `com.lab126.kaf frameworkStarted = 1` itself while the framework is
+Fix: Zarathustra publishes `com.lab126.kaf frameworkStarted = 1` itself while the framework is
 down. The firmware ships Lua 5.1 with Amazon's lipc binding (`/usr/lib/lua/liblipclua.so`,
 what `awesome` uses), so the kindle backend spawns
 
@@ -89,7 +89,7 @@ what `awesome` uses), so the kindle backend spawns
             h:register_int_property("frameworkStarted", "r").value = 1
             while true do lipc.run_event_loop(3600) end'
 
-as a child with `PR_SET_PDEATHSIG` (it dies with Omero, before `run.sh` restarts the
+as a child with `PR_SET_PDEATHSIG` (it dies with Zarathustra, before `run.sh` restarts the
 framework, which needs the name back). It is skipped when `com.lab126.kaf` already answers
 (framework running). `lipc.run_event_loop()` with no argument returns at once; with `n` it
 runs `n` seconds. Cost: one idle process, ~1.5 MB RSS, no CPU.

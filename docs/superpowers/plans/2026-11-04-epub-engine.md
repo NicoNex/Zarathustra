@@ -4,12 +4,12 @@
 
 **Goal:** turn an EPUB into paginated display lists (positioned glyphs + images, each carrying its source position), typeset to book quality, fast enough that the reader never waits.
 
-**Architecture:** a pipeline of small modules in `omero-engine`, each pure and unit-tested:
+**Architecture:** a pipeline of small modules in `zarathustra-engine`, each pure and unit-tested:
 `epub` (container) → `dom` (arena tree) → `style` (cascade) → `boxes` (block/inline tree) → `inline` (shaping + Knuth–Plass) → `paginate` → `display` (paint). Plato (reference only, never copied) fuses style, layout and pagination into one recursive function; separating them is what makes the improvements below possible.
 
 **Where we beat Plato:**
 
-| Plato | Omero |
+| Plato | Zarathustra |
 |---|---|
 | Hand-written XML parser, fails on malformed content | quick-xml for XHTML (fast); html5ever fallback when XML parsing fails |
 | Regex-assisted CSS subset, own matcher | `cssparser` + Servo `selectors` (full selector grammar, correct specificity), spec inheritance, `em`/`rem`/`%`/`pt` units |
@@ -49,4 +49,4 @@
 - Tests: golden PNGs for fixture chapters; position → page lookup round-trip.
 
 ### Phase 3c — on device
-- `omero-epubprobe BOOK.epub [page]`: opens, paginates the chapter, shows a page, taps turn pages with the swipe animation. Measured: open time, per-chapter layout time, page turn latency.
+- `zarathustra-epubprobe BOOK.epub [page]`: opens, paginates the chapter, shows a page, taps turn pages with the swipe animation. Measured: open time, per-chapter layout time, page turn latency.
