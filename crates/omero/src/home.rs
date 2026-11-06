@@ -84,12 +84,25 @@ enum Overlay {
     Stats(StatsScreen),
 }
 
+/// Library order: title, author, or recently read first (then recently added).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sort {
+    Title,
+    Author,
+    Recent,
+}
+
+const SORTS: [Sort; 3] = [Sort::Title, Sort::Author, Sort::Recent];
+
 pub struct Home {
     books: Vec<Entry>,
     /// The book in the "continue reading" card, if any, and its card-size cover.
     current: Option<(usize, Option<GrayImage>)>,
     filter: Filter,
     grid: bool,
+    sort: Sort,
+    /// Position of each book (index into `books`, which is in title order) by author.
+    author_rank: Vec<u32>,
     /// Indices of `books` shown under the current filter.
     shown: Vec<usize>,
     page: usize,
@@ -109,6 +122,15 @@ impl Home {
         let dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
         let library = Library::scan(&dirs, &ctx.state_dir.join("library"));
         let order = library.sorted(SortBy::Title);
+        // Library index → title position, to carry the author order over to `books`.
+        let mut title_pos = vec![0u32; order.len()];
+        for (pos, &i) in order.iter().enumerate() {
+            title_pos[i] = pos as u32;
+        }
+        let mut author_rank = vec![0u32; order.len()];
+        for (rank, i) in library.sorted(SortBy::Author).into_iter().enumerate() {
+            author_rank[title_pos[i] as usize] = rank as u32;
+        }
         let mut slots: Vec<Option<BookEntry>> = library.books.into_iter().map(Some).collect();
         let books: Vec<Entry> = (order.into_iter())
             .filter_map(|i| slots[i].take())
@@ -126,9 +148,27 @@ impl Home {
             .max_by_key(|(_, b)| b.progress.map(|p| p.1))
             .map(|(i, b)| (i, cover(b.book.cover_thumb.as_deref(), CARD_COVER)));
         let view_file = ctx.state_dir.join("home_view.txt");
-        let grid = std::fs::read_to_string(&view_file).map_or(true, |v| v.trim() != "list");
-        let mut home =
-            Home { books, current, filter: Filter::All, grid, shown: Vec::new(), page: 0, view_file, overlay: None };
+        // "grid|list [title|author|recent]"
+        let view = std::fs::read_to_string(&view_file).unwrap_or_default();
+        let mut words = view.split_whitespace();
+        let grid = words.next() != Some("list");
+        let sort = match words.next() {
+            Some("author") => Sort::Author,
+            Some("recent") => Sort::Recent,
+            _ => Sort::Title,
+        };
+        let mut home = Home {
+            books,
+            current,
+            filter: Filter::All,
+            grid,
+            sort,
+            author_rank,
+            shown: Vec::new(),
+            page: 0,
+            view_file,
+            overlay: None,
+        };
         home.set_filter(Filter::All);
         home
     }
@@ -137,6 +177,16 @@ impl Home {
         self.filter = filter;
         self.shown =
             (0..self.books.len()).filter(|&i| filter == Filter::All || self.books[i].status() == filter).collect();
+        let books = &self.books;
+        match self.sort {
+            Sort::Title => {}
+            Sort::Author => self.shown.sort_by_key(|&i| self.author_rank[i]),
+            // Last read first, then the never opened by newest file.
+            Sort::Recent => self.shown.sort_by(|&a, &b| {
+                let key = |i: usize| (books[i].progress.map(|p| p.1), books[i].book.modified);
+                key(b).cmp(&key(a))
+            }),
+        }
         self.page = 0;
     }
 
@@ -258,6 +308,9 @@ impl Home {
             }
             Label { ink: if on { PAPER } else { INK }, ..chip }.draw(c, raster, name, (r.x + 28) as f32, r.y + 42);
         }
+        let (text, r) = self.sort_chip(&chip);
+        rounded_outline(c, r, r.h / 2, 2, LINE, PAPER);
+        chip.draw(c, raster, &text, (r.x + 28) as f32, r.y + 42);
 
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
         if self.shown.is_empty() {
@@ -319,7 +372,26 @@ impl Home {
     fn set_grid(&mut self, grid: bool) {
         self.grid = grid;
         self.page = 0;
-        crate::write_atomic(&self.view_file, if grid { "grid\n" } else { "list\n" }).ok();
+        self.save_view();
+    }
+
+    fn save_view(&self) {
+        let sort = match self.sort {
+            Sort::Title => "title",
+            Sort::Author => "author",
+            Sort::Recent => "recent",
+        };
+        let view = format!("{} {sort}\n", if self.grid { "grid" } else { "list" });
+        if let Err(e) = crate::write_atomic(&self.view_file, view) {
+            eprintln!("home view: {e}");
+        }
+    }
+
+    /// The sort chip at the right end of the filter row: "↕ Titolo".
+    fn sort_chip(&self, label: &Label) -> (String, Rect) {
+        let text = format!("↕  {}", t().sorts[SORTS.iter().position(|&s| s == self.sort).unwrap_or(0)]);
+        let w = label.width(&text) as i32 + 56;
+        (text, Rect::new(W - PAD - w, self.chips_top(self.page), w, CHIPS_H))
     }
 
     /// The book under `(x, y)`: a cover, a list row or the "continue reading" card.
@@ -468,7 +540,15 @@ impl Home {
             return turn(&mut self.page, x0 > W / 2);
         }
         if let Some(sans) = ctx.sans(false) {
-            let hit = self.chips(&Label { face: sans, size: 28.0, ink: INK }).into_iter().find(|c| inside(c.2));
+            let chip = Label { face: sans, size: 28.0, ink: INK };
+            if inside(self.sort_chip(&chip).1) {
+                let next = SORTS.iter().position(|&s| s == self.sort).map_or(0, |i| (i + 1) % SORTS.len());
+                self.sort = SORTS[next];
+                self.save_view();
+                self.set_filter(self.filter);
+                return Action::Redraw { turn: None };
+            }
+            let hit = self.chips(&chip).into_iter().find(|c| inside(c.2));
             if let Some((f, _, _)) = hit {
                 if f == self.filter {
                     return Action::None;

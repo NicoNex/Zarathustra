@@ -92,6 +92,8 @@ pub struct Strings {
     pub books_finished: &'static str,
     pub last_days: &'static str,
     pub not_read_yet: &'static str,
+    /// Library sort orders: title, author, recently read.
+    pub sorts: [&'static str; 3],
     /// Weekday initials, Monday first.
     pub weekday_initials: [&'static str; 7],
     /// Quick panel tiles, two lines each: auto warmth, page animation, clock, sleep.
@@ -160,6 +162,7 @@ const IT: Strings = Strings {
     books_finished: "libri finiti",
     last_days: "ULTIMI 14 GIORNI",
     not_read_yet: "Non ancora letto con Omero.",
+    sorts: ["Titolo", "Autore", "Recenti"],
     weekday_initials: ["L", "M", "M", "G", "V", "S", "D"],
     tiles: [["Calore", "automatico"], ["Animazione", "pagina"], ["Orologio", "in lettura"], ["Sospendi", ""]],
     on: "Sì",
@@ -238,6 +241,7 @@ const EN: Strings = Strings {
     books_finished: "books finished",
     last_days: "LAST 14 DAYS",
     not_read_yet: "Not read with Omero yet.",
+    sorts: ["Title", "Author", "Recent"],
     weekday_initials: ["M", "T", "W", "T", "F", "S", "S"],
     tiles: [["Auto", "warmth"], ["Page", "animation"], ["Clock in", "reader"], ["Sleep", ""]],
     on: "On",
