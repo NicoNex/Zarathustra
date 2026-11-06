@@ -24,7 +24,7 @@ Merged (not yet on the device): review fixes (2de82c5 reviewed), library sort, b
 Power-button branch merged (2026-11-06). Book menu (`bookmenu.rs`, long press on a book): open, contents, bookmarks, search (open the book with that reader overlay via `Action::OpenOn`), about, highlights, mark read/unread, delete (second tap confirms). Device offline at last try: `scripts/fetch-dicts.sh push`, deploy, let the user test everything.
 
 Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
-Review rule: next review+simplify from 6897e5e when `git diff --shortstat 6897e5e..HEAD -- crates` passes ~2000 added lines.
+Review rule: next review+simplify from e6f60ec when `git diff --shortstat e6f60ec..HEAD -- crates` passes ~2000 added lines.
 
 ## Next steps (user priorities)
 
@@ -33,7 +33,6 @@ Review rule: next review+simplify from 6897e5e when `git diff --shortstat 6897e5
 3. Merge power/sleep → integrate into app loop per its report.
 4. Reader header: clock (setting exists: `settings.clock`), chapter time-left from reading speed (EWMA), TOC navigation (Mobi/EPUB `toc` already parsed).
 5. Then: kepub/txt/pdf (MuPDF), i18n (Fluent, Italian), launcher for executables, boot without the Amazon framework.
-6. Next review: from 2de82c5 (`git diff --shortstat 2de82c5..HEAD -- crates`).
 
 ## Device facts
 
