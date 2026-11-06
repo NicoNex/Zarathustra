@@ -24,7 +24,7 @@ Merged (not yet on the device): review fixes (2de82c5 reviewed), library sort, b
 Running: device agent (power button + slider smoothness), OWNS THE DEVICE. When it reports: merge, `scripts/fetch-dicts.sh push`, deploy, let the user test everything.
 
 Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
-Review rule: next review+simplify from 2de82c5 when `git diff --shortstat 2de82c5..HEAD -- crates` passes ~2000 added lines.
+Review rule: next review+simplify from 6897e5e when `git diff --shortstat 6897e5e..HEAD -- crates` passes ~2000 added lines.
 
 ## Next steps (user priorities)
 
