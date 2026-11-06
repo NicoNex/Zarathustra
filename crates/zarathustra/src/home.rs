@@ -141,6 +141,9 @@ pub struct Home {
     quote: Option<(String, String)>,
 }
 
+/// Longest highlight the first page quotes, in characters: two lines of the band.
+const QUOTE_MAX: usize = 130;
+
 /// The first page's band, under the row of books.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Band {
@@ -157,7 +160,9 @@ fn band_data(ctx: &Ctx) -> (stats::Summary, Option<(String, String)>) {
         .unwrap_or_default();
     let quotes: Vec<(String, String)> = (recent.into_iter())
         .filter_map(|(a, title)| Some((a.data.quote?.exact, title.unwrap_or_default())))
-        .filter(|(q, _)| q.split_whitespace().count() >= 6)
+        // Whole sentences that fit the band's two lines (about 65 characters each): a quote
+        // cut short reads badly. None of them: the band shows the reading figures instead.
+        .filter(|(q, _)| q.split_whitespace().count() >= 6 && q.chars().count() <= QUOTE_MAX)
         .collect();
     let quote = (!quotes.is_empty()).then(|| quotes[today.rem_euclid(quotes.len() as i64) as usize].clone());
     (reading, quote)
@@ -279,7 +284,7 @@ impl Home {
             query: None,
             keyboard: None,
             dirs: dirs.to_vec(),
-            band: Band::Stats,
+            band: Band::Quote,
             reading,
             quote,
         };

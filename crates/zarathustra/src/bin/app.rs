@@ -125,14 +125,14 @@ fn main() -> Result<()> {
         let mut home = home(&ctx);
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("home.pgm"), &px)?;
-        // The first page's band with sample figures, then as a quote.
+        // The first page's band with a sample quote, then as the reading figures.
         home.sample_band();
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
-        write_pgm(dir.join("home-stats.pgm"), &px)?;
-        home.band = zarathustra::home::Band::Quote;
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("home-quote.pgm"), &px)?;
         home.band = zarathustra::home::Band::Stats;
+        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        write_pgm(dir.join("home-stats.pgm"), &px)?;
+        home.band = zarathustra::home::Band::Quote;
         // The quick panel pulled down over the library.
         zarathustra::quick::QuickPanel::preview(&ctx.state_dir)
             .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
