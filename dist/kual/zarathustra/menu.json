@@ -17,6 +17,12 @@
 			"action": "/mnt/us/extensions/zarathustra/run.sh",
 			"params": "zarathustra-probe",
 			"status": false
+		},
+		{
+			"name": "Wi-Fi probe",
+			"priority": 2,
+			"action": "/mnt/us/extensions/zarathustra/wifi-probe.sh",
+			"status": false
 		}
 		]
 	}

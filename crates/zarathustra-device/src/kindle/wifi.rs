@@ -77,77 +77,50 @@ fn plain(v: &str) -> io::Result<&str> {
 }
 
 /// One record in the `{ key = "value", … }` form lipc-hash-prop takes on stdin.
+/// Integer fields go bare, the rest quoted; values are [`plain`], so nothing needs escaping.
+// ponytail: the stdin syntax is the one MobileRead users feed lipc-hash-prop; unverified on
+// this firmware until a profile is created from Zarathustra.
 fn hash_record(fields: &[(&str, &str)]) -> String {
-    let quote = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
-    let body: Vec<String> = fields.iter().map(|(k, v)| format!("{k} = \"{}\"", quote(v))).collect();
+    const INTS: [&str; 1] = ["store_nw_user_pref"];
+    let body: Vec<String> = (fields.iter())
+        .map(|(k, v)| if INTS.contains(k) { format!("{k} = {v}") } else { format!("{k} = \"{v}\"") })
+        .collect();
     format!("{{ {} }}\n", body.join(", "))
 }
 
-/// The records of lipc-hash-prop's output. Lenient by design (its exact layout is to be
-/// checked on a device): each `{ … }` is a record of `key = value` or `"key": value` pairs
-/// separated by commas or newlines, values quoted (with `\` escapes) or bare. Anything it
-/// doesn't understand is skipped, never an error.
+/// The records of `lipc-hash-prop -n` output, as a PW5 (5.16) prints them:
+///
+/// ```text
+/// Hash Index: 0   (fields indented with a tab)
+///     essid = "Casa"
+///     signal = (5)
+/// ```
+///
+/// Strings are quoted (and may run over several lines), integers in parentheses. Lines it
+/// doesn't understand are skipped, never an error.
 fn parse_hash_array(text: &str) -> Vec<Record> {
-    let mut records = Vec::new();
-    let mut chars = text.chars().peekable();
-    let mut current: Option<Record> = None;
-    // A key read, waiting for its value.
-    let mut key: Option<String> = None;
-    let word = |chars: &mut std::iter::Peekable<std::str::Chars>| {
-        if chars.peek() == Some(&'"') {
-            chars.next();
-            let mut s = String::new();
-            while let Some(c) = chars.next() {
-                match c {
-                    '\\' => s.extend(chars.next()),
-                    '"' => break,
-                    c => s.push(c),
-                }
+    let mut records: Vec<Record> = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let line = line.trim();
+        if line.starts_with("Hash Index") {
+            records.push(Vec::new());
+            continue;
+        }
+        let (Some(rec), Some((key, value))) = (records.last_mut(), line.split_once(" = ")) else { continue };
+        let value = if let Some(open) = value.strip_prefix('"') {
+            // A quoted value ends at the line ending in a quote, maybe a later one.
+            let mut v = open.to_string();
+            while !v.ends_with('"') {
+                let Some(more) = lines.next() else { break };
+                v.push('\n');
+                v.push_str(more);
             }
-            s
+            v.strip_suffix('"').unwrap_or(&v).to_string()
         } else {
-            let mut s = String::new();
-            while let Some(&c) = chars.peek() {
-                if c.is_whitespace() || matches!(c, ',' | '{' | '}' | '=' | ':') {
-                    break;
-                }
-                s.push(c);
-                chars.next();
-            }
-            s
-        }
-    };
-    while let Some(&c) = chars.peek() {
-        match c {
-            '{' => {
-                chars.next();
-                current = Some(Vec::new());
-                key = None;
-            }
-            '}' => {
-                chars.next();
-                records.extend(current.take());
-                key = None;
-            }
-            '=' | ':' | ',' => {
-                chars.next();
-            }
-            c if c.is_whitespace() => {
-                chars.next();
-            }
-            _ => {
-                let w = word(&mut chars);
-                if w.is_empty() {
-                    chars.next(); // a stray character: skip it
-                    continue;
-                }
-                let Some(rec) = current.as_mut() else { continue };
-                match key.take() {
-                    None => key = Some(w),
-                    Some(k) => rec.push((k, w)),
-                }
-            }
-        }
+            value.trim_start_matches('(').trim_end_matches(')').to_string()
+        };
+        rec.push((key.trim().to_string(), value));
     }
     records
 }
@@ -155,8 +128,10 @@ fn parse_hash_array(text: &str) -> Vec<Record> {
 impl Wifi for KindleWifi {
     fn status(&self) -> io::Result<WifiStatus> {
         let enabled = get("-i", CMD, "wirelessEnable")? == "1";
+        // currentEssid is a hash (essid, bssid, connected, signal…), not a string.
         let connected = if enabled && get("-s", WIFID, "cmState")? == "CONNECTED" {
-            Some(get("-s", WIFID, "currentEssid")?).filter(|s| !s.is_empty())
+            let current = read_hash("currentEssid")?;
+            current.first().and_then(|r| field(r, "essid")).filter(|s| !s.is_empty()).map(str::to_string)
         } else {
             None
         };
@@ -191,7 +166,7 @@ impl Wifi for KindleWifi {
                 let level: u32 = field(r, "signal").and_then(|s| s.parse().ok()).unwrap_or(0);
                 let max: u32 = field(r, "signal_max").and_then(|s| s.parse().ok()).filter(|m| *m > 0).unwrap_or(5);
                 let signal = (level.min(max) * 100 / max) as u8;
-                let secured = field(r, "key_mgmt").is_some_and(|k| !k.eq_ignore_ascii_case("none"));
+                let secured = field(r, "secured").is_none_or(|v| v == "yes");
                 Some(Network { ssid, signal, secured })
             })
             .collect();
@@ -238,8 +213,12 @@ impl Wifi for KindleWifi {
         result
     }
 
+    /// deleteProfile takes the profile's netid (an integer), not its name.
     fn forget(&self, ssid: &str) -> io::Result<()> {
-        write_hash("deleteProfile", &[("essid", ssid)])
+        let profiles = read_hash("profileData")?;
+        let netid = profiles.iter().find(|r| field(r, "essid") == Some(ssid)).and_then(|r| field(r, "netid"));
+        let Some(netid) = netid else { return Ok(()) };
+        set("-i", WIFID, "deleteProfile", netid)
     }
 }
 
@@ -257,23 +236,24 @@ mod tests {
     }
 
     #[test]
-    fn parses_hash_arrays_leniently() {
-        let lua = r#"{ essid = "Casa \"5G\"", signal = 4, signal_max = 5, key_mgmt = "wpa2-psk", known = "yes" }
-{ essid = "Biblioteca", signal = 1, signal_max = 5, key_mgmt = "none" }"#;
-        let r = parse_hash_array(lua);
+    fn parses_hash_arrays_as_the_pw5_prints_them() {
+        let out = "Hash Index: 0\n\tnetid = (1)\n\tessid = \"Casa\"\n\tsignal = (5)\n\tsecured = \"yes\"\n\n\
+                   Hash Index: 1\n\tessid = \"\"\n\tcmResolvConf = \"nameserver 192.168.1.1\n\"\n\tkey_mgmt = \"SAE\"\n";
+        let r = parse_hash_array(out);
         assert_eq!(r.len(), 2);
-        assert_eq!(field(&r[0], "essid"), Some("Casa \"5G\""));
-        assert_eq!(field(&r[0], "signal"), Some("4"));
-        assert_eq!(field(&r[1], "key_mgmt"), Some("none"));
-        let json = "[ 0 ] = {\n  \"essid\": \"Ufficio\",\n  \"secured\": \"yes\"\n}\n";
-        let r = parse_hash_array(json);
-        assert_eq!(r, vec![vec![("essid".into(), "Ufficio".into()), ("secured".into(), "yes".into())]]);
+        assert_eq!(field(&r[0], "essid"), Some("Casa"));
+        assert_eq!(field(&r[0], "netid"), Some("1"));
+        assert_eq!(field(&r[0], "signal"), Some("5"));
+        assert_eq!(field(&r[1], "essid"), Some(""));
+        assert_eq!(field(&r[1], "cmResolvConf"), Some("nameserver 192.168.1.1\n"));
+        assert_eq!(field(&r[1], "key_mgmt"), Some("SAE"), "a value after a multi-line one");
         assert!(parse_hash_array("").is_empty());
-        assert!(parse_hash_array("error: no such property").is_empty());
+        assert!(parse_hash_array("com.lab126.wifid failed to access property").is_empty());
     }
 
     #[test]
-    fn writes_records_with_escaped_values() {
-        assert_eq!(hash_record(&[("essid", "a\"b"), ("psk", "c\\d")]), "{ essid = \"a\\\"b\", psk = \"c\\\\d\" }\n");
+    fn writes_ints_bare_and_strings_quoted() {
+        let rec = hash_record(&[("essid", "Casa"), ("psk", "segreta1"), ("store_nw_user_pref", "0")]);
+        assert_eq!(rec, "{ essid = \"Casa\", psk = \"segreta1\", store_nw_user_pref = 0 }\n");
     }
 }

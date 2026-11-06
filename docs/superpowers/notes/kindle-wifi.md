@@ -43,3 +43,13 @@ working while Zarathustra runs. The calls mirror what KOReader's Kindle network 
 `select_network`, `save_config`, `remove_network`, `status`) has a documented output format,
 but wifid owns wpa_supplicant and may undo our changes: use it only for scanning, keep joins
 on wifid (`ensureConnection` for saved profiles).
+
+## Verified on the PW5 (2026-11-06, framework running, via the KUAL "Wi-Fi probe")
+
+- wifid and cmd answer; `cmd wirelessEnable` (Int), `wifid cmState` (Str, `CONNECTED`) as assumed.
+- `currentEssid` is a **hash** (`netid`, `essid`, `bssid`, `connected`, `signal`, `signal_max`, `secured`), read with `lipc-hash-prop -n`.
+- `lipc-hash-prop -n` prints `Hash Index: N` blocks of `\tkey = value` lines; strings quoted (can span lines, e.g. `cmResolvConf`), integers in parentheses.
+- scanList fields: `bssid essid secured known netid signal signal_max supported wps enterprise key_mgmt` (`key_mgmt` like `WPA2 PSK`, `SAE`); hidden networks have `essid = ""`.
+- profileData fields: `netid essid secured smethod key_mgmt store_nw_user_pref psk …` (the passwords are readable: never log this property).
+- `deleteProfile` is a write-only **Int** (the profile's netid). `createProfile` is a hash; its stdin syntax is still unverified.
+- Still to check with Zarathustra running (framework stopped): the same calls, and creating a profile.
