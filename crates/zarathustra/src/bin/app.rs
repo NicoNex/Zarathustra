@@ -103,6 +103,11 @@ fn main() -> Result<()> {
     let mut ctx = Ctx::new();
     let home = |ctx: &Ctx| Home::scan(&library_dirs(), ctx);
     let mut screen = Screen::Home(Box::new(home(&ctx)));
+    // The home kept while a book is open (and the book's path), so going back is a redraw,
+    // not a library scan and cover decode.
+    // ponytail: the covers stay in memory while reading (a few MB for a few dozen books);
+    // drop the big ones on open if a large library makes that matter.
+    let mut shelf: Option<(Box<Home>, PathBuf)> = None;
     eprintln!("home ready in {:?}", t.elapsed());
     if let Some(path) = &book {
         match Screen::open(path, &mut ctx) {
@@ -456,7 +461,9 @@ fn main() -> Result<()> {
                             (Screen::Pdf(p), Landing::Contents) => p.show_contents(),
                             _ => {}
                         }
-                        screen = s;
+                        if let Screen::Home(h) = std::mem::replace(&mut screen, s) {
+                            shelf = Some((h, path));
+                        }
                         (None, true)
                     }
                     Err(e) => {
@@ -469,7 +476,14 @@ fn main() -> Result<()> {
                     (None, false)
                 }
                 Action::Home => {
-                    screen = Screen::Home(Box::new(home(&ctx)));
+                    let h = match shelf.take() {
+                        Some((mut h, path)) => {
+                            h.returned(&path, &ctx);
+                            h
+                        }
+                        None => Box::new(home(&ctx)),
+                    };
+                    screen = Screen::Home(h);
                     (None, true)
                 }
             };

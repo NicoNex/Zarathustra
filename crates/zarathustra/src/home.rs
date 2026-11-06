@@ -123,6 +123,22 @@ pub struct Home {
     query: Option<String>,
     /// The keyboard, up while typing the query.
     keyboard: Option<Keyboard>,
+    /// Where the books are, to scan again after a delete.
+    dirs: Vec<PathBuf>,
+}
+
+/// Reading progress of the book at `path` and when it was saved; `None` if never opened.
+fn progress(ctx: &Ctx, path: &Path) -> Option<(f32, SystemTime)> {
+    let state = ctx.state_file(path);
+    Position::load(&state).and_then(|p| Some((p.progress, std::fs::metadata(&state).ok()?.modified().ok()?)))
+}
+
+/// The book for the "continue reading" card: the last one read, not finished.
+fn current(books: &[Entry]) -> Option<(usize, Option<GrayImage>)> {
+    (books.iter().enumerate())
+        .filter(|(_, b)| b.status() == Filter::Reading)
+        .max_by_key(|(_, b)| b.progress.map(|p| p.1))
+        .map(|(i, b)| (i, cover(b.book.cover_thumb.as_deref(), CARD_COVER)))
 }
 
 fn cover(thumb: Option<&Path>, (w, h): (i32, i32)) -> Option<GrayImage> {
@@ -133,8 +149,8 @@ fn cover(thumb: Option<&Path>, (w, h): (i32, i32)) -> Option<GrayImage> {
 
 impl Home {
     pub fn scan(dirs: &[PathBuf], ctx: &Ctx) -> Home {
-        let dirs: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
-        let library = Library::scan(&dirs, &ctx.state_dir.join("library"));
+        let paths: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+        let library = Library::scan(&paths, &ctx.state_dir.join("library"));
         let order = library.sorted(SortBy::Title);
         // Library index → title position, to carry the author order over to `books`.
         let mut title_pos = vec![0u32; order.len()];
@@ -149,18 +165,13 @@ impl Home {
         let books: Vec<Entry> = (order.into_iter())
             .filter_map(|i| slots[i].take())
             .map(|book| {
-                let state = ctx.state_file(&book.path);
-                let progress = Position::load(&state)
-                    .and_then(|p| Some((p.progress, std::fs::metadata(&state).ok()?.modified().ok()?)));
+                let progress = progress(ctx, &book.path);
                 let thumb = book.cover_thumb.as_deref();
                 let (cover, small) = (cover(thumb, (CELL_W, COVER_H)), cover(thumb, ROW_COVER));
                 Entry { book, progress, cover, small }
             })
             .collect();
-        let current = (books.iter().enumerate())
-            .filter(|(_, b)| b.status() == Filter::Reading)
-            .max_by_key(|(_, b)| b.progress.map(|p| p.1))
-            .map(|(i, b)| (i, cover(b.book.cover_thumb.as_deref(), CARD_COVER)));
+        let current = current(&books);
         let view_file = ctx.state_dir.join("home_view.txt");
         // "grid|list [title|author|recent]"
         let view = std::fs::read_to_string(&view_file).unwrap_or_default();
@@ -184,6 +195,7 @@ impl Home {
             overlay: None,
             query: None,
             keyboard: None,
+            dirs: dirs.to_vec(),
         };
         home.set_filter(Filter::All);
         home
@@ -550,19 +562,34 @@ impl Home {
         }
     }
 
+    /// Back from reading `path`: its progress (and so the card, filters and order) as saved,
+    /// without scanning the library or decoding covers again.
+    pub fn returned(&mut self, path: &Path, ctx: &Ctx) {
+        if let Some(i) = self.books.iter().position(|b| b.book.path == path) {
+            self.books[i].progress = progress(ctx, path);
+            if self.current.as_ref().is_none_or(|(c, _)| *c != i) || self.books[i].status() != Filter::Reading {
+                self.current = current(&self.books);
+            }
+        }
+        let page = self.page;
+        self.set_filter(self.filter);
+        self.page = page.min(self.pages() - 1);
+    }
+
     /// Deletes book `i`'s file and its reading position, then reloads the library.
     // ponytail: highlights and bookmarks stay in the database (they return if a book is added
     // again at the same path, even a different one); calibre's sidecars (cover.jpg,
-    // metadata.opf) and the folder stay too; the library reloads, so filter and page reset.
+    // metadata.opf) and the folder stay too; the library is scanned again, so filter and page reset.
     // Add a `Store::delete_book` and remove the entry in place when that shows up in use.
-    fn delete(&self, i: usize, ctx: &Ctx) -> Action {
+    fn delete(&mut self, i: usize, ctx: &Ctx) -> Action {
         let path = &self.books[i].book.path;
         if let Err(e) = std::fs::remove_file(path) {
             eprintln!("delete {}: {e}", path.display());
             return Action::Redraw { turn: None };
         }
         let _ = std::fs::remove_file(ctx.state_file(path)); // a never-opened book has none
-        Action::Home
+        *self = Home::scan(&self.dirs, ctx);
+        Action::Redraw { turn: None }
     }
 
     /// Marks book `i` as read (progress 100%, the position kept) or unread (the saved
