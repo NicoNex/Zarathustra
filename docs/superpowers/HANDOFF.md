@@ -47,8 +47,9 @@ PW5, FW 5.17.1, MTK hwtcon, fb 8bpp rotate=3 handled by driver, touch `/dev/inpu
 ## State at 2026-11-06 (end of session)
 
 - Verified on device: Wi-Fi (status, list, toggle; creating a new profile still unverified), USB plug detection (prompt appears).
-- **USB open bug**: on plug the Amazon UI's own USB mode takes over before the prompt can be tapped. Likely powerd/volumd starting drive mode by itself, or run.sh's lab126_gui restart racing. Next: check whether volumd enters drive mode without the framework (driveModeState, userstoreDeferUnmountRequest to hold it), or do the switch ourselves (unmount /mnt/base-us, point g_mass_storage's lun at /dev/loop/0's backing).
-- Light after wake: re-applied for 4 s after wake (`kindle/mod.rs` keep_light); needs a device check.
+- **USB, diagnosed 2026-11-06**: since run.sh and the binary run from /tmp nothing holds the userstore, so volumd enters drive mode **by itself** on plug (no framework needed): the storage reaches the computer, a white/Amazon USB screen covers ours, and Zarathustra (still running, exit status 0 in the log) shows again after unplug once the storage is remounted (slow). So our prompt and run.sh's exit-42 loop are moot. Next: replace the prompt with our own "connected" screen drawn after volumd's (or ask volumd not to draw/to defer: `userstoreDeferUnmountRequest`), find what draws the white screen (blanket module?), rescan the library on unplug, and offer "just charge" through volumd's defer request if it works.
+- Wi-Fi: joining a **new** network fails (saved ones work). Read the error line under the switch; suspect the createProfile stdin syntax (`hash_record`) or ints/secured fields.
+- Verified: OTA updates already blocked by the jailbreak; light after wake fixed.
 - KUAL: "Wi-Fi probe" (dumps wifid incl. passwords — delete its output after reading), "System probe" (read-only inventory, output on the device at zarathustra/system-probe.txt).
 - De-Amazon plan: phase A (clean the Amazon system: USB, battery, clock, boot to Zarathustra with a safety file, services off; OTA may already be blocked by the jailbreak — check), phase B (Alpine with the Amazon kernel and nothing else Amazon: our own Wi-Fi bring-up and power management).
 - Never commit device data (SSIDs, passwords, MACs, IPs).
