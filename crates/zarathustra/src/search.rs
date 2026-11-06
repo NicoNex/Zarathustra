@@ -19,7 +19,7 @@ use zarathustra_engine::search::{snippet, Query};
 
 use crate::highlight::{block_pos, range_bands, TextPos};
 use crate::i18n::{lang, t};
-use crate::keyboard::{Key, Keyboard, MAX_QUERY};
+use crate::keyboard::{Key, Keyboard, Typed, MAX_QUERY};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::reader::SWIPE;
 use crate::toc::{self, next_button, prev_button, BACK_W, FOOTER_H};
@@ -58,8 +58,8 @@ pub struct Found {
 pub enum Tap {
     None,
     Redraw,
-    /// Redraw, refreshing only this area.
-    Region(Rect),
+    /// Typing: redraw, refreshing what the keyboard says.
+    Typed(Typed),
     /// Back to the reader menu.
     Close,
     /// Open hit `i`.
@@ -103,26 +103,30 @@ impl Search {
         self.keyboard.as_mut()?.press(x, y)
     }
 
+    /// The keyboard, while it is up.
+    pub fn keyboard(&self) -> Option<&Keyboard> {
+        self.keyboard.as_ref()
+    }
+
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32) -> Tap {
         if y0 < TOPBAR_H {
             return if x0 < BACK_W { Tap::Close } else { Tap::None };
         }
         if let Some(kb) = &mut self.keyboard {
-            let Some((key, rect)) = kb.tap(x0, y0) else { return Tap::None };
+            let Some((key, typed)) = kb.tap(x0, y0) else { return Tap::None };
             return match key {
-                Key::Char(c) if self.query.chars().count() < MAX_QUERY => self.edit(|q| q.push(c), rect),
-                Key::Space if !self.query.is_empty() && !self.query.ends_with(' ') => self.edit(|q| q.push(' '), rect),
+                Key::Char(c) if self.query.chars().count() < MAX_QUERY => self.edit(|q| q.push(c), typed),
+                Key::Space if !self.query.is_empty() && !self.query.ends_with(' ') => self.edit(|q| q.push(' '), typed),
                 Key::Backspace => self.edit(
                     |q| {
                         q.pop();
                     },
-                    rect,
+                    typed,
                 ),
-                Key::Layer => Tap::Region(rect),
                 Key::Enter => self.start(),
-                // A full field or a second space: just release the key.
-                _ => Tap::Region(rect),
+                // The layer or shift switched, a full field or a second space: just the keys.
+                _ => Tap::Typed(typed),
             };
         }
         if FIELD.contains(x0, y0) {
@@ -150,9 +154,9 @@ impl Search {
         }
     }
 
-    fn edit(&mut self, f: impl FnOnce(&mut String), key: Rect) -> Tap {
+    fn edit(&mut self, f: impl FnOnce(&mut String), typed: Typed) -> Tap {
         f(&mut self.query);
-        Tap::Region(key.union(&FIELD))
+        Tap::Typed(typed.and_text(FIELD))
     }
 
     fn flip(&mut self, forward: bool) -> Tap {
@@ -413,13 +417,13 @@ mod tests {
         };
         for k in [Key::Char('p'), Key::Char(','), Key::Space, Key::Space, Key::Char('a'), Key::Backspace] {
             let at = key(&s, k);
-            assert!(matches!(s.tap(at, at.0), Tap::Region(r) if r.contains(at.0, at.1)));
+            assert!(matches!(s.tap(at, at.0), Tap::Typed(t) if t.keys.contains(at.0, at.1)));
         }
         assert_eq!(s.query, "p, ");
         // Held, e opens its accents; a tap off the strip only closes it.
         let (e, q) = (key(&s, Key::Char('e')), key(&s, Key::Char('q')));
         assert!(s.long_press(e).is_some());
-        assert!(matches!(s.tap(q, q.0), Tap::Region(_)));
+        assert!(matches!(s.tap(q, q.0), Tap::Typed(_)));
         assert_eq!(s.query, "p, ");
         let at = key(&s, Key::Enter);
         assert_eq!(s.tap(at, at.0), Tap::Redraw);

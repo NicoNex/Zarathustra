@@ -14,6 +14,7 @@ use zarathustra_device::{Battery, Canvas, Device, Light, Phase, Rect, Touch, Wav
 
 use crate::clock::{date_text, hhmm, local_now};
 use crate::i18n::t;
+use crate::keyboard::{Keyboard, Typed};
 use crate::settings::Settings;
 use crate::ui::{rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
 use crate::wifi::{self, WifiScreen};
@@ -145,6 +146,11 @@ pub enum QuickResult {
         rect: Rect,
         waveform: Waveform,
     },
+    /// A key of the Wi-Fi password keyboard went down: draw it pressed
+    /// ([`Keyboard::draw_key`] on [`QuickPanel::keyboard`]) and refresh it.
+    Pressed(Rect),
+    /// Typing the Wi-Fi password: render into [`crate::typing::Typing::canvas`] and hand it this.
+    Typed(Typed),
     /// The panel closed: redraw the screen under it and refresh [`PANEL`].
     Close,
     /// The Sleep tile was tapped (the panel closed too).
@@ -314,6 +320,17 @@ impl QuickPanel {
         self.watch = waiting.then(|| Instant::now() + Duration::from_secs(30));
     }
 
+    /// The keyboard on the panel (the Wi-Fi password's), while it is up.
+    pub fn keyboard(&self) -> Option<&Keyboard> {
+        self.wifi_screen.as_ref().filter(|_| self.open)?.keyboard()
+    }
+
+    /// A finger held on the panel: the accents of a key, if it is on one that has them.
+    /// The area to refresh.
+    pub fn long_press(&mut self, x: i32, y: i32) -> Option<Rect> {
+        self.wifi_screen.as_mut().filter(|_| self.open)?.long_press(x, y)
+    }
+
     /// The Wi-Fi screen has an operation running: call [`QuickPanel::poll`] often.
     pub fn busy(&self) -> bool {
         self.wifi_screen.as_ref().is_some_and(|w| w.busy())
@@ -361,10 +378,7 @@ impl QuickPanel {
             return match t.phase {
                 Phase::Down => {
                     self.down = Some((t.x, t.y));
-                    match w.press(t.x, t.y) {
-                        Some(rect) => QuickResult::Redraw { rect, waveform: Waveform::Fast },
-                        None => QuickResult::None,
-                    }
+                    w.press(t.x, t.y).map_or(QuickResult::None, QuickResult::Pressed)
                 }
                 Phase::Move => QuickResult::None,
                 Phase::Up => {
@@ -380,6 +394,7 @@ impl QuickPanel {
                     match w.tap(x0, y0) {
                         wifi::Tap::None => QuickResult::None,
                         wifi::Tap::Redraw(rect) => QuickResult::Redraw { rect, waveform: Waveform::Text },
+                        wifi::Tap::Typed(t) => QuickResult::Typed(t),
                         wifi::Tap::Back => {
                             self.wifi = w.status().clone();
                             self.wifi_screen = None;

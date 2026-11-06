@@ -674,12 +674,17 @@ impl Reader {
         self.search.as_mut().filter(|s| s.open)?.press(at)
     }
 
+    /// The search keyboard, while it is up.
+    pub fn keyboard(&self) -> Option<&crate::keyboard::Keyboard> {
+        self.search.as_ref().filter(|s| s.open)?.keyboard()
+    }
+
     fn search_tap(&mut self, start: (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
         let Some(s) = &mut self.search else { return Action::None };
         match s.tap(start, x) {
             search::Tap::None => Action::None,
             search::Tap::Redraw => Action::Redraw { turn: None },
-            search::Tap::Region(r) => Action::Region(r),
+            search::Tap::Typed(t) => Action::Typed(t),
             search::Tap::Close => {
                 s.open = false;
                 self.resume_pace();
