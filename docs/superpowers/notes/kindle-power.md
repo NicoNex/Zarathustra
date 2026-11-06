@@ -25,9 +25,10 @@ Findings from the device (read-only inspection, plus `powerprobe` runs) and from
 - `powerButton` (w, int) on powerd simulates a press: `lipc-set-prop -i com.lab126.powerd
   powerButton 1`. KOReader's "suspend" action uses exactly this; there's no difference
   between it and the real key for powerd.
-- `preventScreenSaver 1` blocks the idle timeout AND the power button ("Prevent screen saver set. Ignoring power button" in /var/log/messages; only the cover still works). Omero instead restarts the idle timer on touches with `touchScreenSaverTimeout 1` (at most every 30 s). Was:
-  (`screenSaverTimeout`, 600 s). powerd can't see our touches, so Omero keeps it set and runs
-  its own sleep timer through `powerButton`.
+- `preventScreenSaver 1` blocks the idle timeout AND the power button ("Prevent screen saver
+  set. Ignoring power button"; only the cover still works): never set it. powerd can't see our
+  touches, so Omero restarts its idle timer (`screenSaverTimeout`, 600 s) with
+  `touchScreenSaverTimeout 1` at most every 30 s while touches arrive.
 - `deferSuspend`, `suspendGrace`, `abortSuspend`, `wakeUp`: writable knobs; not needed.
 - `/sys/power/state` offers `freeze mem`. Writing it ourselves would bypass powerd's
   bookkeeping (wifi, RTC, battery, hibernation after 1 h): don't.
@@ -64,9 +65,38 @@ prints one line per event, `name arg`, **line-buffered even into a pipe** (verif
   sleep with a white screen until the next reboot or `lipc-set-prop com.lab126.blanket load
   ad_screensaver`. Harmless.
 
-## Boot splash trap (2026-11-05)
+## Power button without the framework (2026-11-06)
 
-powerd ignores the button ("Splash screen is on. Ignoring power button") when the framework
-was stopped while booting, e.g. Omero restarted right after an exit restarted the framework.
-It asks `com.lab126.kaf` over D-Bus, which is gone. `lipc-send-event com.lab126.kaf
-bootSplashCleanup` clears it; `run.sh` sends it after stopping the framework.
+Symptom: with `lab126_gui` stopped, every press logs `E lipc:dbuserr ... The name
+com.lab126.kaf was not provided by any .service files` then `I def:pbisplash::Splash screen
+is on.  Ignoring power button`. The cover kept working.
+
+Root cause (powerd reverse-engineered with REA/Hopper, FW 5.17.1): the power-button branch of
+the `active` state handler calls a "boot finished?" check (at `0x14888`) that is true only if
+1. `LipcGetIntProperty(KAF_NAME, KAF_FRAMEWORK_STARTED)`, i.e. `com.lab126.kaf
+   frameworkStarted`, succeeds and is non-zero, and
+2. `LipcGetStringProperty(BLANKET_NAME, BLANKET_LOAD)`, blanket's `load`, contains no
+   `splash`.
+
+With the framework stopped (1) fails, so the press is dropped. The hall-sensor branch never
+calls the check. `bootSplashCleanup` only affects (2), which is why sending it did nothing.
+
+Fix: Omero publishes `com.lab126.kaf frameworkStarted = 1` itself while the framework is
+down. The firmware ships Lua 5.1 with Amazon's lipc binding (`/usr/lib/lua/liblipclua.so`,
+what `awesome` uses), so the kindle backend spawns
+
+    lua -e 'require("liblipclua"); local h = assert(lipc.init("com.lab126.kaf"))
+            h:register_int_property("frameworkStarted", "r").value = 1
+            while true do lipc.run_event_loop(3600) end'
+
+as a child with `PR_SET_PDEATHSIG` (it dies with Omero, before `run.sh` restarts the
+framework, which needs the name back). It is skipped when `com.lab126.kaf` already answers
+(framework running). `lipc.run_event_loop()` with no argument returns at once; with `n` it
+runs `n` seconds. Cost: one idle process, ~1.5 MB RSS, no CPU.
+
+Alternatives weighed: keeping the framework alive (KOReader's default) costs ~100 MB of Java
+and needs EVIOCGRAB plus muting pillow/awesome/blanket so the hidden UI doesn't react;
+reading `KEY_POWER` ourselves doesn't help because `powerButton` (and `powerd_test -p`) go
+through the same check, and driving `/sys/power/state` would bypass powerd's bookkeeping.
+
+`run.sh` still sends `bootSplashCleanup` for condition (2) after a stop during boot.

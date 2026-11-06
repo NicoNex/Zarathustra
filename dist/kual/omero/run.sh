@@ -32,8 +32,9 @@ trap "exit 1" INT TERM HUP
 for m in $SAVERS; do lipc-set-prop com.lab126.blanket unload "$m"; done
 # powerd can't see our touches: Omero resets its idle timer itself (touchScreenSaverTimeout).
 # Never preventScreenSaver: with it set, powerd ignores the power button too.
-# Stopping the framework while it boots (a restart right after an exit) leaves powerd
-# thinking the boot splash is up, and it ignores the power button: tell it it's gone.
+# powerd honours the power button only once com.lab126.kaf says frameworkStarted (Omero
+# publishes that itself) and blanket shows no boot splash: if the framework was stopped while
+# booting (a restart right after an exit), tell blanket the splash is gone.
 lipc-send-event com.lab126.kaf bootSplashCleanup
 "$BIN" "$@" >"$LOG" 2>&1
 echo "exit status $?" >>"$LOG"

@@ -18,7 +18,7 @@ const EVENTS: &str = "goingToScreenSaver,outOfScreenSaver,readyToSuspend,wakeupF
 
 /// A `lipc-wait-event` child streaming powerd's events, one per line (`name [int args]`).
 // ponytail: the CLI tool instead of liblipc FFI; it line-buffers its stdout (verified on
-// FW 5.17.1) and costs one idle process. Switch to FFI only if we need to publish properties.
+// FW 5.17.1) and costs one idle process. Publishing goes through the firmware Lua (KafStub).
 pub struct Powerd {
     child: Child,
     out: ChildStdout,
@@ -29,18 +29,7 @@ impl Powerd {
     pub fn spawn() -> io::Result<Self> {
         let mut cmd = Command::new("lipc-wait-event");
         cmd.args(["-m", "com.lab126.powerd", EVENTS]).stdin(Stdio::null()).stdout(Stdio::piped());
-        // SAFETY: the closure runs in the forked child before exec and only calls prctl(2),
-        // which is async-signal-safe. PR_SET_PDEATHSIG kills the listener if we die, even
-        // from SIGKILL, so a crash never leaves it behind.
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = cmd.spawn()?;
+        let mut child = spawn_tied(&mut cmd)?;
         let out = child.stdout.take().ok_or_else(|| io::Error::other("lipc-wait-event: no stdout"))?;
         // SAFETY: plain fcntl flag changes on a pipe fd we own.
         unsafe {
@@ -86,6 +75,63 @@ impl Drop for Powerd {
         self.child.kill().ok();
         self.child.wait().ok();
     }
+}
+
+/// Stands in for the framework's `com.lab126.kaf` while it is stopped.
+///
+/// powerd ignores the power button ("Splash screen is on") unless `com.lab126.kaf` answers
+/// `frameworkStarted` with a non-zero int and blanket's `load` names no `splash` module
+/// (powerd's kdb keys `KAF_NAME`, `KAF_FRAMEWORK_STARTED`, `BLANKET_NAME`, `BLANKET_LOAD`).
+/// The cover takes another path, which is why it kept working. The firmware's own Lua 5.1
+/// and lipc binding (what `awesome` uses) publish that one property: no FFI into the glibc
+/// liblipc from our static binary.
+// ponytail: an idle Lua child (~1.5 MB RSS). Replace with an in-process D-Bus responder only
+// if powerd ever asks com.lab126.kaf for more than this.
+pub struct KafStub(Child);
+
+const KAF_STUB: &str = r#"require("liblipclua")
+local h = assert(lipc.init("com.lab126.kaf"))
+h:register_int_property("frameworkStarted", "r").value = 1
+while true do lipc.run_event_loop(3600) end"#;
+
+impl KafStub {
+    /// `None` when the framework (the real `com.lab126.kaf`) is up: never take its name.
+    pub fn spawn() -> io::Result<Option<Self>> {
+        let framework = Command::new("lipc-get-prop")
+            .args(["com.lab126.kaf", "frameworkStarted"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if framework.success() {
+            return Ok(None);
+        }
+        let mut cmd = Command::new("lua");
+        cmd.args(["-e", KAF_STUB]).stdin(Stdio::null()).stdout(Stdio::null());
+        spawn_tied(&mut cmd).map(|c| Some(KafStub(c)))
+    }
+}
+
+impl Drop for KafStub {
+    fn drop(&mut self) {
+        self.0.kill().ok();
+        self.0.wait().ok();
+    }
+}
+
+/// Spawns `cmd` so that it dies with us.
+fn spawn_tied(cmd: &mut Command) -> io::Result<Child> {
+    // SAFETY: the closure runs in the forked child before exec and only calls prctl(2),
+    // which is async-signal-safe. PR_SET_PDEATHSIG kills the child if we die, even from
+    // SIGKILL, so a crash never leaves it behind (the framework needs com.lab126.kaf back).
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()
 }
 
 /// One `lipc-wait-event -m` line, e.g. `goingToScreenSaver 2` or `readyToSuspend 5`.
