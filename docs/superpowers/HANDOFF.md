@@ -26,9 +26,11 @@ Power-button branch merged (2026-11-06). Book menu (`bookmenu.rs`, long press on
 Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
 Review rule: next review+simplify from 81677a4 when `git diff --shortstat 81677a4..HEAD -- crates` passes ~2000 added lines.
 
-## 2026-11-06 late: done, waiting on the user
+## 2026-11-06 evening: state
 
-Done (not on the device; Kindle IP unknown, subnet scan denied: ask the user): review fixes e6f60ec, book menu while held (31c8324), library search (d22d582), settings screen language + full-refresh interval (6b80ef0, `prefs.rs`). Typography sheet: 4 mockups (A current, B live preview, C presets, D tabs) at https://claude.ai/artifact/F7aALS3NeypwZtXyZKSHWm, user to pick. Open: collections in the library (design not agreed), landscape (W/H are consts everywhere: big refactor).
+Renamed Omero → Zarathustra (crates, binaries, KUAL, /mnt/us/zarathustra; deploy.sh migrates /mnt/us/omero once). `make install [KINDLE_HOST=ip | KINDLE_HOST=]` (empty = USB). Books: only /mnt/us/library/ is shown (deploy creates it empty; documents/ ignored by request).
+Done and deployed (not yet tried by the user on the device): compact typography sheet (size + weight row, font ‹ › row, icon row), synthetic text weight (engine `font::WEIGHTS`), floating book menu beside the cover, home kept in memory while reading + `Home::refresh` (30 s on the home, on return, after delete/transfer), library search, settings screen (language, full-refresh interval), keyboard accents on long press + comma/period, power button menu (suspend/exit/restart/power off), Wi-Fi transfer (`transfer.rs`: QR + URL, PUT uploads into library/, iptables port opened on the device while open; untested on the device: Wi-Fi with the framework stopped, firewall).
+Open: collections (design proposed, not agreed), landscape/Kobo (W/H are consts), opening speed measured only on the device.
 
 ## Next steps (user priorities)
 
