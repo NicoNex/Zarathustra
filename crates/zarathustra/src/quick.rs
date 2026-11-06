@@ -6,15 +6,18 @@
 //! and writes the light live (throttled); the release repaints the row in full gray.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use zarathustra_device::{Battery, Canvas, Device, Light, Phase, Rect, Touch, Waveform};
+use zarathustra_device::wifi::WifiStatus;
+use zarathustra_device::{Battery, Canvas, Device, Light, Phase, Rect, Touch, Waveform, Wifi};
 
 use crate::clock::{date_text, hhmm, local_now};
 use crate::i18n::t;
 use crate::settings::Settings;
 use crate::ui::{rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, W};
+use crate::wifi::{self, WifiScreen};
+use crate::{Ctx, H, W};
 
 /// The panel covers the top of the screen, full width.
 pub const PANEL: Rect = Rect { x: 0, y: 0, w: W, h: 1016 };
@@ -146,6 +149,13 @@ pub enum QuickResult {
     Close,
     /// The Sleep tile was tapped (the panel closed too).
     Sleep,
+    /// Redraw the screen, then the panel over it if still open, and refresh everything
+    /// (flashing when `flash`): night mode switched, the screen cleaned, back from Wi-Fi.
+    Repaint {
+        flash: bool,
+    },
+    /// The Send-books tile was tapped (the panel closed): open that screen.
+    Transfer,
 }
 
 pub struct QuickPanel {
@@ -155,8 +165,13 @@ pub struct QuickPanel {
     warmth: u8,
     has_warmth: bool,
     battery: Option<Battery>,
-    /// Wi-Fi: `None` off, else the network joined ("" while searching).
-    wifi: Option<String>,
+    /// `None` without a Wi-Fi we can drive.
+    wifi_dev: Option<Arc<dyn Wifi>>,
+    /// The radio and network as last read.
+    wifi: WifiStatus,
+    /// The Wi-Fi screen, opened from the tile: it covers the screen while the panel is open,
+    /// so it works the same over the home and the reader.
+    wifi_screen: Option<WifiScreen>,
     open: bool,
     down: Option<(i32, i32)>,
     drag: Option<Slider>,
@@ -179,7 +194,9 @@ impl QuickPanel {
             warmth: settings.warmth,
             has_warmth: current.is_none_or(|l| l.warmth.is_some()),
             battery: None,
-            wifi: None,
+            wifi_dev: dev.wifi(),
+            wifi: WifiStatus::default(),
+            wifi_screen: None,
             open: false,
             down: None,
             drag: None,
@@ -193,15 +210,17 @@ impl QuickPanel {
     }
 
     /// The panel as it looks open with a sample battery and network, for `--pgm` reviews.
-    pub fn preview(state_dir: &Path) -> QuickPanel {
-        let settings = Settings::load(state_dir);
+    pub fn preview(state_dir: &Path, night: bool) -> QuickPanel {
+        let settings = Settings { night, ..Settings::load(state_dir) };
         QuickPanel {
             settings,
             state_dir: state_dir.to_path_buf(),
             warmth: settings.warmth,
             has_warmth: true,
             battery: Some(Battery { percent: 76, charging: false }),
-            wifi: Some("Casa".into()),
+            wifi_dev: None,
+            wifi: WifiStatus { enabled: true, connected: Some("Casa".into()) },
+            wifi_screen: None,
             open: true,
             down: None,
             drag: None,
@@ -241,13 +260,35 @@ impl QuickPanel {
     /// Opens the panel; render it over the screen and refresh the returned rect.
     pub fn open(&mut self, dev: &dyn Device) -> Rect {
         self.battery = dev.battery();
+        self.read_wifi();
         self.open = true;
         PANEL
+    }
+
+    /// Reads the radio state for the tile (two quick `lipc` calls on a Kindle).
+    fn read_wifi(&mut self) {
+        let Some(w) = &self.wifi_dev else { return };
+        match w.status() {
+            Ok(s) => self.wifi = s,
+            Err(e) => eprintln!("quick settings: wifi: {e}"),
+        }
+    }
+
+    /// The Wi-Fi screen has an operation running: call [`QuickPanel::poll`] often.
+    pub fn busy(&self) -> bool {
+        self.wifi_screen.as_ref().is_some_and(|w| w.busy())
+    }
+
+    /// Takes in a finished Wi-Fi operation; the rect to refresh after [`QuickPanel::render`].
+    pub fn poll(&mut self) -> Option<Rect> {
+        let w = self.wifi_screen.as_mut().filter(|_| self.open)?;
+        w.poll().then_some(Rect::new(0, 0, W, H))
     }
 
     /// Closes the panel; redraw the screen and refresh the returned rect.
     pub fn close(&mut self) -> Rect {
         self.open = false;
+        self.wifi_screen = None;
         self.down = None;
         self.drag = None;
         PANEL
@@ -265,13 +306,37 @@ impl QuickPanel {
         }
         self.warmth = target;
         self.apply(dev);
-        self.open.then(|| Slider::Warmth.rect())
+        (self.open && self.wifi_screen.is_none()).then(|| Slider::Warmth.rect())
     }
 
     /// Handles every touch phase while the panel is open.
     pub fn touch(&mut self, t: &Touch, dev: &mut dyn Device) -> QuickResult {
         if !self.open {
             return QuickResult::None;
+        }
+        if let Some(w) = &mut self.wifi_screen {
+            return match t.phase {
+                Phase::Down => {
+                    self.down = Some((t.x, t.y));
+                    match w.press(t.x, t.y) {
+                        Some(rect) => QuickResult::Redraw { rect, waveform: Waveform::Fast },
+                        None => QuickResult::None,
+                    }
+                }
+                Phase::Move => QuickResult::None,
+                Phase::Up => {
+                    let Some((x0, y0)) = self.down.take() else { return QuickResult::None };
+                    match w.tap(x0, y0) {
+                        wifi::Tap::None => QuickResult::None,
+                        wifi::Tap::Redraw(rect) => QuickResult::Redraw { rect, waveform: Waveform::Text },
+                        wifi::Tap::Back => {
+                            self.wifi = w.status().clone();
+                            self.wifi_screen = None;
+                            QuickResult::Repaint { flash: false }
+                        }
+                    }
+                }
+            };
         }
         match t.phase {
             Phase::Down => {
@@ -315,8 +380,33 @@ impl QuickPanel {
         let inside = |r: Rect| r.contains(x, y);
         let s = &mut self.settings;
         let rect = match TILES.into_iter().find(|t| inside(t.rect())) {
-            // ponytail: drawn for review, wired once the design is agreed.
-            Some(Tile::Wifi | Tile::Transfer | Tile::Clean | Tile::Night) => return QuickResult::None,
+            Some(Tile::Wifi) => {
+                let Some(w) = &self.wifi_dev else { return QuickResult::None };
+                let r = Tile::Wifi.rect();
+                // The "›" third opens the network list; the rest switches the radio.
+                if x >= r.right() - r.w / 3 {
+                    self.wifi_screen = Some(WifiScreen::open(w.clone(), self.wifi.clone()));
+                    return QuickResult::Redraw { rect: Rect::new(0, 0, W, H), waveform: Waveform::Text };
+                }
+                if let Err(e) = w.set_enabled(!self.wifi.enabled) {
+                    eprintln!("quick settings: wifi: {e}");
+                }
+                self.read_wifi();
+                return QuickResult::Redraw { rect: r, waveform: Waveform::Text };
+            }
+            Some(Tile::Transfer) => {
+                self.close();
+                return QuickResult::Transfer;
+            }
+            Some(Tile::Clean) => {
+                self.close();
+                return QuickResult::Repaint { flash: true };
+            }
+            Some(Tile::Night) => {
+                s.night = !s.night;
+                self.save();
+                return QuickResult::Repaint { flash: true };
+            }
             Some(Tile::Sleep) => {
                 self.close();
                 return QuickResult::Sleep;
@@ -422,6 +512,9 @@ impl QuickPanel {
     // ponytail: a slider drag repaints the whole panel (only its rect is refreshed); clip to
     // the slider if the render time ever shows up next to the ~100 ms fast waveform.
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        if let Some(w) = &self.wifi_screen {
+            return w.render(c, ctx);
+        }
         // The top corners and the side edges of the outline fall outside the screen.
         let sheet = Rect::new(-3, -RADIUS, W + 6, PANEL.h + RADIUS);
         rounded_outline(c, sheet, RADIUS, 3, INK, PAPER);
@@ -453,11 +546,11 @@ impl QuickPanel {
             let r = tile.rect();
             // Toggles show their state; actions (transfer, clean, sleep) an icon.
             let on = match tile {
-                Tile::Wifi => Some(self.wifi.is_some()),
+                Tile::Wifi => Some(self.wifi.enabled),
                 Tile::AutoWarmth => Some(self.settings.auto_warmth),
                 Tile::Animation => Some(self.settings.swipe_animation),
                 Tile::Clock => Some(self.settings.clock),
-                Tile::Night => Some(false),
+                Tile::Night => Some(self.settings.night),
                 Tile::Transfer | Tile::Clean | Tile::Sleep => None,
             };
             let (bg, ink) = if on == Some(true) { (INK, PAPER) } else { (FILL, INK) };
@@ -495,8 +588,9 @@ impl QuickPanel {
             let label = Label { face: sans, size: 30.0, ink };
             let [first, second] = tile.label();
             // The Wi-Fi tile's second line is the network joined.
-            let second = match (tile, &self.wifi) {
-                (Tile::Wifi, Some(net)) => net.as_str(),
+            let second = match (tile, self.wifi.enabled, &self.wifi.connected) {
+                (Tile::Wifi, true, Some(net)) => net.as_str(),
+                (Tile::Wifi, true, None) => t().wifi_not_connected,
                 _ => second,
             };
             for (i, line) in [first, second].iter().enumerate() {
@@ -665,6 +759,9 @@ mod tests {
         fn battery(&self) -> Option<Battery> {
             Some(Battery { percent: 76, charging: true })
         }
+        fn wifi(&self) -> Option<Arc<dyn Wifi>> {
+            Some(Arc::new(zarathustra_device::wifi::Fake::new(Duration::ZERO)))
+        }
     }
 
     fn state_dir(name: &str) -> PathBuf {
@@ -738,6 +835,41 @@ mod tests {
         assert_eq!(Settings::load(&dir), *q.settings());
         assert_eq!(tap(&mut q, &mut dev, Rect::new(0, PANEL.bottom() + 100, 10, 10)), QuickResult::Close);
         assert!(!q.is_open());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn action_tiles_close_or_repaint_and_night_persists() {
+        let dir = state_dir("tiles");
+        let mut dev = Fake::new();
+        let mut q = QuickPanel::new(&dir, &mut dev);
+        let mut tap = |q: &mut QuickPanel, (x, y): (i32, i32)| {
+            q.touch(&touch(Phase::Down, (x, y)), &mut dev);
+            q.touch(&touch(Phase::Up, (x, y)), &mut dev)
+        };
+        let centre = |r: Rect| (r.x + r.w / 2, r.y + r.h / 2);
+        q.open(&Fake::new());
+        assert_eq!(tap(&mut q, centre(Tile::Night.rect())), QuickResult::Repaint { flash: true });
+        assert!(q.is_open() && Settings::load(&dir).night, "night is saved, the panel stays");
+        assert_eq!(tap(&mut q, centre(Tile::Clean.rect())), QuickResult::Repaint { flash: true });
+        assert!(!q.is_open(), "clean closes the panel first");
+        q.open(&Fake::new());
+        assert_eq!(tap(&mut q, centre(Tile::Transfer.rect())), QuickResult::Transfer);
+        assert!(!q.is_open());
+        q.open(&Fake::new());
+        assert_eq!(tap(&mut q, centre(Tile::Sleep.rect())), QuickResult::Sleep);
+        assert!(!q.is_open());
+        // Wi-Fi: the left of the tile switches the radio, its "›" opens the network list.
+        q.open(&Fake::new());
+        assert!(q.wifi.enabled);
+        let wifi = Tile::Wifi.rect();
+        tap(&mut q, (wifi.x + 20, wifi.y + 20));
+        assert!(!q.wifi.enabled);
+        let full = QuickResult::Redraw { rect: Rect::new(0, 0, W, crate::H), waveform: Waveform::Text };
+        assert_eq!(tap(&mut q, (wifi.right() - 20, wifi.y + 20)), full);
+        assert!(q.wifi_screen.is_some());
+        assert_eq!(tap(&mut q, (100, 60)), QuickResult::Repaint { flash: false }, "back to the panel");
+        assert!(q.is_open() && q.wifi_screen.is_none());
         std::fs::remove_dir_all(dir).ok();
     }
 

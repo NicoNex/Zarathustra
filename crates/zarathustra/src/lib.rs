@@ -24,6 +24,7 @@ pub mod stats;
 pub mod toc;
 pub mod transfer;
 pub mod ui;
+pub mod wifi;
 
 use std::path::{Path, PathBuf};
 

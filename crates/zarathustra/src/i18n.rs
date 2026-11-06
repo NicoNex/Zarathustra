@@ -145,6 +145,22 @@ pub struct Strings {
     pub no_wifi: &'static str,
     pub no_wifi_hint: &'static str,
     pub retry: &'static str,
+    /// Wi-Fi screen: the state line (`{}` is the network), sections, actions and errors.
+    pub wifi_connected: &'static str,
+    pub wifi_joined: &'static str,
+    pub wifi_not_connected: &'static str,
+    pub wifi_off: &'static str,
+    pub wifi_connecting: &'static str,
+    pub wifi_scanning: &'static str,
+    pub saved_networks: &'static str,
+    pub available_networks: &'static str,
+    pub no_networks: &'static str,
+    pub forget: &'static str,
+    pub rescan: &'static str,
+    pub connect: &'static str,
+    pub password: &'static str,
+    pub wifi_failed: &'static str,
+    pub wifi_error: &'static str,
 }
 
 const IT: Strings = Strings {
@@ -262,6 +278,21 @@ const IT: Strings = Strings {
     no_wifi: "Wi-Fi non connesso",
     no_wifi_hint: "Collega il Kindle a una rete Wi-Fi (anche l'hotspot del telefono), poi tocca Riprova.",
     retry: "Riprova",
+    wifi_connected: "Connesso a {}",
+    wifi_joined: "Connesso",
+    wifi_not_connected: "Non connesso",
+    wifi_off: "Spento",
+    wifi_connecting: "Connessione a {}…",
+    wifi_scanning: "Ricerca reti…",
+    saved_networks: "RETI SALVATE",
+    available_networks: "RETI DISPONIBILI",
+    no_networks: "Nessuna rete trovata.",
+    forget: "Dimentica",
+    rescan: "Aggiorna",
+    connect: "Connetti",
+    password: "Password",
+    wifi_failed: "Connessione non riuscita",
+    wifi_error: "Wi-Fi non disponibile",
 };
 
 const EN: Strings = Strings {
@@ -378,6 +409,21 @@ const EN: Strings = Strings {
     no_wifi: "Wi-Fi not connected",
     no_wifi_hint: "Connect the Kindle to a Wi-Fi network (your phone's hotspot works too), then tap Retry.",
     retry: "Retry",
+    wifi_connected: "Connected to {}",
+    wifi_joined: "Connected",
+    wifi_not_connected: "Not connected",
+    wifi_off: "Off",
+    wifi_connecting: "Connecting to {}…",
+    wifi_scanning: "Looking for networks…",
+    saved_networks: "SAVED NETWORKS",
+    available_networks: "AVAILABLE NETWORKS",
+    no_networks: "No networks found.",
+    forget: "Forget",
+    rescan: "Refresh",
+    connect: "Connect",
+    password: "Password",
+    wifi_failed: "Couldn't connect",
+    wifi_error: "Wi-Fi unavailable",
 };
 
 /// The UI language for the whole process; set once from the settings at startup.

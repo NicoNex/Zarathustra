@@ -4,18 +4,23 @@ pub mod canvas;
 pub mod geom;
 pub mod input;
 pub mod kindle;
+mod night;
 mod sys;
 pub mod sysfs;
+pub mod wifi;
 
 #[cfg(feature = "emulator")]
 pub mod emulator;
 
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub use canvas::Canvas;
 pub use geom::Rect;
 pub use input::{Phase, Touch};
+pub use night::Night;
+pub use wifi::Wifi;
 
 /// What a refresh is for; each backend maps it to its own waveforms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +123,10 @@ pub trait Device {
     /// Asks the device to go to sleep, as a power-button press would (sleep timer).
     fn sleep(&mut self) -> io::Result<()> {
         Ok(())
+    }
+    /// The Wi-Fi, when the device has one we can drive.
+    fn wifi(&self) -> Option<Arc<dyn Wifi>> {
+        None
     }
 }
 

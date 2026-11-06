@@ -23,6 +23,7 @@ pub struct Emulator {
     down: bool,
     last: (i32, i32),
     light: Light,
+    wifi: std::sync::Arc<crate::wifi::Fake>,
 }
 
 const EV_SYN: u16 = 0;
@@ -53,6 +54,7 @@ impl Emulator {
             down: false,
             last: (0, 0),
             light: Light { brightness: 50, warmth: Some(0) },
+            wifi: std::sync::Arc::new(crate::wifi::Fake::new(Duration::from_secs(2))),
         })
     }
 
@@ -155,5 +157,9 @@ impl Device for Emulator {
 
     fn battery(&self) -> Option<Battery> {
         Some(Battery { percent: 86, charging: false })
+    }
+
+    fn wifi(&self) -> Option<std::sync::Arc<dyn crate::Wifi>> {
+        Some(self.wifi.clone())
     }
 }

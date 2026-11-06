@@ -16,7 +16,7 @@ use zarathustra::reader::{Reader, HEADER};
 use zarathustra::sleep::render_sleep;
 use zarathustra::toc::Tab;
 use zarathustra::{Action, Ctx, Landing, H, W};
-use zarathustra_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
+use zarathustra_device::{Canvas, Device, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
 use zarathustra_engine::library::Format;
 
 enum Screen {
@@ -85,6 +85,18 @@ fn library_dirs() -> Vec<PathBuf> {
     vec![zarathustra::library_dir()]
 }
 
+/// The home kept on the shelf while reading (brought up to date), or a fresh scan.
+fn go_home(shelf: &mut Option<(Box<Home>, PathBuf)>, ctx: &Ctx) -> Box<Home> {
+    match shelf.take() {
+        Some((mut h, path)) => {
+            h.returned(&path, ctx);
+            h.refresh(ctx);
+            h
+        }
+        None => Box::new(Home::scan(&library_dirs(), ctx)),
+    }
+}
+
 fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
     let mut out = format!("P5\n{W} {H}\n255\n").into_bytes();
     out.extend_from_slice(px);
@@ -134,9 +146,48 @@ fn main() -> Result<()> {
         write_pgm(dir.join("home-stats.pgm"), &px)?;
         home.band = zarathustra::home::Band::Quote;
         // The quick panel pulled down over the library.
-        zarathustra::quick::QuickPanel::preview(&ctx.state_dir)
+        zarathustra::quick::QuickPanel::preview(&ctx.state_dir, false)
             .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("quick.pgm"), &px)?;
+        // Night mode: the tile on, the whole screen inverted as the device shows it.
+        let mut night = vec![0u8; (W * H) as usize];
+        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut night }, &mut ctx);
+        zarathustra::quick::QuickPanel::preview(&ctx.state_dir, true)
+            .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut night }, &mut ctx);
+        night.iter_mut().for_each(|p| *p = !*p);
+        write_pgm(dir.join("quick-night.pgm"), &night)?;
+        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut night }, &mut ctx);
+        night.iter_mut().for_each(|p| *p = !*p);
+        write_pgm(dir.join("home-night.pgm"), &night)?;
+        // The Wi-Fi screen on the pretend networks, then a password being typed (caps on).
+        {
+            use zarathustra::keyboard::{Key, Keyboard};
+            use zarathustra_device::wifi::{Fake, WifiStatus};
+            let fake = std::sync::Arc::new(Fake::new(Duration::ZERO));
+            let mut wifi = zarathustra::wifi::WifiScreen::open(fake, WifiStatus::default());
+            let t0 = Instant::now();
+            while wifi.busy() && t0.elapsed() < Duration::from_secs(5) {
+                wifi.poll();
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            wifi.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_pgm(dir.join("wifi.pgm"), &px)?;
+            let row = wifi.available_row(0);
+            wifi.tap(row.x + row.w / 2, row.y + row.h / 2);
+            let keys = Keyboard::default().keys();
+            let mut press = |k: Key| {
+                if let Some((_, r)) = keys.iter().find(|(key, _)| *key == k) {
+                    wifi.tap(r.x + r.w / 2, r.y + r.h / 2);
+                }
+            };
+            for ch in "libri".chars() {
+                press(Key::Char(ch));
+            }
+            press(Key::Shift);
+            press(Key::Char('l'));
+            wifi.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_pgm(dir.join("wifi-password.pgm"), &px)?;
+        }
         home.tap((900, 800), (300, 800), &ctx); // swipe to the second page
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("home2.pgm"), &px)?;
@@ -313,8 +364,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let mut dev = zarathustra_device::open_default()?;
-    let mut quick = QuickPanel::new(&ctx.state_dir, dev.as_mut());
+    let mut dev = zarathustra_device::Night::new(zarathustra_device::open_default()?);
+    let mut quick = QuickPanel::new(&ctx.state_dir, &mut dev);
+    dev.on = quick.settings().night;
     let full = Rect::new(0, 0, W, H);
     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
     let mut marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
@@ -338,6 +390,8 @@ fn main() -> Result<()> {
         // The send-books screen checks for arriving books every second; the home looks for
         // new books every half minute (a walk and a stat per file).
         let idle = match &screen {
+            // A Wi-Fi scan or connection running: show its outcome promptly.
+            _ if quick.busy() => Duration::from_millis(300),
             Screen::Home(h) if h.transferring() => Duration::from_secs(1),
             Screen::Home(_) => Duration::from_secs(30),
             _ => Duration::from_secs(300),
@@ -361,12 +415,12 @@ fn main() -> Result<()> {
                 }
                 PowerEvent::Wake => {
                     asleep = false;
-                    quick.relight(dev.as_mut());
+                    quick.relight(&mut dev);
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
                 // powerd may put back its own level after a real suspend: ours wins again.
                 PowerEvent::Resumed => {
-                    quick.relight(dev.as_mut());
+                    quick.relight(&mut dev);
                     continue;
                 }
                 PowerEvent::Suspend { .. } => continue,
@@ -393,8 +447,10 @@ fn main() -> Result<()> {
             }
         }
         // Panel changes from the whole batch, drawn once: a drag queues many moves per frame.
-        let mut panel: Option<(Rect, Waveform)> = quick.tick(dev.as_mut()).map(|r| (r, Waveform::Text));
+        let mut panel: Option<(Rect, Waveform)> = quick.tick(&mut dev).map(|r| (r, Waveform::Text));
         let mut closed = false;
+        // Everything redrawn and refreshed at once, flashing or not (see `QuickResult::Repaint`).
+        let mut repaint: Option<bool> = None;
         // Selection changes from the whole batch, refreshed once like the panel.
         let mut selection: Option<Rect> = None;
         for e in &events {
@@ -403,7 +459,7 @@ fn main() -> Result<()> {
                 Event::Quit => return Ok(()),
             };
             if quick.is_open() {
-                match quick.touch(t, dev.as_mut()) {
+                match quick.touch(t, &mut dev) {
                     QuickResult::None => {}
                     QuickResult::Redraw { rect, waveform } => {
                         panel = Some(match panel {
@@ -416,6 +472,20 @@ fn main() -> Result<()> {
                     QuickResult::Sleep => {
                         closed = true;
                         dev.sleep()?;
+                    }
+                    QuickResult::Repaint { flash } => {
+                        dev.on = quick.settings().night;
+                        repaint = Some(repaint.unwrap_or(false) || flash);
+                    }
+                    QuickResult::Transfer => {
+                        // From a book: back to the library first, where the screen lives.
+                        if !matches!(screen, Screen::Home(_)) {
+                            screen = Screen::Home(go_home(&mut shelf, &ctx));
+                        }
+                        if let Screen::Home(h) = &mut screen {
+                            h.open_transfer();
+                        }
+                        repaint = Some(true);
                     }
                 }
                 down = None;
@@ -481,7 +551,7 @@ fn main() -> Result<()> {
             let t0 = Instant::now();
             // Swipe down from the top edge: the quick-settings panel, on every screen.
             if QuickPanel::opens(start, (t.x, t.y)) {
-                let rect = quick.open(dev.as_ref());
+                let rect = quick.open(&dev);
                 dev.wait_refresh(marker)?;
                 quick.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
@@ -558,15 +628,7 @@ fn main() -> Result<()> {
                     (None, false)
                 }
                 Action::Home => {
-                    let h = match shelf.take() {
-                        Some((mut h, path)) => {
-                            h.returned(&path, &ctx);
-                            h.refresh(&ctx);
-                            h
-                        }
-                        None => Box::new(home(&ctx)),
-                    };
-                    screen = Screen::Home(h);
+                    screen = Screen::Home(go_home(&mut shelf, &ctx));
                     (None, true)
                 }
             };
@@ -632,7 +694,18 @@ fn main() -> Result<()> {
             // Black-and-white while the finger moves; the gray settles on release.
             marker = dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
         }
-        if closed {
+        if let Some(rect) = quick.poll() {
+            panel = Some(panel.map_or((rect, Waveform::Text), |(r, _)| (r.union(&rect), Waveform::Text)));
+        }
+        if let Some(flash) = repaint {
+            dev.wait_refresh(marker)?;
+            screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
+            if quick.is_open() {
+                quick.render(&mut dev.canvas(), &mut ctx);
+            }
+            let waveform = if flash { Waveform::Full } else { Waveform::Text };
+            marker = dev.refresh(&Refresh { rect: full, waveform, flash, swipe: None })?;
+        } else if closed {
             dev.wait_refresh(marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;

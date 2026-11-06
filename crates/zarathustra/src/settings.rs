@@ -24,6 +24,8 @@ pub struct Settings {
     pub flash_every: u8,
     /// The home's first page quotes a highlight (else shows the reading figures).
     pub home_quotes: bool,
+    /// Night mode: the whole screen inverted, white on black.
+    pub night: bool,
 }
 
 impl Default for Settings {
@@ -38,6 +40,7 @@ impl Default for Settings {
             lang: Lang::It,
             flash_every: 8,
             home_quotes: true,
+            night: false,
         }
     }
 }
@@ -75,6 +78,7 @@ impl Settings {
                 "swipe_animation" => flag(&mut s.swipe_animation),
                 "clock" => flag(&mut s.clock),
                 "auto_warmth" => flag(&mut s.auto_warmth),
+                "night" => flag(&mut s.night),
                 "night_warmth" => percent(&mut s.night_warmth),
                 "brightness" => percent(&mut s.brightness),
                 "warmth" => percent(&mut s.warmth),
@@ -100,11 +104,12 @@ impl Settings {
             lang,
             flash_every,
             home_quotes,
+            night,
         } = self;
         format!(
             "swipe_animation={swipe_animation}\nclock={clock}\nauto_warmth={auto_warmth}\n\
              night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\nlang={}\n\
-             flash_every={flash_every}\nhome_quotes={home_quotes}\n",
+             flash_every={flash_every}\nhome_quotes={home_quotes}\nnight={night}\n",
             lang.code()
         )
     }
@@ -132,6 +137,7 @@ mod tests {
             lang: Lang::En,
             flash_every: 16,
             home_quotes: false,
+            night: true,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let dir = scratch("round-trip");
