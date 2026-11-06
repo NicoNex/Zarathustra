@@ -185,6 +185,15 @@ impl QuickPanel {
         &self.settings
     }
 
+    /// Takes the settings screen's fields (language, full refresh) and saves. The rest is
+    /// the panel's own: the screen's copy may be older than a slider moved since.
+    pub fn update(&mut self, from: Settings) {
+        self.settings.lang = from.lang;
+        self.settings.flash_every = from.flash_every;
+        crate::i18n::set_lang(from.lang);
+        self.save();
+    }
+
     pub fn is_open(&self) -> bool {
         self.open
     }

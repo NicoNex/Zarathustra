@@ -15,6 +15,7 @@ use crate::bookmenu::{self, BookMenu, Item};
 use crate::i18n::t;
 use crate::keyboard::{self, Key, Keyboard};
 use crate::notebook::{self, Notebook};
+use crate::prefs::Prefs;
 use crate::reader::Position;
 use crate::stats::StatsScreen;
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
@@ -42,6 +43,7 @@ const EXIT: Rect = Rect { x: W - PAD - 150, y: 82, w: 150, h: 72 };
 const VIEW: Rect = Rect { x: W - PAD - 150 - 32 - 192, y: 82, w: 192, h: 72 };
 const STATS: Rect = Rect { x: VIEW.x - 32 - 72, y: 82, w: 72, h: 72 };
 const SEARCH: Rect = Rect { x: STATS.x - 32 - 72, y: 82, w: 72, h: 72 };
+const GEAR: Rect = Rect { x: SEARCH.x - 32 - 72, y: 82, w: 72, h: 72 };
 /// The search field, over the header's title and buttons while searching.
 const FIELD: Rect = Rect { x: PAD, y: 82, w: W - 2 * PAD, h: 72 };
 const CLEAR: Rect = Rect { x: FIELD.x + FIELD.w - 96, y: FIELD.y, w: 96, h: FIELD.h };
@@ -89,6 +91,7 @@ enum Overlay {
     Notebook(usize, Notebook),
     About(usize, Box<About>),
     Stats(StatsScreen),
+    Prefs(Prefs),
 }
 
 /// Library order: title, author, or recently read first (then recently added).
@@ -291,6 +294,7 @@ impl Home {
             Some(Overlay::Notebook(_, nb)) => nb.render(c, ctx),
             Some(Overlay::About(i, about)) => about.render(c, ctx, self.books[*i].cover.as_ref()),
             Some(Overlay::Stats(stats)) => stats.render(c, ctx),
+            Some(Overlay::Prefs(p)) => p.render(c, ctx),
         }
     }
 
@@ -339,6 +343,7 @@ impl Home {
                 Label { face: serif_bold, size: 66.0, ink: INK }.draw(c, raster, t().library, PAD as f32, 150);
                 self.view_toggle(c);
                 stats_button(c);
+                gear_button(c);
                 rounded_outline(c, SEARCH, SEARCH.h / 2, 2, LINE, PAPER);
                 crate::search::icon(c, Rect::new(SEARCH.x + 22, SEARCH.y + 22, 28, 28), INK, PAPER);
                 rounded_outline(c, EXIT, EXIT.h / 2, 3, INK, PAPER);
@@ -537,6 +542,10 @@ impl Home {
                 self.overlay = None;
                 redraw
             }
+            Overlay::Prefs(p) => p.tap(start).unwrap_or_else(|| {
+                self.overlay = None;
+                redraw
+            }),
             Overlay::About(..) | Overlay::Stats(_) => Action::None,
         }
     }
@@ -655,6 +664,9 @@ impl Home {
             self.keyboard = Some(Keyboard::default());
             self.set_filter(self.filter);
             return Action::Redraw { turn: None };
+        } else if inside(GEAR) {
+            self.overlay = Some(Overlay::Prefs(Prefs::new(crate::settings::Settings::load(&ctx.state_dir))));
+            return Action::Redraw { turn: None };
         } else if inside(STATS) {
             let finished = self.books.iter().filter(|b| b.status() == Filter::Finished).count();
             self.overlay = Some(Overlay::Stats(StatsScreen::new(&ctx.state_dir, finished)));
@@ -697,6 +709,18 @@ impl Home {
             None => Action::None,
         }
     }
+}
+
+/// The settings button: a cog (a ring with eight teeth) in a ring.
+fn gear_button(c: &mut Canvas) {
+    rounded_outline(c, GEAR, GEAR.h / 2, 2, LINE, PAPER);
+    let (cx, cy) = (GEAR.x + GEAR.w / 2, GEAR.y + GEAR.h / 2);
+    for n in 0..8 {
+        let a = n as f32 * std::f32::consts::FRAC_PI_4;
+        let (x, y) = (cx + (a.cos() * 13.0).round() as i32, cy + (a.sin() * 13.0).round() as i32);
+        rounded_rect(c, Rect::new(x - 5, y - 5, 10, 10), 2, INK);
+    }
+    rounded_outline(c, Rect::new(cx - 12, cy - 12, 24, 24), 12, 6, INK, PAPER);
 }
 
 /// The statistics button: three rising bars in a ring.

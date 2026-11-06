@@ -14,6 +14,7 @@ pub mod nav;
 pub mod notebook;
 pub mod pace;
 pub mod pdfview;
+pub mod prefs;
 pub mod quick;
 pub mod reader;
 pub mod search;
@@ -150,6 +151,8 @@ pub enum Action {
     Region(omero_device::Rect),
     /// Open the book, showing `Landing` first.
     Open(PathBuf, Landing),
+    /// The settings screen changed a setting: hand it to the quick panel, which owns them.
+    Settings(settings::Settings),
     Home,
     Quit,
 }

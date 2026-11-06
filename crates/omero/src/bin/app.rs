@@ -19,9 +19,6 @@ use omero::{first_existing, Action, Ctx, Landing, H, W};
 use omero_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
 use omero_engine::library::Format;
 
-/// A full flashing refresh every this many page turns clears e-ink ghosting.
-const FLASH_EVERY: u32 = 8;
-
 enum Screen {
     Home(Box<Home>),
     Reader(Box<Reader>),
@@ -136,6 +133,8 @@ fn main() -> Result<()> {
         shot(&mut home, &mut ctx, Some((600, 1313)), "about.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
         shot(&mut home, &mut ctx, Some((722, 118)), "stats.pgm")?;
+        home.tap((100, 75), (100, 75), &ctx);
+        shot(&mut home, &mut ctx, Some((516, 118)), "prefs.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
         // Library search: the field and keyboard, then "gra" typed.
         shot(&mut home, &mut ctx, Some((620, 118)), "search.pgm")?;
@@ -444,7 +443,7 @@ fn main() -> Result<()> {
                 }
                 Action::Redraw { turn } => {
                     turns += 1;
-                    (turn, turns.is_multiple_of(FLASH_EVERY))
+                    (turn, turns.is_multiple_of(quick.settings().flash_every.into()))
                 }
                 Action::Open(path, landing) => match Screen::open(&path, &mut ctx) {
                     Ok(mut s) => {
@@ -464,6 +463,10 @@ fn main() -> Result<()> {
                         continue;
                     }
                 },
+                Action::Settings(s) => {
+                    quick.update(s);
+                    (None, false)
+                }
                 Action::Home => {
                     screen = Screen::Home(Box::new(home(&ctx)));
                     (None, true)

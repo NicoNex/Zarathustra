@@ -20,6 +20,8 @@ pub struct Settings {
     pub warmth: u8,
     /// UI language.
     pub lang: Lang,
+    /// Page turns between full (flashing) refreshes that clear e-ink ghosting.
+    pub flash_every: u8,
 }
 
 impl Default for Settings {
@@ -32,6 +34,7 @@ impl Default for Settings {
             brightness: 40,
             warmth: 0,
             lang: Lang::It,
+            flash_every: 8,
         }
     }
 }
@@ -73,6 +76,9 @@ impl Settings {
                 "brightness" => percent(&mut s.brightness),
                 "warmth" => percent(&mut s.warmth),
                 "lang" => s.lang = Lang::from_code(value).unwrap_or(s.lang),
+                "flash_every" => {
+                    s.flash_every = value.parse().ok().filter(|n| (1..=100).contains(n)).unwrap_or(s.flash_every)
+                }
                 _ => {}
             }
         }
@@ -80,10 +86,12 @@ impl Settings {
     }
 
     pub fn to_text(&self) -> String {
-        let Settings { swipe_animation, clock, auto_warmth, night_warmth, brightness, warmth, lang } = self;
+        let Settings { swipe_animation, clock, auto_warmth, night_warmth, brightness, warmth, lang, flash_every } =
+            self;
         format!(
             "swipe_animation={swipe_animation}\nclock={clock}\nauto_warmth={auto_warmth}\n\
-             night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\nlang={}\n",
+             night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\nlang={}\n\
+             flash_every={flash_every}\n",
             lang.code()
         )
     }
@@ -109,6 +117,7 @@ mod tests {
             brightness: 12,
             warmth: 33,
             lang: Lang::En,
+            flash_every: 16,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let dir = scratch("round-trip");
