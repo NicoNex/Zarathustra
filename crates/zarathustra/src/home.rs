@@ -19,6 +19,7 @@ use crate::notebook::{self, Notebook};
 use crate::prefs::Prefs;
 use crate::reader::Position;
 use crate::stats::StatsScreen;
+use crate::transfer::{self, Transfer};
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
 use crate::{Action, Ctx, Landing, H, W};
 
@@ -48,6 +49,7 @@ const POWER_MENU: Rect = Rect { x: W - PAD - 440, y: POWER.y + POWER.h + 16, w: 
 const STATS: Rect = Rect { x: VIEW.x - 32 - 72, y: 82, w: 72, h: 72 };
 const SEARCH: Rect = Rect { x: STATS.x - 32 - 72, y: 82, w: 72, h: 72 };
 const GEAR: Rect = Rect { x: SEARCH.x - 32 - 72, y: 82, w: 72, h: 72 };
+const TRANSFER: Rect = Rect { x: GEAR.x - 32 - 72, y: 82, w: 72, h: 72 };
 /// The search field, over the header's title and buttons while searching.
 const FIELD: Rect = Rect { x: PAD, y: 82, w: W - 2 * PAD, h: 72 };
 const CLEAR: Rect = Rect { x: FIELD.x + FIELD.w - 96, y: FIELD.y, w: 96, h: FIELD.h };
@@ -98,6 +100,7 @@ enum Overlay {
     Prefs(Prefs),
     /// Suspend, exit, restart, power off.
     Power,
+    Transfer(Transfer),
 }
 
 /// Library order: title, author, or recently read first (then recently added).
@@ -362,6 +365,7 @@ impl Home {
                 self.render_library(c, ctx);
                 power_menu(c, ctx);
             }
+            Some(Overlay::Transfer(tr)) => tr.render(c, ctx),
         }
     }
 
@@ -411,6 +415,7 @@ impl Home {
                 self.view_toggle(c);
                 stats_button(c);
                 gear_button(c);
+                transfer_button(c);
                 rounded_outline(c, SEARCH, SEARCH.h / 2, 2, LINE, PAPER);
                 crate::search::icon(c, Rect::new(SEARCH.x + 22, SEARCH.y + 22, 28, 28), INK, PAPER);
                 power_button(c);
@@ -642,6 +647,18 @@ impl Home {
                     _ => redraw,
                 }
             }
+            Overlay::Transfer(tr) => match tr.tap(start) {
+                transfer::Tap::None => Action::None,
+                transfer::Tap::Redraw => redraw,
+                transfer::Tap::Back => {
+                    let received = tr.received();
+                    self.overlay = None;
+                    if received {
+                        self.refresh(ctx);
+                    }
+                    redraw
+                }
+            },
             Overlay::About(..) | Overlay::Stats(_) => Action::None,
         }
     }
@@ -698,6 +715,19 @@ impl Home {
         let page = self.page;
         self.set_filter(self.filter);
         self.page = page.min(self.pages() - 1);
+    }
+
+    /// Whether the send-books screen is open (the app then polls it often).
+    pub fn transferring(&self) -> bool {
+        matches!(self.overlay, Some(Overlay::Transfer(_)))
+    }
+
+    /// Takes in books arriving on the send-books screen; true if it needs a redraw.
+    pub fn poll_transfer(&mut self) -> bool {
+        match &mut self.overlay {
+            Some(Overlay::Transfer(tr)) => tr.poll(),
+            _ => false,
+        }
     }
 
     /// The finger went down: a key of the search keyboard shows pressed. Returns its area.
@@ -774,6 +804,9 @@ impl Home {
             self.query = Some(String::new());
             self.keyboard = Some(Keyboard::default());
             self.set_filter(self.filter);
+            return Action::Redraw { turn: None };
+        } else if inside(TRANSFER) {
+            self.overlay = Some(Overlay::Transfer(Transfer::open()));
             return Action::Redraw { turn: None };
         } else if inside(GEAR) {
             self.overlay = Some(Overlay::Prefs(Prefs::new(crate::settings::Settings::load(&ctx.state_dir))));
@@ -892,6 +925,19 @@ fn power_menu(c: &mut Canvas, ctx: &mut Ctx) {
         }
         label.draw(c, raster, text, (r.x + 40) as f32, label.baseline(r));
     }
+}
+
+/// The send-books button: an arrow down into a tray.
+fn transfer_button(c: &mut Canvas) {
+    rounded_outline(c, TRANSFER, TRANSFER.h / 2, 2, LINE, PAPER);
+    let (cx, cy) = (TRANSFER.x + TRANSFER.w / 2, TRANSFER.y + TRANSFER.h / 2);
+    c.fill(Rect::new(cx - 3, cy - 18, 6, 20), INK);
+    for n in 0..9 {
+        c.fill(Rect::new(cx - 11 + n, cy - 2 + n, 22 - 2 * n, 1), INK);
+    }
+    c.fill(Rect::new(cx - 17, cy + 12, 34, 5), INK);
+    c.fill(Rect::new(cx - 17, cy + 4, 5, 10), INK);
+    c.fill(Rect::new(cx + 12, cy + 4, 5, 10), INK);
 }
 
 /// The statistics button: three rising bars in a ring.

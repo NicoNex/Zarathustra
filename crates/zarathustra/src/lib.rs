@@ -22,6 +22,7 @@ pub mod settings;
 pub mod sleep;
 pub mod stats;
 pub mod toc;
+pub mod transfer;
 pub mod ui;
 
 use std::path::{Path, PathBuf};
@@ -103,10 +104,27 @@ impl Ctx {
             .iter()
             .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
         let file = self.state_dir.join(format!("{stem}-{hash:016x}.pos"));
-        // ponytail: migrates the old stem-only name; drop once devices have opened their books.
-        let old = self.state_dir.join(format!("{stem}.pos"));
-        if !file.exists() && old.exists() {
-            std::fs::rename(&old, &file).ok();
+        if file.exists() {
+            return file;
+        }
+        // A book moved to another folder (documents/ → library/) keeps its place: the one
+        // position saved under the same file name, from the old stem-only name or another path.
+        // ponytail: a read of the state dir per book never opened; key positions by the book's
+        // identifier if that shows up at startup on a big library.
+        let prefix = format!("{stem}-");
+        let candidates: Vec<PathBuf> = std::fs::read_dir(&self.state_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                name == format!("{stem}.pos")
+                    || (name.starts_with(&prefix) && name.ends_with(".pos") && name.len() == prefix.len() + 20)
+            })
+            .collect();
+        if let [old] = candidates.as_slice() {
+            std::fs::rename(old, &file).ok();
         }
         file
     }
@@ -160,4 +178,24 @@ pub enum Action {
     /// Restart or power off the device.
     Reboot,
     PowerOff,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_moved_book_keeps_its_position() {
+        let dir = std::env::temp_dir().join(format!("zarathustra-pos-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut ctx = Ctx::new();
+        ctx.state_dir = dir.clone();
+        let old = ctx.state_file(Path::new("/mnt/us/documents/Libro.epub"));
+        std::fs::write(&old, "3 0 0.5000 0\n").expect("write");
+        let new = ctx.state_file(Path::new("/mnt/us/library/Libro.epub"));
+        assert_ne!(old, new);
+        assert!(new.exists() && !old.exists(), "the position moved with the book");
+        assert!(!ctx.state_file(Path::new("/mnt/us/library/Altro.epub")).exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

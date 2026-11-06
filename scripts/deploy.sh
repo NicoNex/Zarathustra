@@ -15,7 +15,10 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/zarathustra/bin" "$STAGE/extensions"
 for b in $BINS; do cp "$BIN/$b" "$STAGE/zarathustra/bin/"; done
 cp -r dist/kual/zarathustra "$STAGE/extensions/"
 mkdir -p "$STAGE/zarathustra/hyph" && cp assets/hyphenation/*.bincode "$STAGE/zarathustra/hyph/"
-bundle() { tar -cf - -C "$STAGE" zarathustra extensions; }
+# library/: the books the home shows (copy them there, or send them over Wi-Fi). Created
+# empty; nothing is moved into it.
+mkdir -p "$STAGE/library"
+bundle() { tar -cf - -C "$STAGE" zarathustra extensions library; }
 # The project was called Omero: carry its data (positions, highlights, settings) over once.
 # ponytail: drop this after every device has run a deploy since 2026-11-06.
 MIGRATE='if [ -d omero ] && [ ! -d zarathustra ]; then mv omero zarathustra;

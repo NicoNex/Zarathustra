@@ -81,7 +81,9 @@ impl Press {
 }
 
 fn library_dirs() -> Vec<PathBuf> {
-    ["/mnt/us/library", "/mnt/us/documents", "dev-books"].iter().map(|d| first_existing(&[d])).collect()
+    // Only the books the user put in library/ (by hand or sent over Wi-Fi); Amazon's
+    // documents/ is left alone.
+    ["/mnt/us/library", "dev-books"].iter().map(|d| first_existing(&[d])).collect()
 }
 
 fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
@@ -152,6 +154,9 @@ fn main() -> Result<()> {
         home.tap((5, 5), (5, 5), &ctx);
         shot(&mut home, &mut ctx, Some((516 + 78, 118)), "prefs.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
+        // Send books as it is now (no network: the retry screen), then with a fixed URL.
+        shot(&mut home, &mut ctx, Some((490, 118)), "transfer.pgm")?;
+        home.tap((100, 75), (100, 75), &ctx);
         // Library search: the field and keyboard, then "gra" typed.
         shot(&mut home, &mut ctx, Some((620 + 78, 118)), "search.pgm")?;
         let kb = zarathustra::keyboard::Keyboard::default();
@@ -169,6 +174,11 @@ fn main() -> Result<()> {
             home.long_press((r.x + r.w / 2, r.y + r.h / 2), &ctx);
         }
         shot(&mut home, &mut ctx, None, "accents.pgm")?;
+        let mut tr = zarathustra::transfer::Transfer::open();
+        tr.set_url("http://192.168.1.42:8080/k7f3x2".into());
+        tr.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        write_pgm(dir.join("transfer-qr.pgm"), &px)?;
+        drop(tr);
         if let Screen::Pdf(p) = &mut screen {
             for n in 0..3 {
                 p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -314,8 +324,13 @@ fn main() -> Result<()> {
         };
         // A search under way only peeks at the input queue between chapters.
         let searching = matches!(&screen, Screen::Reader(r) if r.is_searching()) && !quick.is_open();
-        // The home looks for new books every half minute (a walk and a stat per file).
-        let idle = Duration::from_secs(if matches!(screen, Screen::Home(_)) { 30 } else { 300 });
+        // The send-books screen checks for arriving books twice a second; the home looks for
+        // new books every half minute (a walk and a stat per file).
+        let idle = match &screen {
+            Screen::Home(h) if h.transferring() => Duration::from_millis(500),
+            Screen::Home(_) => Duration::from_secs(30),
+            _ => Duration::from_secs(300),
+        };
         let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(idle) };
         dev.wait_events(Some(timeout), &mut events)?;
         let mut power = false;
@@ -572,6 +587,13 @@ fn main() -> Result<()> {
                     }
                 }
                 Screen::Pdf(_) => {}
+            }
+        }
+        if let (Screen::Home(h), false) = (&mut screen, quick.is_open() || asleep) {
+            if h.poll_transfer() {
+                dev.wait_refresh(marker)?;
+                h.render(&mut dev.canvas(), &mut ctx);
+                marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
         if let (Screen::Reader(r), false) = (&mut screen, quick.is_open()) {

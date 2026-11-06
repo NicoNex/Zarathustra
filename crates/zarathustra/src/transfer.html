@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zarathustra</title>
+<style>
+  :root { --paper: #f4efe4; --ink: #1d1b18; --soft: #6f685c; --line: #d8cfbd; --ok: #2f5d3a; --bad: #9b2c22; }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
+    font: 17px/1.45 "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    background-image: radial-gradient(rgba(0,0,0,.035) 1px, transparent 1px); background-size: 4px 4px;
+  }
+  main { max-width: 34rem; margin: 0 auto; padding: 2.4rem 1.25rem 3rem; }
+  .mark { font-size: .78rem; letter-spacing: .28em; text-transform: uppercase; color: var(--soft); }
+  h1 { font-size: 2.5rem; line-height: 1.05; margin: .35rem 0 .6rem; font-weight: 600; letter-spacing: -.01em; }
+  p.lede { margin: 0 0 2rem; color: var(--soft); font-style: italic; }
+  label.pick {
+    display: block; text-align: center; padding: 1.4rem 1rem; cursor: pointer;
+    border: 2px solid var(--ink); border-radius: 14px; background: var(--ink); color: var(--paper);
+    font-size: 1.25rem; letter-spacing: .02em; transition: transform .08s;
+  }
+  label.pick:active { transform: scale(.985); }
+  label.pick small { display: block; font-size: .8rem; opacity: .7; margin-top: .2rem; font-style: italic; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  ol { list-style: none; padding: 0; margin: 2rem 0 0; counter-reset: n; }
+  li { padding: .85rem 0 .9rem; border-top: 1px solid var(--line); counter-increment: n; }
+  li:last-child { border-bottom: 1px solid var(--line); }
+  .row { display: flex; gap: .75rem; align-items: baseline; }
+  .row::before { content: counter(n, decimal-leading-zero); font-size: .75rem; color: var(--soft); font-variant-numeric: tabular-nums; }
+  .name { flex: 1; overflow-wrap: anywhere; }
+  .state { font-size: .85rem; color: var(--soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  li.done .state { color: var(--ok); }
+  li.failed .state { color: var(--bad); }
+  .bar { height: 3px; background: var(--line); margin-top: .55rem; border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ink); transition: width .2s; }
+  li.done .bar, li.failed .bar { display: none; }
+  footer { margin-top: 2.2rem; font-size: .85rem; color: var(--soft); text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark">Zarathustra</div>
+  <h1 id="title">Send books</h1>
+  <p class="lede" id="lede">They go straight into the Kindle's library.</p>
+  <label class="pick"><span id="pick">Choose books</span><small>EPUB · KEPUB · AZW3 · MOBI · PDF · TXT</small>
+    <input id="files" type="file" multiple accept=".epub,.kepub,.azw3,.azw,.mobi,.pdf,.txt">
+  </label>
+  <ol id="list"></ol>
+  <footer id="foot">Keep this page open until every book shows “sent”.</footer>
+</main>
+<script>
+"use strict";
+const it = (navigator.language || "").toLowerCase().startsWith("it");
+const T = it ? {
+  title: "Trasferisci libri", lede: "Finiscono direttamente nella libreria del Kindle.", pick: "Scegli i libri",
+  foot: "Tieni aperta questa pagina finché ogni libro non è “inviato”.",
+  waiting: "in coda", sent: "inviato", failed: "non riuscito"
+} : { waiting: "queued", sent: "sent", failed: "failed" };
+for (const id of ["title", "lede", "pick", "foot"]) if (T[id]) document.getElementById(id).textContent = T[id];
+if (it) document.documentElement.lang = "it";
+
+const list = document.getElementById("list");
+const queue = [];
+let busy = false;
+
+document.getElementById("files").addEventListener("change", e => {
+  for (const file of e.target.files) {
+    const li = document.createElement("li");
+    li.innerHTML = '<div class="row"><span class="name"></span><span class="state"></span></div><div class="bar"><i></i></div>';
+    li.querySelector(".name").textContent = file.name;
+    li.querySelector(".state").textContent = T.waiting;
+    list.appendChild(li);
+    queue.push({ file, li });
+  }
+  e.target.value = "";
+  next();
+});
+
+// One at a time: the Kindle writes one file at a time, and progress stays readable.
+function next() {
+  if (busy || !queue.length) return;
+  busy = true;
+  const { file, li } = queue.shift();
+  const state = li.querySelector(".state"), bar = li.querySelector(".bar i");
+  const xhr = new XMLHttpRequest();
+  xhr.open("PUT", location.pathname.replace(/\/$/, "") + "/upload?name=" + encodeURIComponent(file.name));
+  xhr.upload.onprogress = p => {
+    if (!p.lengthComputable) return;
+    const pct = Math.floor(100 * p.loaded / p.total);
+    state.textContent = pct + "%";
+    bar.style.width = pct + "%";
+  };
+  const finish = ok => {
+    li.className = ok ? "done" : "failed";
+    state.textContent = ok ? T.sent : T.failed + (xhr.responseText ? " · " + xhr.responseText : "");
+    busy = false;
+    next();
+  };
+  xhr.onload = () => finish(xhr.status === 200);
+  xhr.onerror = () => finish(false);
+  xhr.send(file);
+}
+</script>
+</body>
+</html>
