@@ -293,7 +293,7 @@ fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, th
         modified,
         cover_thumb: None,
     };
-    let Some((m, cover)) = read_book(&entry.path, format) else { return (entry, true) };
+    let Some((m, cover)) = read_book(&entry.path, format, true) else { return (entry, true) };
     if let Some(title) = m.title.filter(|t| !t.trim().is_empty()) {
         entry.title = title;
     }
@@ -312,7 +312,7 @@ fn read_entry(path: PathBuf, format: Format, size: u64, modified: SystemTime, th
 /// A book's full metadata (with the description), read from the file on demand: the scan
 /// cache keeps only what the home lists.
 pub fn details(path: &Path) -> Option<Metadata> {
-    let mut meta = read_book(path, Format::from_path(path)?)?.0;
+    let mut meta = read_book(path, Format::from_path(path)?, false)?.0;
     meta.description = meta.description.as_deref().map(plain_text).filter(|d| !d.is_empty());
     Some(meta)
 }
@@ -340,21 +340,21 @@ pub fn plain_text(html: &str) -> String {
     lines.filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
-/// Metadata and the cover fitted into the thumbnail size (`None` when there is none or it
-/// does not decode), or `None` when the book cannot be read.
-fn read_book(path: &Path, format: Format) -> Option<(Metadata, Option<image::GrayImage>)> {
-    let decode = |bytes: Option<Vec<u8>>| bytes.and_then(|b| image::decode(&b, THUMB_W, THUMB_H));
+/// Metadata and, with `cover`, the cover fitted into the thumbnail size (`None` when there is
+/// none or it does not decode), or `None` when the book cannot be read.
+fn read_book(path: &Path, format: Format, cover: bool) -> Option<(Metadata, Option<image::GrayImage>)> {
+    let decode = |bytes: Option<Vec<u8>>| bytes.filter(|_| cover).and_then(|b| image::decode(&b, THUMB_W, THUMB_H));
     match format {
         Format::Epub | Format::Kepub => {
             let mut epub = Epub::open(BufReader::new(fs::File::open(path).ok()?)).ok()?;
-            let cover = epub.cover.clone().and_then(|c| epub.read(&c).ok());
-            Some((std::mem::take(&mut epub.metadata), decode(cover)))
+            let bytes = epub.cover.clone().filter(|_| cover).and_then(|c| epub.read(&c).ok());
+            Some((std::mem::take(&mut epub.metadata), decode(bytes)))
         }
         Format::Azw3 | Format::Mobi => crate::mobi::Mobi::peek(path).ok().map(|(m, c)| (m, decode(c))),
         Format::Pdf => {
             let pdf = crate::pdf::Pdf::open(path).ok()?;
             let m = Metadata { title: pdf.title(), authors: pdf.author().into_iter().collect(), ..Metadata::default() };
-            Some((m, pdf.render(0, THUMB_W, THUMB_H, false).ok()))
+            Some((m, cover.then(|| pdf.render(0, THUMB_W, THUMB_H, false).ok()).flatten()))
         }
         // TXT has no metadata: the file stem is its title.
         Format::Txt => None,

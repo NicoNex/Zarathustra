@@ -1,6 +1,8 @@
 //! Plain-text books, turned into synthetic XHTML chapters so layout, positions and
 //! highlights work as for an EPUB.
 
+use std::fmt::Write;
+
 use quick_xml::escape::escape;
 
 use crate::epub::TocEntry;
@@ -33,10 +35,10 @@ pub fn chapters(bytes: &[u8]) -> (Vec<String>, Vec<TocEntry>) {
         if let Some(title) = heading(&block) {
             flush(&mut body, &mut chapters);
             toc.push(TocEntry { title: title.into(), target: chapter_path(chapters.len()), children: Vec::new() });
-            body.push_str(&format!("<h2>{}</h2>", escape(title)));
+            let _ = write!(body, "<h2>{}</h2>", escape(title));
             continue;
         }
-        body.push_str(&format!("<p>{}</p>", escape(block.as_str())));
+        let _ = write!(body, "<p>{}</p>", escape(block.as_str()));
         if body.len() > CHAPTER_BYTES {
             flush(&mut body, &mut chapters);
         }
@@ -70,6 +72,9 @@ fn paragraphs(text: &str) -> impl Iterator<Item = String> + '_ {
 // books show up.
 fn heading(par: &str) -> Option<&str> {
     const WORDS: [&str; 8] = ["chapter", "chapitre", "capitolo", "kapitel", "capítulo", "part", "parte", "book"];
+    if par.len() > 240 {
+        return None; // longer than 60 characters of up to 4 bytes: a paragraph
+    }
     let mut words = par.split_whitespace();
     let first = words.next()?.to_lowercase();
     let number = words.next()?.trim_end_matches(['.', ':']);
