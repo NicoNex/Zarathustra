@@ -18,7 +18,7 @@ use crate::keyboard::{self, Key, Keyboard};
 use crate::notebook::{self, Notebook};
 use crate::prefs::Prefs;
 use crate::reader::Position;
-use crate::stats::StatsScreen;
+use crate::stats::{self, StatsScreen};
 use crate::transfer::{self, Transfer};
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
 use crate::{Action, Ctx, Landing, H, W};
@@ -133,6 +133,34 @@ pub struct Home {
     keyboard: Option<Keyboard>,
     /// Where the books are, to scan again after a delete.
     dirs: Vec<PathBuf>,
+    /// What fills the first page under the continue-reading card and its row of books.
+    pub band: Band,
+    /// Reading totals for the band (today, last 7 days, streak).
+    reading: stats::Summary,
+    /// A highlight for the band: its words and its book's title (one a day, from the recent).
+    quote: Option<(String, String)>,
+}
+
+/// The first page's band, under the row of books.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Band {
+    Stats,
+    Quote,
+}
+
+/// Today's reading figures and a highlight that changes daily, for the first page.
+fn band_data(ctx: &Ctx) -> (stats::Summary, Option<(String, String)>) {
+    let today = crate::clock::local_now().0;
+    let reading = stats::summary(&stats::days(&ctx.state_dir, None), today);
+    let recent = zarathustra_store::Store::open(&ctx.state_dir.join("zarathustra.db"))
+        .and_then(|s| s.recent_annotations(50))
+        .unwrap_or_default();
+    let quotes: Vec<(String, String)> = (recent.into_iter())
+        .filter_map(|(a, title)| Some((a.data.quote?.exact, title.unwrap_or_default())))
+        .filter(|(q, _)| q.split_whitespace().count() >= 6)
+        .collect();
+    let quote = (!quotes.is_empty()).then(|| quotes[today.rem_euclid(quotes.len() as i64) as usize].clone());
+    (reading, quote)
 }
 
 /// A book's file time and its grid and list covers, kept across a refresh.
@@ -226,6 +254,7 @@ impl Home {
             })
             .collect();
         let current = current(&books);
+        let (reading, quote) = band_data(ctx);
         let view_file = ctx.state_dir.join("home_view.txt");
         // "grid|list [title|author|recent]"
         let view = std::fs::read_to_string(&view_file).unwrap_or_default();
@@ -250,6 +279,9 @@ impl Home {
             query: None,
             keyboard: None,
             dirs: dirs.to_vec(),
+            band: Band::Stats,
+            reading,
+            quote,
         };
         home.set_filter(Filter::All);
         home
@@ -444,11 +476,20 @@ impl Home {
         if self.shown.is_empty() {
             soft.draw(c, raster, t().no_books, PAD as f32, self.items_top(self.page) + 60);
         }
-        for (i, r) in self.items() {
+        let items = self.items();
+        for &(i, r) in &items {
             if self.grid {
                 grid_cell(c, raster, &faces, &self.books[i], r);
             } else {
                 list_row(c, raster, &faces, &self.books[i], r);
+            }
+        }
+        // The first page's leftover space under the row of books: reading figures or a quote.
+        if let (true, Some(&(_, last))) = (self.card(self.page), items.last()) {
+            let top = last.bottom() + 24;
+            let band = Rect::new(PAD, top, W - 2 * PAD, H - FOOTER - 16 - top);
+            if band.h >= 150 {
+                self.render_band(c, raster, &faces, band);
             }
         }
 
@@ -457,6 +498,41 @@ impl Home {
         } else if self.pages() > 1 {
             let label = format!("‹   {} / {}   ›", self.page + 1, self.pages());
             soft.draw_centred(c, raster, &label, W as f32 / 2.0, H - FOOTER / 2 + 10);
+        }
+    }
+
+    /// Sample reading figures and quote, for `--pgm` reviews on a desktop with no history.
+    pub fn sample_band(&mut self) {
+        self.reading = stats::Summary { today: 25 * 60, week: 3 * 3600 + 40 * 60, streak: 6, ..Default::default() };
+        let quote = "Il puritano voleva essere un professionista; noi dobbiamo esserlo.";
+        self.quote = Some((quote.into(), "L'Etica protestante e lo spirito del capitalismo".into()));
+    }
+
+    fn render_band(&self, c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, r: Rect) {
+        let s = t();
+        c.fill(Rect::new(r.x, r.y, r.w, 2), LINE);
+        let caption = Label { face: f.sans, size: 24.0, ink: INK_SOFT };
+        match (self.band, &self.quote) {
+            (Band::Quote, Some((quote, title))) => {
+                caption.draw(c, raster, s.from_highlights, r.x as f32, r.y + 50);
+                let text = Label { face: f.serif, size: 34.0, ink: INK };
+                let lines = text.wrap(&format!("«{quote}»"), r.w as f32, 2);
+                for (i, line) in lines.iter().enumerate() {
+                    text.draw(c, raster, line, r.x as f32, r.y + 104 + i as i32 * 48);
+                }
+                let by = caption.fit(&format!("— {title}"), r.w as f32);
+                caption.draw(c, raster, &by, r.x as f32, r.y + 112 + lines.len() as i32 * 48);
+            }
+            _ => {
+                caption.draw(c, raster, s.your_reading, r.x as f32, r.y + 50);
+                let sum = &self.reading;
+                let items = [
+                    (stats::duration(sum.today), s.today),
+                    (stats::duration(sum.week), s.this_week),
+                    (sum.streak.to_string(), s.streak),
+                ];
+                stats::figures(c, raster, (f.serif_bold, f.sans), Rect::new(r.x, r.y + 64, r.w, 130), &items);
+            }
         }
     }
 
