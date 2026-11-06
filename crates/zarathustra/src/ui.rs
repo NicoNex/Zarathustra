@@ -227,12 +227,20 @@ impl Label<'_> {
     }
 }
 
-/// Draws the text lines of a laid-out page with the text area's top-left corner at `origin`.
-pub fn draw_lines(c: &mut Canvas, fonts: &FontLibrary, raster: &mut Rasterizer, page: &Page, (ox, oy): (f32, f32)) {
+/// Draws the text lines of a laid-out page with the text area's top-left corner at `origin`,
+/// emboldened by `weight` (an index into `font::WEIGHTS`; 0 = the font as designed).
+pub fn draw_lines(
+    c: &mut Canvas,
+    fonts: &FontLibrary,
+    raster: &mut Rasterizer,
+    page: &Page,
+    (ox, oy): (f32, f32),
+    weight: u8,
+) {
     for line in &page.lines {
         for g in &line.glyphs {
             let Some(face) = fonts.face(g.face) else { continue };
-            let (gx, glyph) = raster.glyph(face, g.gid, g.size, ox + line.x + g.x);
+            let (gx, glyph) = raster.glyph_weighted(face, g.gid, g.size, ox + line.x + g.x, weight);
             draw_glyph(c, glyph, gx, (oy + line.baseline + g.y).round() as i32, INK);
         }
     }
