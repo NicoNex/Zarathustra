@@ -190,7 +190,28 @@ impl Reader {
     }
 
     /// Back to where the reader was before the last jump.
+    /// The time on the page shown counts as read (a forward turn, the menu opening, leaving
+    /// the book): into the reading speed and today's statistics.
+    fn bank_page(&mut self) {
+        if let Some(d) = self.pace.turned(Instant::now()) {
+            self.hl.log_page(u32::try_from(d.as_secs()).unwrap_or(u32::MAX));
+        }
+    }
+
+    /// Opens the menu; the time on the page so far is banked, and the time in the menu isn't.
+    fn open_menu(&mut self) {
+        self.bank_page();
+        self.menu = true;
+    }
+
+    /// Closes the menu: reading time starts again from here.
+    fn close_menu(&mut self) {
+        self.menu = false;
+        self.pace.restart(Instant::now());
+    }
+
     fn go_back(&mut self, ctx: &mut Ctx) {
+        self.pace.restart(Instant::now());
         let Some(m) = self.back.take() else { return };
         self.found = None;
         if m.chapter != self.chapter_index {
@@ -338,7 +359,7 @@ impl Reader {
             && y0 - y > SWIPE;
         if opens {
             self.hl.dismiss();
-            self.menu = true;
+            self.open_menu();
         }
         opens
     }
@@ -411,7 +432,7 @@ impl Reader {
             dx if dx < -SWIPE => true,
             dx if dx > SWIPE => false,
             _ if y0 < TOP_BAND => {
-                self.menu = true;
+                self.open_menu();
                 return Action::Redraw { turn: None };
             }
             _ => x0 >= BACK_ZONE,
@@ -422,9 +443,7 @@ impl Reader {
             return if active && !self.hl.is_active() { Action::Redraw { turn: None } } else { Action::None };
         }
         if forward {
-            if let Some(d) = self.pace.turned(Instant::now()) {
-                self.hl.log_page(u32::try_from(d.as_secs()).unwrap_or(u32::MAX));
-            }
+            self.bank_page();
         } else {
             self.pace.restart(Instant::now()); // re-reading a page isn't reading speed
         }
@@ -495,7 +514,7 @@ impl Reader {
         match hit {
             Some((Control::Library, _)) => {
                 self.save();
-                self.menu = false;
+                self.close_menu();
                 Action::Home
             }
             Some((Control::Contents, _)) => {
@@ -516,7 +535,7 @@ impl Reader {
             }
             None if menu::covers(ctx, y) => Action::None,
             None => {
-                self.menu = false;
+                self.close_menu();
                 Action::Redraw { turn: None }
             }
         }
@@ -555,7 +574,7 @@ impl Reader {
         } else if self.chapter_index == chapter {
             self.page = nav::page_in(within, self.chapter.pages.len());
         }
-        self.menu = false;
+        self.close_menu();
         self.back.jumped(from, self.mark());
         self.save();
         Action::Redraw { turn: None }
@@ -579,7 +598,7 @@ impl Reader {
                 let data = a.data.clone();
                 self.goto(&data, ctx);
                 self.toc = None;
-                self.menu = false;
+                self.close_menu();
                 Action::Redraw { turn: None }
             }
             toc::Tap::Remove(i) => {
@@ -603,7 +622,7 @@ impl Reader {
             self.page = block.map_or(0, |b| self.first_page_of(b));
         }
         self.toc = None;
-        self.menu = false;
+        self.close_menu();
         self.back.jumped(from, self.mark());
         self.save();
     }
@@ -673,7 +692,7 @@ impl Reader {
         self.found = search::block_range(&map, &self.chapter.blocks, hit.range.clone());
         self.toc = None;
         self.page = self.found.as_ref().map_or(0, |r| self.page_of(r.start));
-        self.menu = false;
+        self.close_menu();
         self.back.jumped(from, self.mark());
         self.save();
     }
