@@ -287,8 +287,19 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
 
     // Size: a stepper, the current step between a small and a large "A".
     let segs = segmented(c, l.size, 3, None);
-    Label { face: sans_bold, size: 30.0, ink: INK }.centered(c, raster, "A", segs[0]);
-    Label { face: sans_bold, size: 46.0, ink: INK }.centered(c, raster, "A", segs[2]);
+    // A small "A−" and a large "A+": the sign says which way, the size shows it. The signs
+    // are drawn, not set, so they match whatever the sans font has.
+    for (r, size, plus) in [(segs[0], 30.0, false), (segs[2], 46.0, true)] {
+        let a = Label { face: sans_bold, size, ink: INK };
+        let (arm, gap) = ((size * 0.36) as i32, 10);
+        let x = r.x as f32 + (r.w as f32 - a.width("A") - (gap + 2 * arm) as f32) / 2.0;
+        let sign_x = (x + a.draw(c, raster, "A", x, a.baseline(r))) as i32 + gap;
+        let cy = r.y + r.h / 2;
+        c.fill(Rect::new(sign_x, cy - 2, 2 * arm, 4), INK);
+        if plus {
+            c.fill(Rect::new(sign_x + arm - 2, cy - arm, 4, 2 * arm), INK);
+        }
+    }
     let value = format!("{} / {}", typo.size + 1, SIZES.len());
     Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &value, segs[1]);
 
