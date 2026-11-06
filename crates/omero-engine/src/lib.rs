@@ -8,5 +8,6 @@ pub mod image;
 pub mod layout;
 pub mod library;
 pub mod mobi;
+pub mod note;
 pub mod style;
 pub mod txt;

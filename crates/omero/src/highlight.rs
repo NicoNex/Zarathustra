@@ -49,7 +49,7 @@ impl TextPos {
     }
 }
 
-fn glyph_pos(blocks: &[Block], line: &PageLine, run: u32, offset: u32) -> TextPos {
+pub fn glyph_pos(blocks: &[Block], line: &PageLine, run: u32, offset: u32) -> TextPos {
     let start = blocks.get(line.block as usize).and_then(|b| b.spans.get(run as usize)).map_or(0, |s| s.start);
     TextPos::new(line.block as usize, start + offset as usize)
 }

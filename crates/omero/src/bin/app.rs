@@ -139,6 +139,28 @@ fn main() -> Result<()> {
             if let Some(b) = r.popup_button(Button::Delete) {
                 r.tap(centre(b), centre(b).0, &mut ctx);
             }
+            // The first footnote from here, then the first one long enough to page, its
+            // second page, and the page left as it was once closed.
+            if r.open_first_note(&mut ctx) {
+                snap(r, &mut ctx, "footnote.pgm")?;
+                for _ in 0..500 {
+                    if r.note_mut().is_some_and(|n| n.pages() > 1) {
+                        break;
+                    }
+                    r.tap((5, 5), 5, &mut ctx); // outside the card: closes it
+                    if !r.turn(true, &mut ctx) || !r.open_first_note(&mut ctx) {
+                        break;
+                    }
+                }
+                if let Some(card) = r.note_mut().filter(|n| n.pages() > 1).map(|n| n.bounds()) {
+                    snap(r, &mut ctx, "footnote-long.pgm")?;
+                    let inside = (card.x + card.w * 3 / 4, card.y + card.h / 2);
+                    r.tap(inside, inside.0, &mut ctx);
+                    snap(r, &mut ctx, "footnote-long2.pgm")?;
+                }
+                r.tap((5, 5), 5, &mut ctx);
+                snap(r, &mut ctx, "footnote-closed.pgm")?;
+            }
             r.menu = true;
             r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
             write_pgm(dir.join("menu.pgm"), &px)?;

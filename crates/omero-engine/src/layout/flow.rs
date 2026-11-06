@@ -109,6 +109,15 @@ struct Builder<'a> {
 // ponytail: tables (cells become plain blocks), floats and inline-blocks are not laid out as
 // such; their text flows as paragraphs.
 pub fn blocks(dom: &Dom, styles: &[Option<ComputedStyle>], lang: Option<&str>) -> Vec<Block> {
+    match dom.children(Dom::ROOT).find(|&c| dom.name(c).is_some()) {
+        Some(root) => blocks_from(dom, styles, root, lang),
+        None => Vec::new(),
+    }
+}
+
+/// Blocks of the subtree at element `root` alone (a footnote's body), as if it started the
+/// column.
+pub fn blocks_from(dom: &Dom, styles: &[Option<ComputedStyle>], root: NodeId, lang: Option<&str>) -> Vec<Block> {
     let mut b = Builder {
         dom,
         styles,
@@ -121,11 +130,7 @@ pub fn blocks(dom: &Dom, styles: &[Option<ComputedStyle>], lang: Option<&str>) -
         break_pending: false,
         images: Vec::new(),
     };
-    let root = dom.children(Dom::ROOT).find(|&c| dom.name(c).is_some());
-    if let Some(root) = root {
-        let lang = lang_of(dom, root).or(lang);
-        b.block(root, 0.0, lang);
-    }
+    b.block(root, 0.0, lang_of(dom, root).or(lang));
     b.blocks
 }
 

@@ -1,7 +1,8 @@
 //! The reading view: an open book, its laid-out chapter and the page shown.
 //!
 //! Tap the right two thirds (or swipe left) for the next page, the left third (or swipe right)
-//! for the previous one, the top band to go back home. The position is saved per book.
+//! for the previous one, the top band to go back home. A tap on a note reference opens the
+//! note over the page ([`crate::footnote`]). The position is saved per book.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -9,16 +10,16 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use omero_device::{Canvas, Rect};
 use omero_engine::book::{Book, Chapter};
-use omero_engine::font::draw_glyph;
 use omero_engine::layout::page::Page;
 use omero_engine::style::cascade::Preferences;
 use omero_store::AnnotationData;
 
+use crate::footnote::{self, Popup};
 use crate::highlight::{page_start, resolve, Highlights, Outcome, TextPos};
 use crate::menu::{self, Control, Typography};
 use crate::pace::Pace;
 use crate::toc::{self, Toc};
-use crate::ui::{Label, INK_SOFT, LINE};
+use crate::ui::{draw_lines, Label, INK_SOFT, LINE};
 use crate::{Action, Ctx, H, W};
 
 const MARGIN_TOP: i32 = 110;
@@ -56,6 +57,8 @@ pub struct Reader {
     pace: Pace,
     /// Saved highlights and the selection in progress.
     hl: Highlights,
+    /// The footnote open over the page.
+    note: Option<Popup>,
 }
 
 /// A saved reading position: chapter, where the page starts (block and byte offset in the
@@ -109,6 +112,7 @@ impl Reader {
             clock: false,
             pace: Pace::load(&ctx.state_dir),
             hl,
+            note: None,
         };
         r.pace.restart(Instant::now());
         // A cover-only, empty or broken chapter: start at the nearest one with pages.
@@ -157,6 +161,7 @@ impl Reader {
         self.chapter = self.book.chapter(i, &self.prefs, &ctx.fonts, &mut ctx.ts, height)?;
         self.chapter_index = i;
         self.page = 0;
+        self.note = None;
         let spine = self.book.spine.get(i).copied().unwrap_or(i);
         self.hl.chapter_loaded(&self.chapter, u32::try_from(spine).unwrap_or(u32::MAX));
         eprintln!("chapter {i}: {} pages in {:?}", self.chapter.pages.len(), t.elapsed());
@@ -259,7 +264,7 @@ impl Reader {
     /// A swipe up from the bottom edge opens the menu (typography sheet), as the quick panel
     /// opens from the top. True when it did.
     pub fn swipe_up(&mut self, (_, y0): (i32, i32), (_, y): (i32, i32)) -> bool {
-        let opens = !self.menu && self.toc.is_none() && y0 >= H - BOTTOM_EDGE && y0 - y > SWIPE;
+        let opens = !self.menu && self.toc.is_none() && self.note.is_none() && y0 >= H - BOTTOM_EDGE && y0 - y > SWIPE;
         if opens {
             self.hl.dismiss();
             self.menu = true;
@@ -274,6 +279,22 @@ impl Reader {
         }
         if self.menu {
             return self.menu_tap((x0, y0), ctx);
+        }
+        if let Some(popup) = &mut self.note {
+            let area = popup.bounds();
+            return match popup.tap((x0, y0), x) {
+                footnote::Tap::None => Action::None,
+                footnote::Tap::Redraw => Action::Region(area),
+                footnote::Tap::Close => {
+                    self.note = None;
+                    Action::Region(area)
+                }
+            };
+        }
+        if (x - x0).abs() <= SWIPE && !self.hl.is_active() {
+            if let Some(area) = self.open_note((x0, y0), ctx) {
+                return Action::Region(area);
+            }
         }
         if (x - x0).abs() <= SWIPE {
             if self.hl.is_active() {
@@ -307,6 +328,59 @@ impl Reader {
             self.pace.restart(Instant::now()); // re-reading a page isn't reading speed
         }
         Action::Redraw { turn: Some(forward) }
+    }
+
+    /// Opens the note whose reference is under a tap at `(x, y)`; returns the area to refresh.
+    // ponytail: other internal links (a table of contents in the text, "see chapter 3") still
+    // turn the page; follow them with `fragment_blocks` + `first_page_of` and a way back.
+    fn open_note(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Option<Rect> {
+        let page = self.chapter.pages.get(self.page)?;
+        let (ox, oy) = self.origin();
+        let a = footnote::link_at(page, &self.chapter.blocks, &self.chapter.dom, (x - ox) as f32, (y - oy) as f32)?;
+        let prefs =
+            Preferences { font_size: self.prefs.font_size * 0.9, page_width: footnote::TEXT_W, ..self.prefs.clone() };
+        let (fonts, ts) = (&ctx.fonts, &mut ctx.ts);
+        let note = self.book.note(self.chapter_index, &self.chapter.dom, a, &prefs, fonts, ts, footnote::BODY_H)?;
+        let popup = Popup::new(note, &self.chapter.dom.text(a), y);
+        let area = popup.bounds();
+        self.note = Some(popup);
+        Some(area)
+    }
+
+    /// Desktop preview: goes to the first page from here on with a note reference and opens
+    /// its note (through the tap path); false when the rest of the book has none.
+    pub fn open_first_note(&mut self, ctx: &mut Ctx) -> bool {
+        loop {
+            for p in self.page..self.chapter.pages.len() {
+                let page = &self.chapter.pages[p];
+                let (ox, oy) = self.origin();
+                let refs = page.lines.iter().flat_map(|l| l.glyphs.iter().map(move |g| (l, g))).filter(|(l, g)| {
+                    let pos = crate::highlight::glyph_pos(&self.chapter.blocks, l, g.run, g.offset);
+                    let node = self.chapter.blocks[pos.block as usize].source_at(pos.offset as usize);
+                    let link = node.and_then(|(n, _)| omero_engine::note::link_at(&self.chapter.dom, n));
+                    link.is_some_and(|a| omero_engine::note::is_noteref(&self.chapter.dom, a))
+                });
+                let taps: Vec<(i32, i32)> = refs
+                    .map(|(l, g)| {
+                        (ox + (l.x + g.x + g.advance / 2.0) as i32, oy + (l.baseline + g.y - 0.3 * g.size) as i32)
+                    })
+                    .collect();
+                for at in taps {
+                    self.page = p;
+                    if self.open_note(at, ctx).is_some() {
+                        return true;
+                    }
+                }
+            }
+            if !self.turn(true, ctx) {
+                return false;
+            }
+        }
+    }
+
+    /// The open footnote, for the desktop preview.
+    pub fn note_mut(&mut self) -> Option<&mut Popup> {
+        self.note.as_mut()
     }
 
     fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Action {
@@ -403,7 +477,7 @@ impl Reader {
     /// Long press at `at`: starts a selection on the word there. Returns the screen area to
     /// refresh, `None` when nothing was selected.
     pub fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
-        if self.menu {
+        if self.menu || self.note.is_some() {
             return None;
         }
         outcome_rect(self.hl.long_press(&self.chapter, self.page, self.origin(), at))
@@ -443,19 +517,15 @@ impl Reader {
                 }
             }
             self.hl.render_under(c, &self.chapter, self.page, self.origin());
-            for line in &page.lines {
-                for g in &line.glyphs {
-                    let Some(face) = ctx.fonts.face(g.face) else { continue };
-                    let x = self.margin_x() as f32 + line.x + g.x;
-                    let (gx, glyph) = ctx.raster.glyph(face, g.gid, g.size, x);
-                    let y = (MARGIN_TOP as f32 + line.baseline + g.y).round() as i32;
-                    draw_glyph(c, glyph, gx, y, 0);
-                }
-            }
+            let origin = (self.margin_x() as f32, MARGIN_TOP as f32);
+            draw_lines(c, &ctx.fonts, &mut ctx.raster, page, origin);
         }
         self.header(c, ctx);
         self.footer(c, ctx);
         self.hl.render_over(c, ctx);
+        if let Some(popup) = &self.note {
+            popup.render(c, ctx);
+        }
         if self.menu {
             let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
             let chapter = chapter.or((!self.contents.is_empty()).then_some(""));

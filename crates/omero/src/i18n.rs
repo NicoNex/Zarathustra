@@ -68,6 +68,8 @@ pub struct Strings {
     pub highlight: &'static str,
     pub delete: &'static str,
     pub cancel: &'static str,
+    /// Footnote popup title, followed by the note's marker.
+    pub note: &'static str,
     pub sleeping: &'static str,
     pub untitled: &'static str,
     /// Quick panel tiles, two lines each: auto warmth, page animation, clock, sleep.
@@ -114,6 +116,7 @@ const IT: Strings = Strings {
     highlight: "Evidenzia",
     delete: "Elimina",
     cancel: "Annulla",
+    note: "Nota",
     sleeping: "In sospensione · premi il tasto di accensione",
     untitled: "Senza titolo",
     tiles: [["Calore", "automatico"], ["Animazione", "pagina"], ["Orologio", "in lettura"], ["Sospendi", ""]],
@@ -171,6 +174,7 @@ const EN: Strings = Strings {
     highlight: "Highlight",
     delete: "Delete",
     cancel: "Cancel",
+    note: "Note",
     sleeping: "Sleeping · press power to wake",
     untitled: "Untitled",
     tiles: [["Auto", "warmth"], ["Page", "animation"], ["Clock in", "reader"], ["Sleep", ""]],
