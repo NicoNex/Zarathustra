@@ -15,7 +15,7 @@ use zarathustra::quick::{QuickPanel, QuickResult, PANEL};
 use zarathustra::reader::{Reader, HEADER};
 use zarathustra::sleep::render_sleep;
 use zarathustra::toc::Tab;
-use zarathustra::{first_existing, Action, Ctx, Landing, H, W};
+use zarathustra::{Action, Ctx, Landing, H, W};
 use zarathustra_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
 use zarathustra_engine::library::Format;
 
@@ -70,7 +70,7 @@ impl Press {
     /// otherwise the lift stays a plain tap (menu controls, margins, the popup's buttons).
     fn fire(&mut self, r: &mut Reader, start: (i32, i32), selection: &mut Option<Rect>) {
         self.at = None;
-        let typing = r.typing();
+        let typing = r.search_shown();
         if let Some(rect) = r.long_press(start) {
             self.fired = true;
             // Accents on the search keyboard are tapped next, not dragged over.
@@ -81,9 +81,8 @@ impl Press {
 }
 
 fn library_dirs() -> Vec<PathBuf> {
-    // Only the books the user put in library/ (by hand or sent over Wi-Fi); Amazon's
-    // documents/ is left alone.
-    ["/mnt/us/library", "dev-books"].iter().map(|d| first_existing(&[d])).collect()
+    // Only the books the user put in library/; Amazon's documents/ is left alone.
+    vec![zarathustra::library_dir()]
 }
 
 fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
@@ -324,10 +323,10 @@ fn main() -> Result<()> {
         };
         // A search under way only peeks at the input queue between chapters.
         let searching = matches!(&screen, Screen::Reader(r) if r.is_searching()) && !quick.is_open();
-        // The send-books screen checks for arriving books twice a second; the home looks for
+        // The send-books screen checks for arriving books every second; the home looks for
         // new books every half minute (a walk and a stat per file).
         let idle = match &screen {
-            Screen::Home(h) if h.transferring() => Duration::from_millis(500),
+            Screen::Home(h) if h.transferring() => Duration::from_secs(1),
             Screen::Home(_) => Duration::from_secs(30),
             _ => Duration::from_secs(300),
         };
@@ -350,9 +349,6 @@ fn main() -> Result<()> {
                 }
                 PowerEvent::Wake => {
                     asleep = false;
-                    if let Screen::Home(h) = &mut screen {
-                        h.refresh(&ctx);
-                    }
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
                 PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
@@ -490,15 +486,20 @@ fn main() -> Result<()> {
                     continue;
                 }
                 Action::Reboot | Action::PowerOff => {
-                    let cmd = if matches!(action, Action::Reboot) { "reboot" } else { "poweroff" };
-                    // Only on the device: a desktop run just quits.
-                    if std::path::Path::new("/mnt/us").exists() {
-                        if let Err(e) = std::process::Command::new(cmd).status() {
-                            eprintln!("{cmd}: {e}");
-                            continue;
-                        }
+                    let cmd = if let Action::Reboot = action { "reboot" } else { "poweroff" };
+                    // A desktop run just quits.
+                    if !zarathustra::on_device() {
+                        return Ok(());
                     }
-                    return Ok(());
+                    match std::process::Command::new(cmd).status() {
+                        // Stay put while the system goes down: quitting now would have run.sh
+                        // bring the Amazon UI back up in the middle of the shutdown.
+                        Ok(s) if s.success() => loop {
+                            std::thread::sleep(Duration::from_secs(60));
+                        },
+                        r => eprintln!("{cmd}: {r:?}"),
+                    }
+                    continue;
                 }
                 Action::Region(rect) => {
                     dev.wait_refresh(marker)?;

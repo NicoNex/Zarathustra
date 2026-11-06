@@ -31,9 +31,9 @@ const MAX_FONTS: usize = 9;
 
 /// Text sizes in device pixels (300 dpi: 40 px ≈ 9.6 pt).
 pub const SIZES: [f32; 10] = [28.0, 32.0, 36.0, 40.0, 44.0, 48.0, 54.0, 60.0, 68.0, 76.0];
-/// Line heights; the menu names them with `Strings::spacings`.
+/// Line heights, tight to loose (the menu draws them as icons).
 pub const SPACINGS: [f32; 3] = [1.3, 1.45, 1.65];
-/// Side margins in pixels; named by `Strings::margin_names`.
+/// Side margins in pixels, narrow to wide.
 pub const MARGINS: [i32; 3] = [56, 96, 150];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,7 +50,7 @@ pub struct Typography {
     pub weight: u8,
 }
 
-/// Body text alignment choices, in menu order; named by `Strings::aligns`.
+/// Body text alignment choices, in menu order.
 pub const ALIGNS: [TextAlign; 3] = [TextAlign::Justify, TextAlign::Start, TextAlign::Center];
 
 impl Default for Typography {
@@ -137,6 +137,21 @@ fn families(ctx: &Ctx) -> Vec<Option<String>> {
     out
 }
 
+/// `N` controls side by side across the sheet at height `y`.
+fn cols<const N: usize>(y: i32) -> [Rect; N] {
+    let n = N as i32;
+    let cw = (W - 2 * PAD - (n - 1) * COL_GAP) / n;
+    std::array::from_fn(|i| Rect::new(PAD + i as i32 * (cw + COL_GAP), y, cw, ROW_H))
+}
+
+/// A minus, or a plus, centred on `(cx, cy)` with arms `arm` long: bars 4 px thick.
+fn sign(c: &mut Canvas, (cx, cy): (i32, i32), arm: i32, plus: bool) {
+    c.fill(Rect::new(cx - arm, cy - 2, 2 * arm, 4), INK);
+    if plus {
+        c.fill(Rect::new(cx - 2, cy - arm, 4, 2 * arm), INK);
+    }
+}
+
 /// Where everything in the sheet goes.
 struct Layout {
     top: i32,
@@ -156,24 +171,16 @@ impl Layout {
             SHEET_PAD_TOP + CONTENTS_H + ROW_GAP + SCRUB_H + ROW_GAP + 3 * ROW_H + 2 * ROW_GAP + SHEET_PAD_BOTTOM;
         let top = H - height;
         let w = W - 2 * PAD;
-        // Columns of a row: `n` side by side across the sheet.
-        let cols = |y: i32, n: i32| {
-            let cw = (w - (n - 1) * COL_GAP) / n;
-            (0..n).map(move |i| Rect::new(PAD + i * (cw + COL_GAP), y, cw, ROW_H))
-        };
         let mut y = top + SHEET_PAD_TOP;
         let contents = Rect::new(PAD, y, w, CONTENTS_H);
         y += CONTENTS_H + ROW_GAP;
         // Wider than the rows by the knob's radius, so the track lines up with them.
         let scrubber = Rect::new(PAD - 22, y, W - 2 * (PAD - 22), SCRUB_H);
         y += SCRUB_H + ROW_GAP;
-        let mut text = cols(y, 2);
-        let (size, weight) = (text.next().unwrap_or_default(), text.next().unwrap_or_default());
+        let [size, weight] = cols(y);
         y += ROW_H + ROW_GAP;
         let font = Rect::new(PAD, y, w, ROW_H);
-        let mut page = cols(y + ROW_H + ROW_GAP, 3);
-        let (spacing, margin, align) =
-            (page.next().unwrap_or_default(), page.next().unwrap_or_default(), page.next().unwrap_or_default());
+        let [spacing, margin, align] = cols(y + ROW_H + ROW_GAP);
         Layout { top, contents, scrubber, size, weight, font, spacing, margin, align }
     }
 }
@@ -271,26 +278,16 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
         let (arm, gap) = ((size * 0.36) as i32, 10);
         let x = r.x as f32 + (r.w as f32 - a.width("A") - (gap + 2 * arm) as f32) / 2.0;
         let sign_x = (x + a.draw(c, raster, "A", x, a.baseline(r))) as i32 + gap;
-        let cy = r.y + r.h / 2;
-        c.fill(Rect::new(sign_x, cy - 2, 2 * arm, 4), INK);
-        if plus {
-            c.fill(Rect::new(sign_x + arm - 2, cy - arm, 4, 2 * arm), INK);
-        }
+        sign(c, (sign_x + arm, r.y + r.h / 2), arm, plus);
     }
     let value = format!("{} / {}", typo.size + 1, SIZES.len());
     Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &value, segs[1]);
 
     // Weight: − and + around a live "Aa" in the reading face at the current weight.
     let segs = segmented(c, l.weight, 3, None);
-    let sign = |c: &mut Canvas, r: Rect, plus: bool| {
-        let (cx, cy, arm) = (r.x + r.w / 2, r.y + r.h / 2, 14);
-        c.fill(Rect::new(cx - arm, cy - 2, 2 * arm, 4), INK);
-        if plus {
-            c.fill(Rect::new(cx - 2, cy - arm, 4, 2 * arm), INK);
-        }
-    };
-    sign(c, segs[0], false);
-    sign(c, segs[2], true);
+    let mid = |r: Rect| (r.x + r.w / 2, r.y + r.h / 2);
+    sign(c, mid(segs[0]), 14, false);
+    sign(c, mid(segs[2]), 14, true);
     let f = &typo.family;
     let reading = f.as_ref().and_then(|f| fonts.pick(std::slice::from_ref(f), 400, false)).unwrap_or(sans);
     Label { face: reading, size: 40.0, ink: INK }.centered_weighted(c, raster, "Aa", segs[1], typo.weight);

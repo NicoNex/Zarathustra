@@ -53,7 +53,6 @@ const TRANSFER: Rect = Rect { x: GEAR.x - 32 - 72, y: 82, w: 72, h: 72 };
 /// The search field, over the header's title and buttons while searching.
 const FIELD: Rect = Rect { x: PAD, y: 82, w: W - 2 * PAD, h: 72 };
 const CLEAR: Rect = Rect { x: FIELD.x + FIELD.w - 96, y: FIELD.y, w: 96, h: FIELD.h };
-const MAX_QUERY: usize = 40;
 /// Progress from which a book counts as read.
 const FINISHED: f32 = 0.99;
 
@@ -192,14 +191,15 @@ impl Home {
         let old = std::mem::replace(self, Self::build(library, &self.dirs.clone(), ctx, covers));
         self.query = old.query;
         self.keyboard = old.keyboard;
-        self.set_filter(old.filter);
-        self.page = old.page.min(self.pages() - 1);
+        self.refilter(old.filter, old.page);
         true
     }
 
     /// The home for `library`; covers come from `covers` (path → file time, grid and list
     /// covers) when the file is unchanged, else are decoded.
     fn build(library: Library, dirs: &[PathBuf], ctx: &Ctx, mut covers: HashMap<PathBuf, Covers>) -> Home {
+        let paths: Vec<&Path> = library.books.iter().map(|b| b.path.as_path()).collect();
+        ctx.adopt_orphan_positions(&paths);
         let order = library.sorted(SortBy::Title);
         // Library index → title position, to carry the author order over to `books`.
         let mut title_pos = vec![0u32; order.len()];
@@ -525,8 +525,10 @@ impl Home {
     }
 
     /// The book under `(x, y)`: a cover, a list row or the "continue reading" card.
-    fn book_at(&self, at: (i32, i32)) -> Option<usize> {
-        self.book_rect_at(at).map(|(i, _)| i)
+    /// Applies `filter` again after the books changed, staying on `page` where it still exists.
+    fn refilter(&mut self, filter: Filter, page: usize) {
+        self.set_filter(filter);
+        self.page = page.min(self.pages() - 1);
     }
 
     /// The book at `(x, y)` and its cover (grid) or row (list, the continue-reading card).
@@ -547,7 +549,7 @@ impl Home {
         if self.overlay.is_some() {
             return Action::None;
         }
-        if let Some(kb) = self.keyboard.as_mut().filter(|_| keyboard::area().contains(at.0, at.1)) {
+        if let Some(kb) = self.keyboard.as_mut().filter(|kb| kb.holds(at.0, at.1)) {
             return kb.long_press(at.0, at.1).map_or(Action::None, Action::Region);
         }
         let Some((i, anchor)) = self.book_rect_at(at) else { return Action::None };
@@ -672,9 +674,7 @@ impl Home {
                 self.current = current(&self.books);
             }
         }
-        let page = self.page;
-        self.set_filter(self.filter);
-        self.page = page.min(self.pages() - 1);
+        self.refilter(self.filter, self.page);
     }
 
     /// Deletes book `i`'s file and its reading position, then reloads the library.
@@ -712,9 +712,7 @@ impl Home {
         if self.current.as_ref().is_some_and(|(c, _)| *c == i) {
             self.current = None;
         }
-        let page = self.page;
-        self.set_filter(self.filter);
-        self.page = page.min(self.pages() - 1);
+        self.refilter(self.filter, self.page);
     }
 
     /// Whether the send-books screen is open (the app then polls it often).
@@ -754,10 +752,11 @@ impl Home {
                 }
             });
         }
-        let kb = self.keyboard.as_mut().filter(|_| keyboard::area().contains(x0, y0))?;
+        // The accents strip may stand above the band: its taps are the keyboard's too.
+        let kb = self.keyboard.as_mut().filter(|kb| kb.holds(x0, y0))?;
         let Some((key, rect)) = kb.tap(x0, y0) else { return Some(Action::None) };
         match key {
-            Key::Char(c) if q.chars().count() < MAX_QUERY => q.push(c),
+            Key::Char(c) if q.chars().count() < keyboard::MAX_QUERY => q.push(c),
             Key::Space if !q.is_empty() && !q.ends_with(' ') => q.push(' '),
             Key::Backspace => {
                 q.pop();
@@ -849,15 +848,33 @@ impl Home {
                 return Action::Redraw { turn: None };
             }
         }
-        match self.book_at((x0, y0)) {
+        match self.book_rect_at((x0, y0)).map(|(i, _)| i) {
             Some(i) => Action::Open(self.books[i].book.path.clone(), Landing::Resume),
             None => Action::None,
         }
     }
 }
 
+/// Fills the shape `inside` (in pixels from `(cx, cy)`) over a box `w` and `h` either side,
+/// ink by coverage of 4×4 samples per pixel, so its curves come out smooth in gray.
+// ponytail: sampled on every home render (a few thousand pixels per icon); cache the masks if
+// the header ever shows up in render timings on the device.
+fn shape(c: &mut Canvas, (cx, cy): (i32, i32), w: i32, h: i32, inside: impl Fn(f32, f32) -> bool) {
+    for py in -h..=h {
+        for px in -w..=w {
+            let hits = (0..16)
+                .filter(|k| inside(px as f32 + (k % 4) as f32 / 4.0 - 0.375, py as f32 + (k / 4) as f32 / 4.0 - 0.375))
+                .count() as i32;
+            if hits > 0 {
+                let ink = PAPER as i32 - (PAPER as i32 - INK as i32) * hits / 16;
+                c.fill(Rect::new(cx + px, cy + py, 1, 1), ink as u8);
+            }
+        }
+    }
+}
+
 /// The settings button: a cog (eight square teeth round a ring, a hole in the middle) in a
-/// ring, sampled 4×4 per pixel so its curves come out smooth in gray.
+/// ring.
 fn gear_button(c: &mut Canvas) {
     rounded_outline(c, GEAR, GEAR.h / 2, 2, LINE, PAPER);
     let (cx, cy) = ((GEAR.x + GEAR.w / 2) as f32, (GEAR.y + GEAR.h / 2) as f32);
@@ -871,20 +888,7 @@ fn gear_button(c: &mut Canvas) {
         r <= rim && r >= hole
     };
     let span = tip.ceil() as i32 + 1;
-    for py in -span..=span {
-        for px in -span..=span {
-            let hits = (0..16)
-                .filter(|k| {
-                    let (sx, sy) = (px as f32 + (k % 4) as f32 / 4.0 + 0.125, py as f32 + (k / 4) as f32 / 4.0 + 0.125);
-                    inside(sx - 0.5, sy - 0.5)
-                })
-                .count() as i32;
-            if hits > 0 {
-                let ink = PAPER as i32 - (PAPER as i32 - INK as i32) * hits / 16;
-                c.fill(Rect::new(cx as i32 + px, cy as i32 + py, 1, 1), ink as u8);
-            }
-        }
-    }
+    shape(c, (cx as i32, cy as i32), span, span, inside);
 }
 
 /// The power button: the standby symbol, a ring open at the top crossed by a bar.
@@ -898,17 +902,7 @@ fn power_button(c: &mut Canvas) {
         let bar = x.abs() <= 2.0 && (-19.0..=-3.0).contains(&y);
         ring || bar
     };
-    for py in -21..=17 {
-        for px in -17..=17 {
-            let hits = (0..16)
-                .filter(|k| inside(px as f32 + (k % 4) as f32 / 4.0 - 0.375, py as f32 + (k / 4) as f32 / 4.0 - 0.375))
-                .count() as i32;
-            if hits > 0 {
-                let ink = PAPER as i32 - (PAPER as i32 - INK as i32) * hits / 16;
-                c.fill(Rect::new(cx as i32 + px, cy as i32 + py, 1, 1), ink as u8);
-            }
-        }
-    }
+    shape(c, (cx as i32, cy as i32), 17, 21, inside);
 }
 
 /// The power menu: four rows under the button, each one tap.

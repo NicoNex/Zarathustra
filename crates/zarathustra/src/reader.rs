@@ -541,7 +541,10 @@ impl Reader {
             Some((ctl, _)) => {
                 if menu::apply(&mut self.typo, &ctl, ctx) {
                     self.typo.save(&ctx.state_dir);
-                    self.relayout(ctx);
+                    // Weight only changes how glyphs are drawn: no layout, the page stays.
+                    if !matches!(ctl, Control::Lighter | Control::Heavier) {
+                        self.relayout(ctx);
+                    }
                     return Action::Redraw { turn: None };
                 }
                 Action::None
@@ -651,13 +654,8 @@ impl Reader {
         }
     }
 
-    /// The search keyboard is up (a long press opens a key's accents, not a selection).
-    pub fn typing(&self) -> bool {
-        self.search_shown()
-    }
-
-    /// The search screen is shown over the page.
-    fn search_shown(&self) -> bool {
+    /// The search screen (and its keyboard) is shown over the page.
+    pub fn search_shown(&self) -> bool {
         self.search.as_ref().is_some_and(|s| s.open)
     }
 

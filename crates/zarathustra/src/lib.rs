@@ -45,6 +45,21 @@ pub fn first_existing(candidates: &[&str]) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(candidates[0]))
 }
 
+/// Running on the Kindle (its userstore is mounted), not a desktop.
+pub fn on_device() -> bool {
+    Path::new("/mnt/us").exists()
+}
+
+/// The books the home shows: library/ on the device (by hand or sent over Wi-Fi), the
+/// repo's dev-books/ on a desktop.
+pub fn library_dir() -> PathBuf {
+    if on_device() {
+        PathBuf::from("/mnt/us/library")
+    } else {
+        first_existing(&["dev-books"])
+    }
+}
+
 /// The reading font, regular or bold; a free function so drawing code can hold the
 /// rasterizer mutably next to it.
 pub fn serif(fonts: &FontLibrary, bold: bool) -> Option<&Face> {
@@ -73,7 +88,7 @@ impl Ctx {
         }
         fonts.add_dir(&first_existing(&["dev-fonts"]));
         let ts = Typesetter::new(Hyphenators::new(first_existing(&["/mnt/us/zarathustra/hyph", "assets/hyphenation"])));
-        let state_dir = if Path::new("/mnt/us").exists() {
+        let state_dir = if on_device() {
             PathBuf::from("/mnt/us/zarathustra/state")
         } else {
             Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/zarathustra-state")).to_path_buf()
@@ -103,30 +118,37 @@ impl Ctx {
             .as_encoded_bytes()
             .iter()
             .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
-        let file = self.state_dir.join(format!("{stem}-{hash:016x}.pos"));
-        if file.exists() {
-            return file;
-        }
-        // A book moved to another folder (documents/ → library/) keeps its place: the one
-        // position saved under the same file name, from the old stem-only name or another path.
-        // ponytail: a read of the state dir per book never opened; key positions by the book's
-        // identifier if that shows up at startup on a big library.
-        let prefix = format!("{stem}-");
-        let candidates: Vec<PathBuf> = std::fs::read_dir(&self.state_dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                name == format!("{stem}.pos")
-                    || (name.starts_with(&prefix) && name.ends_with(".pos") && name.len() == prefix.len() + 20)
-            })
+        self.state_dir.join(format!("{stem}-{hash:016x}.pos"))
+    }
+
+    /// Books moved to another folder (documents/ → library/) keep their place: a saved
+    /// position that belongs to none of `books` (its book is gone from there) goes to the
+    /// book of the same file name that has none. One read of the state dir.
+    pub fn adopt_orphan_positions(&self, books: &[&Path]) {
+        let Ok(dir) = std::fs::read_dir(&self.state_dir) else { return };
+        let saved: std::collections::HashSet<PathBuf> = dir.flatten().map(|e| e.path()).collect();
+        let owned: std::collections::HashSet<PathBuf> = books.iter().map(|b| self.state_file(b)).collect();
+        let name = |p: &Path| p.file_name().and_then(|n| n.to_str()).map(str::to_owned).unwrap_or_default();
+        let orphans: Vec<String> = (saved.iter())
+            .filter(|p| p.extension().is_some_and(|e| e == "pos") && !owned.contains(*p))
+            .map(|p| name(p))
             .collect();
-        if let [old] = candidates.as_slice() {
-            std::fs::rename(old, &file).ok();
+        for book in books {
+            let file = self.state_file(book);
+            if saved.contains(&file) {
+                continue;
+            }
+            let stem = name(&file);
+            // "<stem>-<16 hex>.pos" → "<stem>"
+            let stem = stem.get(..stem.len().saturating_sub(21)).unwrap_or_default();
+            let prefix = format!("{stem}-");
+            let mine: Vec<&String> = (orphans.iter())
+                .filter(|n| **n == format!("{stem}.pos") || (n.starts_with(&prefix) && n.len() == prefix.len() + 20))
+                .collect();
+            if let [old] = mine.as_slice() {
+                std::fs::rename(self.state_dir.join(old), &file).ok();
+            }
         }
-        file
     }
 }
 
@@ -190,12 +212,16 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let mut ctx = Ctx::new();
         ctx.state_dir = dir.clone();
+        let (moved, here) = (Path::new("/mnt/us/library/Libro.epub"), Path::new("/mnt/us/library/a/Libro.epub"));
         let old = ctx.state_file(Path::new("/mnt/us/documents/Libro.epub"));
         std::fs::write(&old, "3 0 0.5000 0\n").expect("write");
-        let new = ctx.state_file(Path::new("/mnt/us/library/Libro.epub"));
-        assert_ne!(old, new);
-        assert!(new.exists() && !old.exists(), "the position moved with the book");
-        assert!(!ctx.state_file(Path::new("/mnt/us/library/Altro.epub")).exists());
+        // The other Libro.epub is still in the library: its position is not up for grabs.
+        std::fs::write(ctx.state_file(here), "1 0 0.1000 0\n").expect("write");
+        ctx.adopt_orphan_positions(&[moved, here]);
+        assert!(ctx.state_file(moved).exists() && !old.exists(), "the position moved with the book");
+        assert!(ctx.state_file(here).exists());
+        ctx.adopt_orphan_positions(&[moved, here, Path::new("/mnt/us/library/b/Libro.epub")]);
+        assert!(!ctx.state_file(Path::new("/mnt/us/library/b/Libro.epub")).exists(), "owned ones stay put");
         std::fs::remove_dir_all(dir).ok();
     }
 }

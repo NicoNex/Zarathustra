@@ -17,13 +17,13 @@ use std::time::Duration;
 use zarathustra_device::{Canvas, Rect};
 
 use crate::i18n::t;
+use zarathustra_engine::library::Format;
+
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::ui::{rounded_outline, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{first_existing, Ctx, H, W};
+use crate::{Ctx, H, W};
 
 const PAGE: &str = include_str!("transfer.html");
-/// Formats the library opens.
-const EXTENSIONS: [&str; 7] = ["epub", "kepub", "azw3", "azw", "mobi", "pdf", "txt"];
 const MAX_SIZE: u64 = 500 << 20;
 const MAX_HEAD: usize = 8 << 10;
 const PORTS: std::ops::RangeInclusive<u16> = 8080..=8089;
@@ -69,7 +69,15 @@ impl Server {
                     break;
                 }
                 let Ok(stream) = conn else { continue };
-                if let Err(e) = handle(stream, &token, &dir, &flag, &tx) {
+                // A thread per connection: a browser's idle preconnect must not hold up the
+                // real request behind it for the read timeout.
+                let (token, dir, flag, tx) = (token.clone(), dir.clone(), flag.clone(), tx.clone());
+                let spawned = std::thread::Builder::new().name("transfer-conn".into()).spawn(move || {
+                    if let Err(e) = handle(stream, &token, &dir, &flag, &tx) {
+                        eprintln!("transfer: {e}");
+                    }
+                });
+                if let Err(e) = spawned {
                     eprintln!("transfer: {e}");
                 }
             }
@@ -96,7 +104,7 @@ impl Drop for Server {
 // ponytail: if the app dies with the screen open, the rule stays until reboot (one port of
 // `PORTS`, only this server ever listens there).
 fn firewall(open: bool, port: u16) {
-    if !Path::new("/mnt/us").exists() {
+    if !crate::on_device() {
         return;
     }
     let port = port.to_string();
@@ -150,15 +158,10 @@ impl Transfer {
     /// Opens the screen and starts serving, when there is a network.
     pub fn open() -> Transfer {
         // Books go to library/, the folder the home shows (not Amazon's documents/).
-        let dir = if std::path::Path::new("/mnt/us").exists() {
-            let dir = std::path::PathBuf::from("/mnt/us/library");
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                eprintln!("transfer: {}: {e}", dir.display());
-            }
-            dir
-        } else {
-            first_existing(&["dev-books"])
-        };
+        let dir = crate::library_dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("transfer: {}: {e}", dir.display());
+        }
         let mut t = Transfer { dir, server: None, url: String::new(), qr: Vec::new(), qr_width: 0, files: Vec::new() };
         t.start();
         t
@@ -371,8 +374,10 @@ fn safe_name(raw: &str) -> Option<String> {
     if name.is_empty() || name.len() > 200 || name.starts_with('.') || name.chars().any(bad) {
         return None;
     }
-    let ext = Path::new(name).extension()?.to_str()?.to_ascii_lowercase();
-    EXTENSIONS.contains(&ext.as_str()).then(|| name.to_string())
+    // The userstore is FAT: titles like "Dune: Messiah" can't be saved as they are.
+    let name: String =
+        name.chars().map(|c| if matches!(c, ':' | '?' | '"' | '*' | '<' | '>' | '|') { '_' } else { c }).collect();
+    Format::from_path(Path::new(&name)).is_some().then_some(name)
 }
 
 /// `dir/name`, or `dir/stem (2).ext` and so on when taken: never overwrite a book.
@@ -402,10 +407,11 @@ fn handle(mut s: TcpStream, token: &str, dir: &Path, stop: &AtomicBool, tx: &Sen
         Request::Reject(status, why) => return respond(&mut s, status, "text/plain; charset=utf-8", why.as_bytes()),
         Request::Upload { name, len, expect_continue } => (name, len, expect_continue),
     };
-    let _ = tx.send(Event::Started(name.clone()));
     if expect_continue {
         s.write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
     }
+    // Only now: from here every way out sends Done or Failed, so no row stays "receiving".
+    let _ = tx.send(Event::Started(name.clone()));
     // A hidden partial file the library ignores, renamed only once complete.
     let part = dir.join(format!(".{name}.part"));
     let saved = receive(&mut s, early, len, &part, stop).and_then(|()| {

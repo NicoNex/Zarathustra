@@ -19,7 +19,7 @@ use zarathustra_engine::search::{snippet, Query};
 
 use crate::highlight::{block_pos, range_bands, TextPos};
 use crate::i18n::{lang, t};
-use crate::keyboard::{Key, Keyboard};
+use crate::keyboard::{Key, Keyboard, MAX_QUERY};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::reader::SWIPE;
 use crate::toc::{self, next_button, prev_button, BACK_W, FOOTER_H};
@@ -34,7 +34,6 @@ pub const MAX_HITS: usize = 200;
 const BUDGET: Duration = Duration::from_millis(100);
 /// Characters of context before and after a match in its snippet.
 const CONTEXT: (usize, usize) = (40, 110);
-const MAX_QUERY: usize = 60;
 
 const FIELD: Rect = Rect { x: PAD, y: TOPBAR_H + 32, w: W - 2 * PAD, h: 104 };
 const STATUS_Y: i32 = FIELD.y + FIELD.h + 58;

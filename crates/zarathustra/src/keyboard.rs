@@ -11,6 +11,9 @@ use crate::i18n::t;
 use crate::ui::{button, Label, INK, PAPER};
 use crate::{Ctx, H, W};
 
+/// Longest query the keyboard edits (library and book search alike).
+pub const MAX_QUERY: usize = 60;
+
 /// Height of the keyboard band at the bottom of the screen.
 pub const KEYBOARD_H: i32 = 500;
 const SIDE: i32 = 12;
@@ -67,6 +70,11 @@ pub struct Keyboard {
     strip: Vec<(char, Rect)>,
 }
 
+/// Left edge of half-key column `u`.
+fn unit_x(u: i32) -> i32 {
+    SIDE + u * (W - 2 * SIDE) / UNITS
+}
+
 /// The keyboard band.
 pub fn area() -> Rect {
     Rect::new(0, H - KEYBOARD_H, W, KEYBOARD_H)
@@ -76,7 +84,7 @@ impl Keyboard {
     /// Every key with its rectangle, top row first.
     pub fn keys(&self) -> Vec<(Key, Rect)> {
         let top = H - KEYBOARD_H + PAD_TOP;
-        let x = |u: i32| SIDE + u * (W - 2 * SIDE) / UNITS;
+        let x = unit_x;
         let key =
             |row: i32, u0: i32, u1: i32| Rect::new(x(u0) + GAP / 2, top + row * ROW_PITCH, x(u1) - x(u0) - GAP, KEY_H);
         let rows = if self.symbols { SYMBOLS } else { LETTERS };
@@ -105,6 +113,12 @@ impl Keyboard {
         self.keys().into_iter().find(|(_, r)| r.contains(x, y))
     }
 
+    /// A touch at `(x, y)` is the keyboard's: on its band, or anywhere while the accents strip
+    /// is open (a tap on it types, elsewhere closes it, and nothing under it is hit).
+    pub fn holds(&self, x: i32, y: i32) -> bool {
+        area().contains(x, y) || !self.strip.is_empty()
+    }
+
     /// The finger went down at `(x, y)`: the key there shows pressed. Returns its rectangle.
     pub fn press(&mut self, x: i32, y: i32) -> Option<Rect> {
         self.pressed = self.hit(x, y).map(|(_, r)| r);
@@ -120,7 +134,7 @@ impl Keyboard {
             return None;
         }
         let n = chars.chars().count() as i32;
-        let w = (W - 2 * SIDE) / UNITS * 2;
+        let w = unit_x(2) - unit_x(0);
         let x0 = (key.x + key.w / 2 - n * w / 2).clamp(SIDE, W - SIDE - n * w);
         let y = key.y - ROW_PITCH - 8;
         self.strip = chars.chars().enumerate().map(|(i, v)| (v, Rect::new(x0 + i as i32 * w, y, w, KEY_H))).collect();

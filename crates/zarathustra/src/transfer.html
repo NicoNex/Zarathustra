@@ -46,7 +46,7 @@
   <h1 id="title">Send books</h1>
   <p class="lede" id="lede">They go straight into the Kindle's library.</p>
   <label class="pick"><span id="pick">Choose books</span><small>EPUB · KEPUB · AZW3 · MOBI · PDF · TXT</small>
-    <input id="files" type="file" multiple accept=".epub,.kepub,.azw3,.azw,.mobi,.pdf,.txt">
+    <input id="files" type="file" multiple accept=".epub,.kepub,.azw3,.azw,.mobi,.prc,.pdf,.txt">
   </label>
   <ol id="list"></ol>
   <footer id="foot">Keep this page open until every book shows “sent”.</footer>
@@ -85,6 +85,13 @@ function next() {
   busy = true;
   const { file, li } = queue.shift();
   const state = li.querySelector(".state"), bar = li.querySelector(".bar i");
+  // Checked here too: a refused upload's reason is lost when the Kindle closes the connection.
+  if (file.size > 500 * 1024 * 1024 || !/\.(epub|kepub|azw3?|mobi|prc|pdf|txt)$/i.test(file.name)) {
+    li.className = "failed";
+    state.textContent = T.failed + " · " + (file.size > 500 * 1024 * 1024 ? "> 500 MB" : file.name.split(".").pop());
+    busy = false;
+    return next();
+  }
   const xhr = new XMLHttpRequest();
   xhr.open("PUT", location.pathname.replace(/\/$/, "") + "/upload?name=" + encodeURIComponent(file.name));
   xhr.upload.onprogress = p => {
