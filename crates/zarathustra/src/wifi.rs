@@ -147,6 +147,10 @@ impl WifiScreen {
         let failed = if matches!(busy, Busy::Connecting(_)) { t().wifi_failed } else { t().wifi_error };
         let spawned = std::thread::Builder::new().name("wifi".into()).spawn(move || {
             let mut error = op(&*wifi).err().map(|e| format!("{failed}: {e}"));
+            // The screen shows one line of it: the whole message goes to the log.
+            if let Some(e) = &error {
+                eprintln!("wifi: {e}");
+            }
             let status = read(wifi.status(), &mut error);
             let saved = read(wifi.saved(), &mut error);
             let on = status.as_ref().is_some_and(|s| s.enabled);
