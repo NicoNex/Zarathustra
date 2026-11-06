@@ -17,6 +17,7 @@ use omero_store::AnnotationData;
 use crate::highlight::{page_start, resolve, Highlights, Outcome, TextPos};
 use crate::menu::{self, Control, Typography};
 use crate::pace::Pace;
+use crate::search::{self, Search};
 use crate::toc::{self, Toc};
 use crate::ui::{Label, INK_SOFT, LINE};
 use crate::{Action, Ctx, H, W};
@@ -56,6 +57,10 @@ pub struct Reader {
     pace: Pace,
     /// Saved highlights and the selection in progress.
     hl: Highlights,
+    /// The in-book search (kept while closed, for its results) and the hit opened from it,
+    /// marked until the page turns.
+    search: Option<Search>,
+    found: Option<std::ops::Range<TextPos>>,
 }
 
 /// A saved reading position: chapter, where the page starts (block and byte offset in the
@@ -109,6 +114,8 @@ impl Reader {
             clock: false,
             pace: Pace::load(&ctx.state_dir),
             hl,
+            search: None,
+            found: None,
         };
         r.pace.restart(Instant::now());
         // A cover-only, empty or broken chapter: start at the nearest one with pages.
@@ -219,6 +226,7 @@ impl Reader {
     /// Moves one page forward or back across chapters, skipping chapters that are empty or
     /// fail to load; false (and the page unchanged) at either end of the book.
     pub fn turn(&mut self, forward: bool, ctx: &mut Ctx) -> bool {
+        self.found = None;
         if forward && self.page + 1 < self.chapter.pages.len() {
             self.page += 1;
             self.hl.dismiss();
@@ -269,6 +277,9 @@ impl Reader {
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
+        if self.search.as_ref().is_some_and(|s| s.open) {
+            return self.search_tap((x0, y0), x, ctx);
+        }
         if self.toc.is_some() {
             return self.toc_tap((x0, y0), x, ctx);
         }
@@ -319,6 +330,10 @@ impl Reader {
             }
             Some((Control::Contents, _)) if !self.contents.is_empty() => {
                 self.show_contents();
+                Action::Redraw { turn: None }
+            }
+            Some((Control::Search, _)) => {
+                self.show_search();
                 Action::Redraw { turn: None }
             }
             Some((ctl, _)) => {
@@ -374,6 +389,69 @@ impl Reader {
         self.save();
     }
 
+    /// Opens the search over the page, on the last results when there are some.
+    pub fn show_search(&mut self) {
+        match &mut self.search {
+            Some(s) if !s.results.is_empty() || s.is_running() => s.open = true,
+            _ => self.search = Some(Search::new()),
+        }
+    }
+
+    /// A search shown is under way: call [`Reader::search_step`] until it is not.
+    pub fn is_searching(&self) -> bool {
+        self.search.as_ref().is_some_and(|s| s.open && s.is_running())
+    }
+
+    /// Searches on for a moment; returns the area to refresh.
+    pub fn search_step(&mut self) -> Option<Rect> {
+        self.search.as_mut().filter(|s| s.open)?.step(&self.book, &self.contents)
+    }
+
+    /// The finger went down: a key of the search keyboard shows pressed. Returns its area.
+    pub fn press(&mut self, at: (i32, i32)) -> Option<Rect> {
+        self.search.as_mut().filter(|s| s.open)?.press(at)
+    }
+
+    fn search_tap(&mut self, start: (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
+        let Some(s) = &mut self.search else { return Action::None };
+        match s.tap(start, x) {
+            search::Tap::None => Action::None,
+            search::Tap::Redraw => Action::Redraw { turn: None },
+            search::Tap::Region(r) => Action::Region(r),
+            search::Tap::Close => {
+                s.open = false;
+                Action::Redraw { turn: None }
+            }
+            search::Tap::Open(i) => {
+                let Some(hit) = s.results.get(i).cloned() else { return Action::None };
+                s.open = false;
+                self.open_hit(&hit, ctx);
+                Action::Redraw { turn: None }
+            }
+        }
+    }
+
+    /// Shows the page with search hit `hit`, marked; stays put when its chapter doesn't load.
+    fn open_hit(&mut self, hit: &search::Found, ctx: &mut Ctx) {
+        let (chapter, page) = (self.chapter_index, self.page);
+        if hit.chapter != chapter {
+            match self.load(hit.chapter, ctx) {
+                Ok(()) if !self.chapter.pages.is_empty() => {}
+                Ok(()) => return self.restore(chapter, page, ctx),
+                Err(e) => {
+                    eprintln!("chapter {}: {e:#}", hit.chapter);
+                    return self.restore(chapter, page, ctx);
+                }
+            }
+        }
+        let map = omero_engine::anchor::TextMap::new(&self.chapter.dom);
+        self.found = search::block_range(&map, &self.chapter.blocks, hit.range.clone());
+        self.toc = None;
+        self.page = self.found.as_ref().map_or(0, |r| self.page_of(r.start));
+        self.menu = false;
+        self.save();
+    }
+
     /// The table-of-contents entry being read.
     fn current_entry(&self) -> Option<usize> {
         toc::current(&self.contents, &self.book, self.chapter_index, &self.chapter, self.page)
@@ -425,6 +503,9 @@ impl Reader {
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        if let Some(s) = self.search.as_ref().filter(|s| s.open) {
+            return s.render(c, ctx);
+        }
         if let Some(view) = &self.toc {
             return view.render(c, ctx, &self.contents);
         }
@@ -443,6 +524,9 @@ impl Reader {
                 }
             }
             self.hl.render_under(c, &self.chapter, self.page, self.origin());
+            if let Some(found) = &self.found {
+                search::render_found(c, page, &self.chapter.blocks, found, self.origin());
+            }
             for line in &page.lines {
                 for g in &line.glyphs {
                     let Some(face) = ctx.fonts.face(g.face) else { continue };

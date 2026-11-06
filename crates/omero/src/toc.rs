@@ -4,6 +4,7 @@
 use omero_device::{Canvas, Rect};
 use omero_engine::book::{Book, Chapter};
 use omero_engine::epub::TocEntry;
+use omero_engine::font::{Face, Rasterizer};
 
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
@@ -12,13 +13,13 @@ use crate::{Ctx, H, W};
 
 const LIST_TOP: i32 = TOPBAR_H + 20;
 const ENTRY_H: i32 = 110;
-const FOOTER_H: i32 = 150;
+pub(crate) const FOOTER_H: i32 = 150;
 /// Entries per screen.
 const ROWS: usize = ((H - LIST_TOP - FOOTER_H) / ENTRY_H) as usize;
 /// Indent per nesting level, up to `MAX_DEPTH` levels.
 const INDENT: i32 = 56;
 const MAX_DEPTH: usize = 3;
-const BACK_W: i32 = 360;
+pub(crate) const BACK_W: i32 = 360;
 const PAGE_BUTTON_W: i32 = 300;
 /// Horizontal travel that makes a touch a swipe (as in the reader).
 const SWIPE: i32 = 100;
@@ -101,14 +102,6 @@ impl Toc {
         entries.len().div_ceil(ROWS).max(1)
     }
 
-    fn prev_button() -> Rect {
-        Rect::new(PAD, H - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
-    }
-
-    fn next_button() -> Rect {
-        Rect::new(W - PAD - PAGE_BUTTON_W, H - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
-    }
-
     fn flip(&mut self, entries: &[Entry], forward: bool) -> Tap {
         let page = if forward { (self.page + 1).min(Self::pages(entries) - 1) } else { self.page.saturating_sub(1) };
         if page == self.page {
@@ -131,8 +124,8 @@ impl Toc {
         }
         if y0 >= H - FOOTER_H {
             return match () {
-                _ if inside(Self::prev_button()) => self.flip(entries, false),
-                _ if inside(Self::next_button()) => self.flip(entries, true),
+                _ if inside(prev_button()) => self.flip(entries, false),
+                _ if inside(next_button()) => self.flip(entries, true),
                 _ => Tap::None,
             };
         }
@@ -171,22 +164,37 @@ impl Toc {
             label.draw(c, raster, &text, x as f32, label.baseline(r));
         }
 
-        let pages = Self::pages(entries);
-        if pages > 1 {
-            let nav = Label { face: sans, size: 30.0, ink: INK };
-            if self.page > 0 {
-                button(c, Self::prev_button(), false);
-                nav.centered(c, raster, t().previous, Self::prev_button());
-            }
-            if self.page + 1 < pages {
-                button(c, Self::next_button(), false);
-                nav.centered(c, raster, t().next, Self::next_button());
-            }
-            let count = Label { face: sans, size: 30.0, ink: INK_SOFT };
-            let footer = Rect::new(0, H - FOOTER_H, W, FOOTER_H);
-            count.centered(c, raster, &format!("{} / {pages}", self.page + 1), footer);
-        }
+        pager(c, raster, sans, self.page, Self::pages(entries));
     }
+}
+
+/// The footer's "previous screen" button (also the search results').
+pub(crate) fn prev_button() -> Rect {
+    Rect::new(PAD, H - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
+}
+
+pub(crate) fn next_button() -> Rect {
+    Rect::new(W - PAD - PAGE_BUTTON_W, H - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
+}
+
+/// The footer of a paginated list: previous/next buttons and "page / pages", when there is
+/// more than one screen.
+pub(crate) fn pager(c: &mut Canvas, raster: &mut Rasterizer, sans: &Face, page: usize, pages: usize) {
+    if pages <= 1 {
+        return;
+    }
+    let nav = Label { face: sans, size: 30.0, ink: INK };
+    if page > 0 {
+        button(c, prev_button(), false);
+        nav.centered(c, raster, t().previous, prev_button());
+    }
+    if page + 1 < pages {
+        button(c, next_button(), false);
+        nav.centered(c, raster, t().next, next_button());
+    }
+    let count = Label { face: sans, size: 30.0, ink: INK_SOFT };
+    let footer = Rect::new(0, H - FOOTER_H, W, FOOTER_H);
+    count.centered(c, raster, &format!("{} / {pages}", page + 1), footer);
 }
 
 #[cfg(test)]
@@ -208,7 +216,7 @@ mod tests {
         assert_eq!(t.tap(&e, (600, row_y(0)), 900), Tap::Redraw, "swipe right: previous screen");
         assert_eq!(t.page, 0);
         assert_eq!(t.tap(&e, (600, row_y(0)), 900), Tap::None, "already on the first screen");
-        let next = Toc::next_button();
+        let next = next_button();
         assert_eq!(t.tap(&e, (next.x + 10, next.y + 10), next.x + 10), Tap::Redraw);
         assert_eq!(t.tap(&e, (50, 50), 50), Tap::Back);
     }
