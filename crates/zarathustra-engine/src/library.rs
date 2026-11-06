@@ -92,6 +92,7 @@ impl Library {
         files.sort();
         files.dedup();
         let thumbs = cache_dir.join(THUMB_DIR);
+        let mut hits = 0;
         let (books, cacheable): (Vec<BookEntry>, Vec<bool>) = files
             .into_iter()
             .filter_map(|path| {
@@ -101,6 +102,7 @@ impl Library {
                 if let Some(hit) = cache.get(&path) {
                     let fresh = hit.size == size && hit.modified == modified;
                     if fresh && hit.cover_thumb.as_ref().is_none_or(|t| t.is_file()) {
+                        hits += 1;
                         return Some((hit.clone(), true));
                     }
                 }
@@ -110,7 +112,7 @@ impl Library {
         let library = Library { books };
         // Rewritten only when a book was read afresh or one left: a rescan of an unchanged
         // library (the home checks often) is just a walk and a stat per file.
-        if cacheable.contains(&false) || cache.len() != library.books.len() {
+        if hits != library.books.len() || cache.len() != hits {
             let cached: Vec<&BookEntry> =
                 library.books.iter().zip(cacheable).filter_map(|(b, c)| c.then_some(b)).collect();
             // ponytail: a read-only or full cache dir just means slower rescans; nothing to report.
