@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use omero::bookmenu::Item;
 use omero::highlight::{Button, LONG_PRESS, SLOP};
 use omero::home::Home;
 use omero::pdfview::PdfView;
@@ -449,6 +450,23 @@ fn main() -> Result<()> {
                     Ok(mut r) => {
                         r.goto(&data, &mut ctx);
                         screen = Screen::Reader(Box::new(r));
+                        (None, true)
+                    }
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        continue;
+                    }
+                },
+                Action::OpenOn(path, item) => match Screen::open(&path, &mut ctx) {
+                    Ok(mut s) => {
+                        match &mut s {
+                            Screen::Reader(r) if item == Item::Bookmarks => r.show_bookmarks(),
+                            Screen::Reader(r) if item == Item::Search => r.show_search(),
+                            Screen::Reader(r) => r.show_contents(),
+                            Screen::Pdf(p) => p.show_contents(),
+                            Screen::Home(_) => {}
+                        }
+                        screen = s;
                         (None, true)
                     }
                     Err(e) => {

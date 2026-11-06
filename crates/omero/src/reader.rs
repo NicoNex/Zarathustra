@@ -547,6 +547,10 @@ impl Reader {
         self.toc = Some(Toc::new(self.current_entry(), tab));
     }
 
+    pub fn show_bookmarks(&mut self) {
+        self.toc = Some(Toc::new(self.current_entry(), toc::Tab::Bookmarks));
+    }
+
     /// The finger moved from `start` to `at`: while it drags the menu's scrubber, the area
     /// to redraw (the scrubber); `None` otherwise or when nothing changed.
     pub fn scrub(&mut self, start: (i32, i32), (x, _): (i32, i32), ctx: &Ctx) -> Option<Rect> {

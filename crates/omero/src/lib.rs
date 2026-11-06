@@ -140,6 +140,8 @@ pub enum Action {
     Open(PathBuf),
     /// Open the book on a saved highlight.
     OpenAt(PathBuf, Box<omero_store::AnnotationData>),
+    /// Open the book showing its contents, bookmarks or search (the book menu's row).
+    OpenOn(PathBuf, crate::bookmenu::Item),
     Home,
     Quit,
 }

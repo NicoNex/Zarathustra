@@ -298,8 +298,28 @@ pub fn plain_text(html: &str) -> String {
         text.push_str(rest);
     }
     let text = quick_xml::escape::unescape(&text).map_or_else(|_| text.clone(), |t| t.into_owned());
+    let text = space_glued_sentences(&text);
     let lines = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "));
     lines.filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
+}
+
+/// "tempo.In uno": publishers' stores often drop the paragraph tags of a blurb, gluing a
+/// sentence to the next. A space after `.`, `!` or `?` between a lowercase and an uppercase
+/// letter (abbreviations like "U.S." have an uppercase before the dot and are left alone).
+fn space_glued_sentences(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 16);
+    for (i, &c) in chars.iter().enumerate() {
+        out.push(c);
+        let glued = matches!(c, '.' | '!' | '?')
+            && i > 0
+            && chars[i - 1].is_lowercase()
+            && chars.get(i + 1).is_some_and(|n| n.is_uppercase());
+        if glued {
+            out.push(' ');
+        }
+    }
+    out
 }
 
 /// Metadata and, with `cover`, the cover fitted into the thumbnail size (`None` when there is
@@ -475,6 +495,10 @@ mod tests {
         let html = "<div><p>Un <b>libro</b> &amp; altro.</p><p>Secondo&nbsp;paragrafo<br/>riga</p></div>";
         assert_eq!(plain_text(html), "Un libro & altro.\nSecondo paragrafo\nriga");
         assert_eq!(plain_text("Just text, no tags"), "Just text, no tags");
+        assert_eq!(
+            plain_text("nel tempo.In uno stile, gli U.S.A. e 3.5!Fine"),
+            "nel tempo. In uno stile, gli U.S.A. e 3.5!Fine"
+        );
     }
     use std::io::{Cursor, Write};
 

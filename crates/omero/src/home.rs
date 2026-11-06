@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use omero_device::{Canvas, Rect};
 use omero_engine::font::{Face, Rasterizer};
 use omero_engine::image::{self, GrayImage};
-use omero_engine::library::{BookEntry, Library, SortBy};
+use omero_engine::library::{BookEntry, Format, Library, SortBy};
 
 use crate::about::About;
 use crate::bookmenu::{self, BookMenu, Item};
@@ -413,7 +413,8 @@ impl Home {
         let b = &self.books[i];
         let highlights = notebook::load(&ctx.state_dir, &b.book.path).len();
         let finished = b.status() == Filter::Finished;
-        let menu = BookMenu::new(&b.book.title, &b.author(), b.progress.map(|p| p.0), finished, highlights);
+        let pdf = Format::from_path(&b.book.path) == Some(Format::Pdf);
+        let menu = BookMenu::new(&b.book.title, &b.author(), b.progress.map(|p| p.0), finished, highlights, !pdf);
         self.overlay = Some(Overlay::Menu(i, menu));
         Action::Redraw { turn: None }
     }
@@ -432,6 +433,15 @@ impl Home {
                     bookmenu::Tap::Item(Item::Open) => {
                         self.overlay = None;
                         return Action::Open(b.book.path.clone());
+                    }
+                    bookmenu::Tap::Item(it @ (Item::Contents | Item::Bookmarks | Item::Search)) => {
+                        self.overlay = None;
+                        return Action::OpenOn(b.book.path.clone(), it);
+                    }
+                    bookmenu::Tap::Item(Item::Delete) if !menu.armed => menu.armed = true,
+                    bookmenu::Tap::Item(Item::Delete) => {
+                        self.overlay = None;
+                        return self.delete(i, ctx);
                     }
                     bookmenu::Tap::Item(Item::About) => {
                         let about = About::new(&ctx.state_dir, &b.book.path, &b.book.title, &b.author());
@@ -472,6 +482,19 @@ impl Home {
             }
             Overlay::About(..) | Overlay::Stats(_) => Action::None,
         }
+    }
+
+    /// Deletes book `i`'s file and its reading position, then reloads the library.
+    // ponytail: highlights and bookmarks stay in the database (they return if the same path
+    // is added again); calibre's sidecars (cover.jpg, metadata.opf) and the folder stay too.
+    fn delete(&self, i: usize, ctx: &Ctx) -> Action {
+        let path = &self.books[i].book.path;
+        if let Err(e) = std::fs::remove_file(path) {
+            eprintln!("delete {}: {e}", path.display());
+            return Action::Redraw { turn: None };
+        }
+        let _ = std::fs::remove_file(ctx.state_file(path)); // a never-opened book has none
+        Action::Home
     }
 
     /// Marks book `i` as read (progress 100%, the position kept) or unread (the saved
