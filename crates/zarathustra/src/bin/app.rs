@@ -135,6 +135,7 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(&dir)?;
         let mut px = vec![0u8; (W * H) as usize];
         let mut home = home(&ctx);
+        home.wifi = true;
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
         write_pgm(dir.join("home.pgm"), &px)?;
         // The first page's band with a sample quote, then as the reading figures.
@@ -389,9 +390,15 @@ fn main() -> Result<()> {
         let searching = matches!(&screen, Screen::Reader(r) if r.is_searching()) && !quick.is_open();
         // The send-books screen checks for arriving books every second; the home looks for
         // new books every half minute (a walk and a stat per file).
+        if let Screen::Home(h) = &mut screen {
+            h.wifi = quick.connected().is_some();
+        }
+        let home = matches!(screen, Screen::Home(_));
         let idle = match &screen {
             // A Wi-Fi scan or connection running: show its outcome promptly.
             _ if quick.busy() => Duration::from_millis(300),
+            // A network joining: the tile or the home's header says so when it has.
+            _ if quick.watching_wifi() && (quick.is_open() || home) => Duration::from_secs(1),
             Screen::Home(h) if h.transferring() => Duration::from_secs(1),
             Screen::Home(_) => Duration::from_secs(30),
             _ => Duration::from_secs(300),
@@ -448,6 +455,19 @@ fn main() -> Result<()> {
         }
         // Panel changes from the whole batch, drawn once: a drag queues many moves per frame.
         let mut panel: Option<(Rect, Waveform)> = quick.tick(&mut dev).map(|r| (r, Waveform::Text));
+        // The radio state: every second while a network joins, every half minute on the home.
+        let home = matches!(screen, Screen::Home(_));
+        if periodic && !asleep && (quick.watching_wifi() || home) && quick.refresh_wifi() {
+            if let Some(tile) = quick.wifi_tile() {
+                panel = Some(panel.map_or((tile, Waveform::Text), |(r, w)| (r.union(&tile), w)));
+            } else if let (false, Screen::Home(h)) = (quick.is_open(), &mut screen) {
+                h.wifi = quick.connected().is_some();
+                dev.wait_refresh(marker)?;
+                h.render(&mut dev.canvas(), &mut ctx);
+                let header = Rect::new(0, 0, W, zarathustra::home::HEADER);
+                marker = dev.refresh(&Refresh { rect: header, waveform: Waveform::Text, flash: false, swipe: None })?;
+            }
+        }
         let mut closed = false;
         // Everything redrawn and refreshed at once, flashing or not (see `QuickResult::Repaint`).
         let mut repaint: Option<bool> = None;

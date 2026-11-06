@@ -172,6 +172,9 @@ pub struct QuickPanel {
     /// The Wi-Fi screen, opened from the tile: it covers the screen while the panel is open,
     /// so it works the same over the home and the reader.
     wifi_screen: Option<WifiScreen>,
+    /// Until when the radio state is read again every second: a network joins some seconds
+    /// after the radio comes on, and the tile and the home should say so.
+    watch: Option<Instant>,
     open: bool,
     down: Option<(i32, i32)>,
     drag: Option<Slider>,
@@ -197,11 +200,13 @@ impl QuickPanel {
             wifi_dev: dev.wifi(),
             wifi: WifiStatus::default(),
             wifi_screen: None,
+            watch: None,
             open: false,
             down: None,
             drag: None,
             applied: None,
         };
+        panel.read_wifi();
         if settings.auto_warmth {
             panel.warmth = auto_warmth(local_now().1, settings.night_warmth);
         }
@@ -221,6 +226,7 @@ impl QuickPanel {
             wifi_dev: None,
             wifi: WifiStatus { enabled: true, connected: Some("Casa".into()) },
             wifi_screen: None,
+            watch: None,
             open: true,
             down: None,
             drag: None,
@@ -274,6 +280,40 @@ impl QuickPanel {
         }
     }
 
+    /// The network joined, for the home's header.
+    pub fn connected(&self) -> Option<&str> {
+        self.wifi.connected.as_deref()
+    }
+
+    /// Waiting for a network to join: call [`QuickPanel::refresh_wifi`] every second.
+    pub fn watching_wifi(&self) -> bool {
+        self.watch.is_some()
+    }
+
+    /// Reads the radio state again; true if it changed. Done watching once a network joined,
+    /// the radio went off or half a minute passed. Redraw the tile (and the home's header).
+    // ponytail: two blocking `lipc` calls on the main loop (tens of ms), once a second while
+    // watching and every half minute on the home; move to a thread if typing stutters then.
+    pub fn refresh_wifi(&mut self) -> bool {
+        let before = self.wifi.clone();
+        self.read_wifi();
+        let done = self.wifi.connected.is_some() || !self.wifi.enabled;
+        if done || self.watch.is_some_and(|until| Instant::now() >= until) {
+            self.watch = None;
+        }
+        self.wifi != before
+    }
+
+    /// The tile, to refresh after the radio state changed with the panel open.
+    pub fn wifi_tile(&self) -> Option<Rect> {
+        (self.open && self.wifi_screen.is_none()).then(|| Tile::Wifi.rect())
+    }
+
+    fn watch_wifi(&mut self) {
+        let waiting = self.wifi.enabled && self.wifi.connected.is_none();
+        self.watch = waiting.then(|| Instant::now() + Duration::from_secs(30));
+    }
+
     /// The Wi-Fi screen has an operation running: call [`QuickPanel::poll`] often.
     pub fn busy(&self) -> bool {
         self.wifi_screen.as_ref().is_some_and(|w| w.busy())
@@ -288,7 +328,10 @@ impl QuickPanel {
     /// Closes the panel; redraw the screen and refresh the returned rect.
     pub fn close(&mut self) -> Rect {
         self.open = false;
-        self.wifi_screen = None;
+        if let Some(w) = self.wifi_screen.take() {
+            self.wifi = w.status().clone();
+            self.watch_wifi();
+        }
         self.down = None;
         self.drag = None;
         PANEL
@@ -326,12 +369,22 @@ impl QuickPanel {
                 Phase::Move => QuickResult::None,
                 Phase::Up => {
                     let Some((x0, y0)) = self.down.take() else { return QuickResult::None };
+                    // A vertical swipe turns the network list's page.
+                    let (dx, dy) = (t.x - x0, t.y - y0);
+                    if !w.entering() && dy.abs() > SWIPE && dy.abs() > dx.abs() {
+                        return match w.turn(dy < 0) {
+                            true => QuickResult::Redraw { rect: Rect::new(0, 0, W, H), waveform: Waveform::Text },
+                            false => QuickResult::None,
+                        };
+                    }
                     match w.tap(x0, y0) {
                         wifi::Tap::None => QuickResult::None,
                         wifi::Tap::Redraw(rect) => QuickResult::Redraw { rect, waveform: Waveform::Text },
                         wifi::Tap::Back => {
                             self.wifi = w.status().clone();
                             self.wifi_screen = None;
+                            // A connection may still be under way on the worker.
+                            self.watch_wifi();
                             QuickResult::Repaint { flash: false }
                         }
                     }
@@ -392,6 +445,7 @@ impl QuickPanel {
                     eprintln!("quick settings: wifi: {e}");
                 }
                 self.read_wifi();
+                self.watch_wifi();
                 return QuickResult::Redraw { rect: r, waveform: Waveform::Text };
             }
             Some(Tile::Transfer) => {
@@ -870,6 +924,23 @@ mod tests {
         assert!(q.wifi_screen.is_some());
         assert_eq!(tap(&mut q, (100, 60)), QuickResult::Repaint { flash: false }, "back to the panel");
         assert!(q.is_open() && q.wifi_screen.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_joining_network_is_watched_until_it_connects() {
+        let dir = state_dir("watch");
+        let mut dev = Fake::new();
+        let mut q = QuickPanel::new(&dir, &mut dev);
+        assert_eq!(q.connected(), Some("Casa"), "read at start");
+        // The radio just came on, nothing joined yet.
+        q.wifi = WifiStatus { enabled: true, connected: None };
+        q.watch_wifi();
+        assert!(q.watching_wifi());
+        assert!(q.refresh_wifi(), "the network joined meanwhile");
+        assert_eq!(q.connected(), Some("Casa"));
+        assert!(!q.watching_wifi(), "done watching");
+        assert!(!q.refresh_wifi(), "nothing changed");
         std::fs::remove_dir_all(dir).ok();
     }
 

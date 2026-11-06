@@ -24,7 +24,7 @@ use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, I
 use crate::{Action, Ctx, Landing, H, W};
 
 const PAD: i32 = 72;
-const HEADER: i32 = 210;
+pub const HEADER: i32 = 210;
 const CARD_H: i32 = 330;
 const CARD_COVER: (i32, i32) = (172, 258);
 const CHIPS_H: i32 = 64;
@@ -135,6 +135,8 @@ pub struct Home {
     dirs: Vec<PathBuf>,
     /// What fills the first page under the continue-reading card and its row of books.
     pub band: Band,
+    /// Joined to a Wi-Fi network: a small fan after the title says so.
+    pub wifi: bool,
     /// Reading totals for the band (today, last 7 days, streak).
     reading: stats::Summary,
     /// A highlight for the band: its words and its book's title (one a day, from the recent).
@@ -305,6 +307,7 @@ impl Home {
             keyboard: None,
             dirs: dirs.to_vec(),
             band,
+            wifi: false,
             reading,
             quote,
         };
@@ -468,7 +471,11 @@ impl Home {
                 );
             }
             None => {
-                Label { face: serif_bold, size: 66.0, ink: INK }.draw(c, raster, t().library, PAD as f32, 150);
+                let title = Label { face: serif_bold, size: 66.0, ink: INK };
+                title.draw(c, raster, t().library, PAD as f32, 150);
+                if self.wifi {
+                    wifi_mark(c, (PAD + title.width(t().library) as i32 + 44, 140));
+                }
                 self.view_toggle(c);
                 stats_button(c);
                 gear_button(c);
@@ -1037,6 +1044,16 @@ fn transfer_button(c: &mut Canvas) {
     c.fill(Rect::new(cx - 17, cy + 12, 34, 5), INK);
     c.fill(Rect::new(cx - 17, cy + 4, 5, 10), INK);
     c.fill(Rect::new(cx + 12, cy + 4, 5, 10), INK);
+}
+
+/// Connected to Wi-Fi: a fan of two arcs over a dot centred at `(cx, cy)`.
+fn wifi_mark(c: &mut Canvas, (cx, cy): (i32, i32)) {
+    shape(c, (cx, cy), 32, 32, |x, y| {
+        let r = x.hypot(y);
+        // Within 45° of straight up.
+        let fan = y < 0.0 && x.abs() < -y;
+        r < 5.5 || (fan && ((13.0..19.0).contains(&r) || (25.0..31.0).contains(&r)))
+    });
 }
 
 /// The statistics button: three rising bars in a ring.

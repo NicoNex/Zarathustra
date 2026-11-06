@@ -21,12 +21,12 @@ use crate::{Ctx, H, W};
 const BACK_W: i32 = 400;
 const SWITCH_ROW: Rect = Rect { x: 0, y: TOPBAR_H, w: W, h: 160 };
 const SWITCH: Rect = Rect { x: W - PAD - 132, y: TOPBAR_H + 44, w: 132, h: 72 };
-const HEADER_H: i32 = 80;
+const HEADER_H: i32 = 96;
 const ROW_H: i32 = 112;
-/// Saved networks shown; the rest of the screen lists those in range.
-// ponytail: no scrolling; past this many saved networks (or the screen's worth in range)
-// the extra ones are not shown. Add paging when someone has that many.
-const MAX_SAVED: usize = 3;
+/// The page arrows under the list, when it takes more than one page.
+const PAGER: Rect = Rect { x: 0, y: H - 110, w: W, h: 110 };
+/// The list under the switch, paged rather than scrolled: e-ink redraws a page in one go.
+const LIST_TOP: i32 = SWITCH_ROW.y + SWITCH_ROW.h;
 const ACTION_W: i32 = 220;
 /// The longest WPA passphrase.
 const MAX_PSK: usize = 63;
@@ -55,6 +55,28 @@ struct Done {
     networks: Option<Vec<Network>>,
 }
 
+/// One line of the list under the switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Row {
+    SavedHeader,
+    /// Index into `saved`.
+    Saved(usize),
+    /// "Networks available" with the rescan button.
+    AvailableHeader,
+    /// Index into [`WifiScreen::available`].
+    Available(usize),
+    NoNetworks,
+}
+
+impl Row {
+    fn height(self) -> i32 {
+        match self {
+            Row::SavedHeader | Row::AvailableHeader => HEADER_H,
+            _ => ROW_H,
+        }
+    }
+}
+
 struct Entry {
     ssid: String,
     password: String,
@@ -78,13 +100,22 @@ pub struct WifiScreen {
     busy: Option<(Busy, Receiver<Done>)>,
     error: Option<String>,
     entry: Option<Entry>,
+    page: usize,
 }
 
 impl WifiScreen {
     /// Opens the screen and starts reading the state and scanning.
     pub fn open(wifi: Arc<dyn Wifi>, status: WifiStatus) -> WifiScreen {
-        let mut s =
-            WifiScreen { wifi, status, saved: Vec::new(), networks: Vec::new(), busy: None, error: None, entry: None };
+        let mut s = WifiScreen {
+            wifi,
+            status,
+            saved: Vec::new(),
+            networks: Vec::new(),
+            busy: None,
+            error: None,
+            entry: None,
+            page: 0,
+        };
         s.start(Busy::Scanning, true, |_| Ok(()));
         s
     }
@@ -152,39 +183,72 @@ impl WifiScreen {
         true
     }
 
-    fn saved_shown(&self) -> &[String] {
-        &self.saved[..self.saved.len().min(MAX_SAVED)]
-    }
-
-    /// Networks in range that aren't saved, as many as fit.
+    /// Networks in range that aren't saved.
     fn available(&self) -> Vec<&Network> {
-        let rows = ((H - 20 - self.available_top()) / ROW_H).max(0) as usize;
-        self.networks.iter().filter(|n| !self.saved.contains(&n.ssid)).take(rows).collect()
+        self.networks.iter().filter(|n| !self.saved.contains(&n.ssid)).collect()
     }
 
-    fn saved_top(&self) -> i32 {
-        SWITCH_ROW.bottom() + HEADER_H
+    /// The list split into pages that fit above the arrows, each row with its rect.
+    fn pages(&self) -> Vec<Vec<(Row, Rect)>> {
+        let mut rows = Vec::new();
+        if !self.saved.is_empty() {
+            rows.push(Row::SavedHeader);
+            rows.extend((0..self.saved.len()).map(Row::Saved));
+        }
+        rows.push(Row::AvailableHeader);
+        if self.status.enabled {
+            let available = self.available().len();
+            if available == 0 && self.busy.is_none() {
+                rows.push(Row::NoNetworks);
+            }
+            rows.extend((0..available).map(Row::Available));
+        }
+        let mut pages = vec![Vec::new()];
+        let mut y = LIST_TOP;
+        for row in rows {
+            // A header never ends a page: it keeps a row's room under it.
+            let room = row.height() + if row.height() == HEADER_H { ROW_H } else { 0 };
+            if y + room > PAGER.y && pages.last().is_some_and(|p: &Vec<_>| !p.is_empty()) {
+                pages.push(Vec::new());
+                y = LIST_TOP;
+            }
+            if let Some(page) = pages.last_mut() {
+                page.push((row, Rect::new(0, y, W, row.height())));
+            }
+            y += row.height();
+        }
+        pages
     }
 
-    fn available_header(&self) -> i32 {
-        self.saved_top() + self.saved_shown().len().max(1) as i32 * ROW_H + 24
+    /// The rows on the page shown, and how many pages there are.
+    fn page(&self) -> (Vec<(Row, Rect)>, usize) {
+        let mut pages = self.pages();
+        let n = pages.len();
+        (pages.swap_remove(self.page.min(n - 1)), n)
     }
 
-    fn available_top(&self) -> i32 {
-        self.available_header() + HEADER_H
+    /// Turns the page (a swipe or an arrow); true if it changed.
+    pub fn turn(&mut self, forward: bool) -> bool {
+        let n = self.pages().len();
+        let page = self.page.min(n - 1);
+        let to = if forward { (page + 1).min(n - 1) } else { page.saturating_sub(1) };
+        self.page = to;
+        to != page
     }
 
-    fn rescan_button(&self) -> Rect {
-        Rect::new(W - PAD - ACTION_W, self.available_header() + 8, ACTION_W, 64)
+    /// The password screen is up (swipes don't turn pages there).
+    pub fn entering(&self) -> bool {
+        self.entry.is_some()
     }
 
-    /// Row `i` of the networks in range (for `--pgm` renders).
+    /// Row `i` of the networks in range on the page shown (for `--pgm` renders).
     pub fn available_row(&self, i: usize) -> Rect {
-        Self::row(self.available_top(), i)
+        let (rows, _) = self.page();
+        rows.into_iter().find(|(r, _)| *r == Row::Available(i)).map_or(Rect::new(0, 0, 0, 0), |(_, r)| r)
     }
 
-    fn row(top: i32, i: usize) -> Rect {
-        Rect::new(0, top + i as i32 * ROW_H, W, ROW_H)
+    fn rescan_button(header: Rect) -> Rect {
+        Rect::new(W - PAD - ACTION_W, header.y + 20, ACTION_W, 64)
     }
 
     fn forget_button(row: Rect) -> Rect {
@@ -211,32 +275,37 @@ impl WifiScreen {
             self.start(Busy::Switching, on, move |w| w.set_enabled(on));
             return Tap::Redraw(FULL);
         }
-        if self.status.enabled && self.rescan_button().contains(x, y) {
-            self.start(Busy::Scanning, true, |_| Ok(()));
-            return Tap::Redraw(FULL);
+        let (rows, pages) = self.page();
+        if pages > 1 && PAGER.contains(x, y) {
+            return if self.turn(x >= W / 2) { Tap::Redraw(FULL) } else { Tap::None };
         }
-        let saved = (0..self.saved_shown().len()).find(|&i| Self::row(self.saved_top(), i).contains(x, y));
-        if let Some(i) = saved {
-            let ssid = self.saved[i].clone();
-            if Self::forget_button(Self::row(self.saved_top(), i)).contains(x, y) {
-                self.start(Busy::Forgetting, false, move |w| w.forget(&ssid));
-            } else if self.status.connected.as_ref() != Some(&ssid) {
-                self.join(ssid, None);
-            } else {
-                return Tap::None;
+        let Some(&(row, r)) = rows.iter().find(|(_, r)| r.contains(x, y)) else { return Tap::None };
+        match row {
+            Row::AvailableHeader if self.status.enabled && Self::rescan_button(r).contains(x, y) => {
+                self.start(Busy::Scanning, true, |_| Ok(()));
             }
-            return Tap::Redraw(FULL);
-        }
-        let top = self.available_top();
-        let hit = self.available().into_iter().enumerate().find(|(i, _)| Self::row(top, *i).contains(x, y));
-        let Some((_, net)) = hit else { return Tap::None };
-        let (ssid, secured) = (net.ssid.clone(), net.secured);
-        if secured {
-            let mut keyboard = Keyboard::default();
-            keyboard.enter = Some(t().connect);
-            self.entry = Some(Entry { ssid, password: String::new(), show: false, keyboard });
-        } else {
-            self.join(ssid, None);
+            Row::Saved(i) => {
+                let ssid = self.saved[i].clone();
+                if Self::forget_button(r).contains(x, y) {
+                    self.start(Busy::Forgetting, false, move |w| w.forget(&ssid));
+                } else if self.status.connected.as_ref() != Some(&ssid) {
+                    self.join(ssid, None);
+                } else {
+                    return Tap::None;
+                }
+            }
+            Row::Available(i) => {
+                let Some(net) = self.available().get(i).copied() else { return Tap::None };
+                let (ssid, secured) = (net.ssid.clone(), net.secured);
+                if secured {
+                    let mut keyboard = Keyboard::default();
+                    keyboard.enter = Some(t().connect);
+                    self.entry = Some(Entry { ssid, password: String::new(), show: false, keyboard });
+                } else {
+                    self.join(ssid, None);
+                }
+            }
+            _ => return Tap::None,
         }
         Tap::Redraw(FULL)
     }
@@ -356,46 +425,56 @@ impl WifiScreen {
         c.fill(Rect::new(PAD, SWITCH_ROW.bottom() - 2, W - 2 * PAD, 2), LINE);
 
         let header = Label { face: sans_bold, size: 26.0, ink: INK_SOFT };
-        header.draw(c, raster, s.saved_networks, PAD as f32, self.saved_top() - 24);
         let in_range = |ssid: &str| self.networks.iter().find(|n| n.ssid == ssid);
-        for (i, ssid) in self.saved_shown().iter().enumerate() {
-            let r = Self::row(self.saved_top(), i);
-            let forget = Self::forget_button(r);
-            button(c, forget, false);
-            Label { face: sans, size: 28.0, ink: INK }.centered(c, raster, s.forget, forget);
-            let mut right = forget.x - 32;
-            if let Some(n) = in_range(ssid) {
-                right = signal(c, right, r, n);
-            }
-            let here = self.status.connected.as_ref() == Some(ssid);
-            let face = Label { face: if here { serif_bold } else { serif }, ..name };
-            let width = (right - PAD - 24) as f32;
-            if here {
-                face.draw(c, raster, &face.fit(ssid, width), PAD as f32, r.y + 54);
-                soft.draw(c, raster, s.wifi_joined, PAD as f32, r.y + 92);
-            } else {
-                face.draw(c, raster, &face.fit(ssid, width), PAD as f32, r.y + 70);
-            }
-            c.fill(Rect::new(PAD, r.bottom() - 1, W - 2 * PAD, 1), LINE);
-        }
-
-        let h = self.available_header();
-        header.draw(c, raster, s.available_networks, PAD as f32, h + 56);
-        if !self.status.enabled {
-            return;
-        }
-        let rescan = self.rescan_button();
-        button(c, rescan, false);
-        Label { face: sans, size: 28.0, ink: INK }.centered(c, raster, s.rescan, rescan);
         let available = self.available();
-        if available.is_empty() && self.busy.is_none() {
-            soft.draw(c, raster, s.no_networks, PAD as f32, self.available_top() + 60);
+        let (rows, pages) = self.page();
+        for (row, r) in rows {
+            match row {
+                Row::SavedHeader => {
+                    header.draw(c, raster, s.saved_networks, PAD as f32, r.y + 72);
+                }
+                Row::AvailableHeader => {
+                    header.draw(c, raster, s.available_networks, PAD as f32, r.y + 72);
+                    if self.status.enabled {
+                        let rescan = Self::rescan_button(r);
+                        button(c, rescan, false);
+                        Label { face: sans, size: 28.0, ink: INK }.centered(c, raster, s.rescan, rescan);
+                    }
+                }
+                Row::NoNetworks => {
+                    soft.draw(c, raster, s.no_networks, PAD as f32, r.y + 60);
+                }
+                Row::Saved(i) => {
+                    let ssid = &self.saved[i];
+                    let forget = Self::forget_button(r);
+                    button(c, forget, false);
+                    Label { face: sans, size: 28.0, ink: INK }.centered(c, raster, s.forget, forget);
+                    let mut right = forget.x - 32;
+                    if let Some(n) = in_range(ssid) {
+                        right = signal(c, right, r, n);
+                    }
+                    let here = self.status.connected.as_ref() == Some(ssid);
+                    let face = Label { face: if here { serif_bold } else { serif }, ..name };
+                    let width = (right - PAD - 24) as f32;
+                    if here {
+                        face.draw(c, raster, &face.fit(ssid, width), PAD as f32, r.y + 54);
+                        soft.draw(c, raster, s.wifi_joined, PAD as f32, r.y + 92);
+                    } else {
+                        face.draw(c, raster, &face.fit(ssid, width), PAD as f32, r.y + 70);
+                    }
+                    c.fill(Rect::new(PAD, r.bottom() - 1, W - 2 * PAD, 1), LINE);
+                }
+                Row::Available(i) => {
+                    let Some(n) = available.get(i) else { continue };
+                    let right = signal(c, W - PAD, r, n);
+                    name.draw(c, raster, &name.fit(&n.ssid, (right - PAD - 24) as f32), PAD as f32, r.y + 70);
+                    c.fill(Rect::new(PAD, r.bottom() - 1, W - 2 * PAD, 1), LINE);
+                }
+            }
         }
-        for (i, n) in available.into_iter().enumerate() {
-            let r = Self::row(self.available_top(), i);
-            let right = signal(c, W - PAD, r, n);
-            name.draw(c, raster, &name.fit(&n.ssid, (right - PAD - 24) as f32), PAD as f32, r.y + 70);
-            c.fill(Rect::new(PAD, r.bottom() - 1, W - 2 * PAD, 1), LINE);
+        if pages > 1 {
+            let text = format!("‹   {} / {}   ›", self.page.min(pages - 1) + 1, pages);
+            Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &text, PAGER);
         }
     }
 }
@@ -495,7 +574,7 @@ mod tests {
         let names: Vec<&str> = s.available().iter().map(|n| n.ssid.as_str()).collect();
         assert_eq!(names, ["Vodafone-A1B2", "Biblioteca", "TIM-Ospiti"], "saved ones aren't listed twice");
         // A secured network asks for the password; a wrong one fails and says so.
-        let row = WifiScreen::row(s.available_top(), 0);
+        let row = s.available_row(0);
         assert!(matches!(s.tap(centre(row).0, centre(row).1), Tap::Redraw(_)));
         assert!(s.entry.is_some());
         type_text(&mut s, "nope");
@@ -519,7 +598,7 @@ mod tests {
         assert_eq!(s.status.connected.as_deref(), Some("Vodafone-A1B2"));
         assert!(s.saved.contains(&"Vodafone-A1B2".to_string()));
         // Forget the first saved network (Casa), then switch the radio off.
-        let first = WifiScreen::row(s.saved_top(), 0);
+        let first = s.page().0.into_iter().find(|(r, _)| *r == Row::Saved(0)).expect("Casa").1;
         let forget = WifiScreen::forget_button(first);
         s.tap(centre(forget).0, centre(forget).1);
         settle(&mut s);
@@ -533,10 +612,30 @@ mod tests {
     #[test]
     fn an_open_network_joins_without_a_password() {
         let mut s = screen();
-        let row = WifiScreen::row(s.available_top(), 1);
+        let row = s.available_row(1);
         s.tap(centre(row).0, centre(row).1);
         assert!(s.entry.is_none());
         settle(&mut s);
         assert_eq!(s.status.connected.as_deref(), Some("Biblioteca"));
+    }
+
+    #[test]
+    fn a_long_list_pages_and_every_network_stays_reachable() {
+        let mut s = screen();
+        s.saved.extend((0..12).map(|i| format!("Rete {i}")));
+        let (_, pages) = s.page();
+        assert!(pages > 1);
+        assert!(s.available_row(0).h == 0, "the networks in range moved to a later page");
+        let pager = (W - 100, PAGER.y + PAGER.h / 2);
+        while s.available_row(0).h == 0 {
+            assert!(matches!(s.tap(pager.0, pager.1), Tap::Redraw(_)), "one more page");
+        }
+        let row = s.available_row(1);
+        s.tap(centre(row).0, centre(row).1);
+        settle(&mut s);
+        assert_eq!(s.status.connected.as_deref(), Some("Biblioteca"));
+        // Back to the first page from the left arrow.
+        while s.turn(false) {}
+        assert_eq!(s.page, 0);
     }
 }
