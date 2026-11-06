@@ -299,9 +299,9 @@ impl Home {
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
         match &self.overlay {
             None => self.render_library(c, ctx),
-            Some(Overlay::Menu(i, menu)) => {
+            Some(Overlay::Menu(_, menu)) => {
                 self.render_library(c, ctx);
-                menu.render(c, ctx, self.books[*i].small.as_ref());
+                menu.render(c, ctx);
             }
             Some(Overlay::Notebook(_, nb)) => nb.render(c, ctx),
             Some(Overlay::About(i, about)) => about.render(c, ctx, self.books[*i].cover.as_ref()),
@@ -467,13 +467,21 @@ impl Home {
     }
 
     /// The book under `(x, y)`: a cover, a list row or the "continue reading" card.
-    fn book_at(&self, (x, y): (i32, i32)) -> Option<usize> {
+    fn book_at(&self, at: (i32, i32)) -> Option<usize> {
+        self.book_rect_at(at).map(|(i, _)| i)
+    }
+
+    /// The book at `(x, y)` and its cover (grid) or row (list, the continue-reading card).
+    fn book_rect_at(&self, (x, y): (i32, i32)) -> Option<(usize, Rect)> {
         if let (true, Some((i, _))) = (self.card(self.page), &self.current) {
-            if Rect::new(PAD, HEADER, W - 2 * PAD, CARD_H).contains(x, y) {
-                return Some(*i);
+            let card = Rect::new(PAD, HEADER, W - 2 * PAD, CARD_H);
+            if card.contains(x, y) {
+                return Some((*i, card));
             }
         }
-        self.items().into_iter().find(|(_, r)| r.contains(x, y)).map(|(i, _)| i)
+        let (i, r) = self.items().into_iter().find(|(_, r)| r.contains(x, y))?;
+        // In the grid, the cover alone: the title under it stays readable beside the card.
+        Some((i, if self.grid { Rect::new(r.x, r.y, r.w, COVER_H) } else { r }))
     }
 
     /// A long press on a book: its menu.
@@ -481,12 +489,20 @@ impl Home {
         if self.overlay.is_some() {
             return Action::None;
         }
-        let Some(i) = self.book_at(at) else { return Action::None };
+        let Some((i, anchor)) = self.book_rect_at(at) else { return Action::None };
         let b = &self.books[i];
         let highlights = notebook::load(&ctx.state_dir, &b.book.path).len();
         let finished = b.status() == Filter::Finished;
         let reflowable = b.book.format != Format::Pdf;
-        let menu = BookMenu::new(&b.book.title, &b.author(), b.progress.map(|p| p.0), finished, highlights, reflowable);
+        let menu = BookMenu::new(
+            &b.book.title,
+            &b.author(),
+            b.progress.map(|p| p.0),
+            finished,
+            highlights,
+            reflowable,
+            anchor,
+        );
         self.overlay = Some(Overlay::Menu(i, menu));
         Action::Redraw { turn: None }
     }
