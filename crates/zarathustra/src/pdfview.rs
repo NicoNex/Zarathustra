@@ -97,7 +97,7 @@ impl PdfView {
     }
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
-    pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
+    pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32) -> Action {
         if let Some(view) = &mut self.toc {
             return match view.tap(&self.contents, 0, (x0, y0), x) {
                 toc::Tap::None | toc::Tap::Bookmark(_) | toc::Tap::Remove(_) => Action::None,
@@ -119,7 +119,7 @@ impl PdfView {
             };
         }
         if self.menu {
-            let hit = menu::controls(ctx).into_iter().find(|(_, r)| r.contains(x0, y0));
+            let hit = menu::controls().into_iter().find(|(_, r)| r.contains(x0, y0));
             return match hit {
                 Some((Control::Library, _)) => {
                     self.save();
@@ -131,7 +131,7 @@ impl PdfView {
                     Action::Redraw { turn: None }
                 }
                 Some(_) => Action::None,
-                None if menu::covers(ctx, y0) => Action::None,
+                None if menu::covers(y0) => Action::None,
                 None => {
                     self.menu = false;
                     Action::Redraw { turn: None }

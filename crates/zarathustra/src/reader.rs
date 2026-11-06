@@ -386,7 +386,7 @@ impl Reader {
             return self.toc_tap((x0, y0), x, ctx);
         }
         if self.menu {
-            if menu::scrubber(ctx).contains(x0, y0) {
+            if menu::scrubber().contains(x0, y0) {
                 return self.scrub_to(x, ctx);
             }
             return self.menu_tap((x0, y0), ctx);
@@ -523,7 +523,7 @@ impl Reader {
     }
 
     fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Action {
-        let hit = menu::controls(ctx).into_iter().find(|(_, r)| r.contains(x, y));
+        let hit = menu::controls().into_iter().find(|(_, r)| r.contains(x, y));
         match hit {
             Some((Control::Library, _)) => {
                 self.save();
@@ -539,14 +539,14 @@ impl Reader {
                 Action::Redraw { turn: None }
             }
             Some((ctl, _)) => {
-                if menu::apply(&mut self.typo, &ctl) {
+                if menu::apply(&mut self.typo, &ctl, ctx) {
                     self.typo.save(&ctx.state_dir);
                     self.relayout(ctx);
                     return Action::Redraw { turn: None };
                 }
                 Action::None
             }
-            None if menu::covers(ctx, y) => Action::None,
+            None if menu::covers(y) => Action::None,
             None => {
                 self.close_menu();
                 Action::Redraw { turn: None }
@@ -566,12 +566,12 @@ impl Reader {
 
     /// The finger moved from `start` to `at`: while it drags the menu's scrubber, the area
     /// to redraw (the scrubber); `None` otherwise or when nothing changed.
-    pub fn scrub(&mut self, start: (i32, i32), (x, _): (i32, i32), ctx: &Ctx) -> Option<Rect> {
+    pub fn scrub(&mut self, start: (i32, i32), (x, _): (i32, i32)) -> Option<Rect> {
         if !self.menu || self.toc.is_some() || self.search_shown() {
             return None;
         }
         // Checked after the flags: it lays the sheet out, and this runs on every finger move.
-        let r = menu::scrubber(ctx);
+        let r = menu::scrubber();
         if !r.contains(start.0, start.1) {
             return None;
         }
@@ -585,7 +585,7 @@ impl Reader {
         self.scrub = None;
         self.found = None;
         let from = self.mark();
-        let (chapter, within) = nav::target(nav::fraction(menu::scrubber(ctx), x), self.book.chapters.len());
+        let (chapter, within) = nav::target(nav::fraction(menu::scrubber(), x), self.book.chapters.len());
         if chapter != self.chapter_index && !self.load_readable(chapter, true, ctx) {
             self.restore(from.chapter, from.page, ctx);
         } else if self.chapter_index == chapter {
@@ -833,7 +833,7 @@ impl Reader {
             let f = self.scrub.unwrap_or_else(|| self.progress());
             let chapters = self.book.chapters.len();
             let title = nav::chapter_title(&self.contents, nav::target(f, chapters).0).unwrap_or("");
-            nav::draw_scrubber(c, ctx, menu::scrubber(ctx), f, self.scrub.is_some(), title, chapters);
+            nav::draw_scrubber(c, ctx, menu::scrubber(), f, self.scrub.is_some(), title, chapters);
         }
     }
 

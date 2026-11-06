@@ -133,6 +133,13 @@ fn main() -> Result<()> {
             home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, ctx);
             write_pgm(dir.join(name), &px)
         };
+        // The floating book menu beside a cover in each grid column, then beside the
+        // continue-reading card (left open for the About screen below).
+        for (n, x) in [150, 620, 1050].into_iter().enumerate() {
+            home.long_press((x, 800), &ctx);
+            shot(&mut home, &mut ctx, None, &format!("bookmenu-col{n}.pgm"))?;
+            home.tap((5, 5), (5, 5), &ctx); // outside the card: closes it
+        }
         home.long_press((150, 400), &ctx);
         shot(&mut home, &mut ctx, None, "bookmenu.pgm")?;
         shot(&mut home, &mut ctx, Some((600, 1313)), "about.pgm")?;
@@ -202,9 +209,9 @@ fn main() -> Result<()> {
             snap(r, &mut ctx, "bookmark.pgm")?;
             r.menu = true;
             snap(r, &mut ctx, "menu.pgm")?;
-            let bar = zarathustra::menu::scrubber(&ctx);
+            let bar = zarathustra::menu::scrubber();
             let (from, to) = ((bar.x + 40, bar.y + bar.h / 2), (bar.x + bar.w * 2 / 3, bar.y + bar.h / 2));
-            r.scrub(from, to, &ctx);
+            r.scrub(from, to);
             snap(r, &mut ctx, "scrub.pgm")?;
             r.tap(from, to.0, &mut ctx);
             snap(r, &mut ctx, "jumped.pgm")?;
@@ -397,7 +404,7 @@ fn main() -> Result<()> {
                     }
                     // Dragging the menu's scrubber: redrawn with the selection's fast waveform.
                     if let Screen::Reader(r) = &mut screen {
-                        if let Some(rect) = r.scrub(start, (t.x, t.y), &ctx).filter(|_| !press.selecting) {
+                        if let Some(rect) = r.scrub(start, (t.x, t.y)).filter(|_| !press.selecting) {
                             selection = Some(selection.map_or(rect, |s| s.union(&rect)));
                         }
                     }
@@ -435,7 +442,7 @@ fn main() -> Result<()> {
                     false => r.tap(start, t.x, &mut ctx),
                 },
                 Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
-                Screen::Pdf(p) => p.tap(start, t.x, &mut ctx),
+                Screen::Pdf(p) => p.tap(start, t.x),
             };
             // Screen changes flash (clean slate); page turns animate and flash now and then.
             let (turn, flash) = match action {

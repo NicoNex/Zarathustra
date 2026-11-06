@@ -1,6 +1,7 @@
-//! The reader menu: a top bar (back to the library, book title) and a bottom sheet with the
-//! table of contents entry, the position scrubber and the typography settings, grouped as Text (size, font) and
-//! Layout (spacing, margins, alignment). The settings persist across books and sessions.
+//! The reader menu: a top bar (back to the library, book title) and a low bottom sheet with
+//! the table of contents entry, the position scrubber and the typography in two rows (size and
+//! font; spacing, margins and alignment as icons), so most of the page stays in view and
+//! shows each change. The settings persist across books and sessions.
 
 use std::path::Path;
 
@@ -16,20 +17,16 @@ pub const TOPBAR_H: i32 = 150;
 pub const PAD: i32 = 64;
 /// The search button, at the right end of the top bar.
 const SEARCH: Rect = Rect { x: W - 180, y: 0, w: 180, h: TOPBAR_H };
-/// Width of the row-label column left of the controls.
-const LABEL_W: i32 = 230;
 /// Touch targets: 96 px ≈ 8 mm at 300 dpi.
 pub const ROW_H: i32 = 96;
 const ROW_GAP: i32 = 20;
-const CHIP_GAP: i32 = 16;
-const SECTION_GAP: i32 = 40;
-const HEADER_H: i32 = 60;
+/// Between controls side by side in a row.
+const COL_GAP: i32 = 24;
 const CONTENTS_H: i32 = 104;
 /// The position scrubber under the contents row (drawn by [`crate::nav`]).
 const SCRUB_H: i32 = 120;
 const SHEET_PAD_TOP: i32 = 44;
 const SHEET_PAD_BOTTOM: i32 = 52;
-const FONT_COLS: usize = 3;
 const MAX_FONTS: usize = 9;
 
 /// Text sizes in device pixels (300 dpi: 40 px ≈ 9.6 pt).
@@ -120,7 +117,8 @@ pub enum Control {
     Search,
     Smaller,
     Larger,
-    Family(Option<String>),
+    /// The previous (false) or next (true) font.
+    Font(bool),
     Spacing(usize),
     Margin(usize),
     Align(usize),
@@ -139,93 +137,52 @@ struct Layout {
     top: i32,
     contents: Rect,
     scrubber: Rect,
-    /// Section headers: text and the band they sit in.
-    headers: [(&'static str, Rect); 2],
-    /// Row labels with the row they name.
-    labels: [(&'static str, Rect); 5],
     size: Rect,
-    fonts: Vec<(Option<String>, Rect)>,
+    font: Rect,
     spacing: Rect,
     margin: Rect,
     align: Rect,
 }
 
 impl Layout {
-    fn new(fonts: Vec<Option<String>>) -> Layout {
-        let font_rows = fonts.len().div_ceil(FONT_COLS).max(1) as i32;
-        let fonts_h = font_rows * ROW_H + (font_rows - 1) * CHIP_GAP;
-        let height = SHEET_PAD_TOP
-            + CONTENTS_H
-            + ROW_GAP
-            + SCRUB_H
-            + 2 * (SECTION_GAP + HEADER_H)
-            + ROW_H
-            + ROW_GAP
-            + fonts_h
-            + 3 * ROW_H
-            + 2 * ROW_GAP
-            + SHEET_PAD_BOTTOM;
+    fn new() -> Layout {
+        let height = SHEET_PAD_TOP + CONTENTS_H + ROW_GAP + SCRUB_H + ROW_GAP + 2 * ROW_H + ROW_GAP + SHEET_PAD_BOTTOM;
         let top = H - height;
-        let (x, w) = (PAD + LABEL_W, W - 2 * PAD - LABEL_W);
-        let row = |y: i32| Rect::new(x, y, w, ROW_H);
-
+        let w = W - 2 * PAD;
+        // Columns of a row: `n` side by side across the sheet.
+        let cols = |y: i32, n: i32| {
+            let cw = (w - (n - 1) * COL_GAP) / n;
+            (0..n).map(move |i| Rect::new(PAD + i * (cw + COL_GAP), y, cw, ROW_H))
+        };
         let mut y = top + SHEET_PAD_TOP;
-        let contents = Rect::new(PAD, y, W - 2 * PAD, CONTENTS_H);
+        let contents = Rect::new(PAD, y, w, CONTENTS_H);
         y += CONTENTS_H + ROW_GAP;
         // Wider than the rows by the knob's radius, so the track lines up with them.
         let scrubber = Rect::new(PAD - 22, y, W - 2 * (PAD - 22), SCRUB_H);
-        y += SCRUB_H + SECTION_GAP;
-        let text_header = Rect::new(PAD, y, W - 2 * PAD, HEADER_H);
-        y += HEADER_H;
-        let size = row(y);
-        y += ROW_H + ROW_GAP;
-        let cell = (w - CHIP_GAP * (FONT_COLS as i32 - 1)) / FONT_COLS as i32;
-        let font_top = y;
-        let fonts = (fonts.into_iter().enumerate())
-            .map(|(i, f)| {
-                let (r, c) = ((i / FONT_COLS) as i32, (i % FONT_COLS) as i32);
-                (f, Rect::new(x + c * (cell + CHIP_GAP), y + r * (ROW_H + CHIP_GAP), cell, ROW_H))
-            })
-            .collect();
-        y += fonts_h + SECTION_GAP;
-        let layout_header = Rect::new(PAD, y, W - 2 * PAD, HEADER_H);
-        y += HEADER_H;
-        let spacing = row(y);
-        let margin = row(y + ROW_H + ROW_GAP);
-        let align = row(y + 2 * (ROW_H + ROW_GAP));
-        Layout {
-            top,
-            contents,
-            scrubber,
-            headers: [(t().text, text_header), (t().layout, layout_header)],
-            labels: [
-                (t().size, size),
-                (t().font, Rect::new(x, font_top, w, ROW_H)),
-                (t().spacing, spacing),
-                (t().margins, margin),
-                (t().alignment, align),
-            ],
-            size,
-            fonts,
-            spacing,
-            margin,
-            align,
-        }
+        y += SCRUB_H + ROW_GAP;
+        let mut text = cols(y, 2);
+        let (size, font) = (text.next().unwrap_or_default(), text.next().unwrap_or_default());
+        let mut page = cols(y + ROW_H + ROW_GAP, 3);
+        let (spacing, margin, align) =
+            (page.next().unwrap_or_default(), page.next().unwrap_or_default(), page.next().unwrap_or_default());
+        Layout { top, contents, scrubber, size, font, spacing, margin, align }
     }
 }
 
 /// Every control with its rectangle, top to bottom.
-pub fn controls(ctx: &Ctx) -> Vec<(Control, Rect)> {
-    let l = Layout::new(families(ctx));
-    let size = segments(l.size, 3);
+pub fn controls() -> Vec<(Control, Rect)> {
+    let l = Layout::new();
+    let (size, font) = (segments(l.size, 3), segments(l.font, 3));
     let mut out = vec![
         (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
         (Control::Search, SEARCH),
         (Control::Contents, l.contents),
         (Control::Smaller, size[0]),
         (Control::Larger, size[2]),
+        (Control::Font(false), font[0]),
+        // The name steps forward too: the bigger target for the common move.
+        (Control::Font(true), font[1].union(&font[2])),
     ];
-    out.extend(l.fonts.into_iter().map(|(f, r)| (Control::Family(f), r)));
     out.extend(segments(l.spacing, SPACINGS.len()).into_iter().enumerate().map(|(i, r)| (Control::Spacing(i), r)));
     out.extend(segments(l.margin, MARGINS.len()).into_iter().enumerate().map(|(i, r)| (Control::Margin(i), r)));
     out.extend(segments(l.align, ALIGNS.len()).into_iter().enumerate().map(|(i, r)| (Control::Align(i), r)));
@@ -233,19 +190,19 @@ pub fn controls(ctx: &Ctx) -> Vec<(Control, Rect)> {
 }
 
 /// Where the position scrubber goes in the sheet.
-pub fn scrubber(ctx: &Ctx) -> Rect {
-    Layout::new(families(ctx)).scrubber
+pub fn scrubber() -> Rect {
+    Layout::new().scrubber
 }
 
 /// Whether a tap at height `y` lands on the menu's chrome (top bar or sheet).
-pub fn covers(ctx: &Ctx, y: i32) -> bool {
-    y < TOPBAR_H || y >= Layout::new(families(ctx)).top
+pub fn covers(y: i32) -> bool {
+    y < TOPBAR_H || y >= Layout::new().top
 }
 
 /// Draws the menu over the page. `chapter` is the current table-of-contents entry, `None`
 /// when the book has no table of contents.
 pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, chapter: Option<&str>) {
-    let l = Layout::new(families(ctx));
+    let l = Layout::new();
     let Ctx { fonts, raster, .. } = ctx;
     let (Some(sans), Some(sans_bold), Some(serif_bold)) =
         (crate::sans(fonts, false), crate::sans(fonts, true), crate::serif(fonts, true))
@@ -276,15 +233,6 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     let text = sub.fit(chapter.unwrap_or(t().no_contents), chevron_x - 32.0 - x);
     sub.draw(c, raster, &text, x, sub.baseline(r));
 
-    let header = Label { face: sans_bold, size: 30.0, ink: INK };
-    for (text, r) in l.headers {
-        header.draw(c, raster, text, r.x as f32, r.y + 40);
-    }
-    let label = Label { face: sans, size: 30.0, ink: INK_SOFT };
-    for (text, r) in l.labels {
-        label.draw(c, raster, text, PAD as f32, label.baseline(r));
-    }
-
     // Size: a stepper, the current step between a small and a large "A".
     let segs = segmented(c, l.size, 3, None);
     // A small "A−" and a large "A+": the sign says which way, the size shows it. The signs
@@ -303,14 +251,15 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     let value = format!("{} / {}", typo.size + 1, SIZES.len());
     Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &value, segs[1]);
 
-    // Fonts: chips, each name set in its own face.
-    for (f, r) in &l.fonts {
-        let on = *f == typo.family;
-        button(c, *r, on);
-        let face = f.as_ref().and_then(|f| fonts.pick(std::slice::from_ref(f), 400, false)).unwrap_or(sans);
-        let name = f.as_deref().map_or(t().original_font.into(), title_case);
-        Label { face, size: 32.0, ink: if on { PAPER } else { INK } }.centered(c, raster, &name, *r);
-    }
+    // Font: ‹ name ›, the name set in its own face.
+    let segs = segmented(c, l.font, 3, None);
+    let chevron = Label { face: sans_bold, size: 40.0, ink: INK };
+    chevron.centered(c, raster, "‹", segs[0]);
+    chevron.centered(c, raster, "›", segs[2]);
+    let f = &typo.family;
+    let face = f.as_ref().and_then(|f| fonts.pick(std::slice::from_ref(f), 400, false)).unwrap_or(sans);
+    let name = f.as_deref().map_or(t().original_font.into(), title_case);
+    Label { face, size: 30.0, ink: INK }.centered(c, raster, &name, segs[1]);
 
     // Layout choices as pictures of the page: what changes is visible without reading.
     for (kind, r, on) in [
@@ -397,12 +346,17 @@ fn title_case(s: &str) -> String {
 }
 
 /// Applies a control to the typography; true if it changed.
-pub fn apply(typo: &mut Typography, ctl: &Control) -> bool {
+pub fn apply(typo: &mut Typography, ctl: &Control, ctx: &Ctx) -> bool {
     let before = typo.clone();
     match ctl {
+        Control::Font(next) => {
+            let all = families(ctx);
+            let i = all.iter().position(|f| *f == typo.family).unwrap_or(0);
+            let step = if *next { 1 } else { all.len().saturating_sub(1) };
+            typo.family = all.get((i + step) % all.len().max(1)).cloned().flatten();
+        }
         Control::Smaller => typo.size = typo.size.saturating_sub(1),
         Control::Larger => typo.size = (typo.size + 1).min(SIZES.len() - 1),
-        Control::Family(f) => typo.family = f.clone(),
         Control::Spacing(i) => typo.spacing = *i,
         Control::Margin(i) => typo.margin = *i,
         Control::Align(i) => typo.align = *i,
@@ -427,9 +381,17 @@ mod tests {
         assert_eq!((t.size, t.family.as_deref()), (3, Some("baskerville")));
         std::fs::remove_dir_all(dir).ok();
 
+        let ctx = Ctx::new();
         let mut t = Typography { size: SIZES.len() - 1, ..Typography::default() };
-        assert!(!apply(&mut t, &Control::Larger));
-        assert!(apply(&mut t, &Control::Smaller));
+        assert!(!apply(&mut t, &Control::Larger, &ctx));
+        assert!(apply(&mut t, &Control::Smaller, &ctx));
+        // The font steps round the list both ways, back to where it started.
+        let start = t.family.clone();
+        if families(&ctx).len() > 1 {
+            assert!(apply(&mut t, &Control::Font(false), &ctx), "wraps to the last");
+            assert!(apply(&mut t, &Control::Font(true), &ctx));
+            assert_eq!(t.family, start);
+        }
         assert_eq!(title_case("amazon ember"), "Amazon Ember");
     }
 }
