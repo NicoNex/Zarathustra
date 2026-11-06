@@ -136,6 +136,16 @@ pub struct Strings {
     pub searching: &'static str,
     pub no_results: &'static str,
     pub space: &'static str,
+    /// Wireless transfer screen: title, how to use it, the list and the no-network state.
+    pub send_books: &'static str,
+    pub transfer_hint: &'static str,
+    pub waiting_books: &'static str,
+    pub received: &'static str,
+    pub receiving: &'static str,
+    pub failed: &'static str,
+    pub no_wifi: &'static str,
+    pub no_wifi_hint: &'static str,
+    pub retry: &'static str,
 }
 
 const IT: Strings = Strings {
@@ -237,6 +247,16 @@ const IT: Strings = Strings {
     searching: "Ricerca in corso…",
     no_results: "Nessun risultato",
     space: "spazio",
+    send_books: "Trasferisci libri",
+    transfer_hint:
+        "Inquadra il codice con il telefono, o apri l'indirizzo nel browser di un computer sulla stessa rete Wi-Fi.",
+    waiting_books: "In attesa dei libri…",
+    received: "Ricevuti",
+    receiving: "in arrivo…",
+    failed: "non riuscito",
+    no_wifi: "Wi-Fi non connesso",
+    no_wifi_hint: "Collega il Kindle a una rete Wi-Fi (anche l'hotspot del telefono), poi tocca Riprova.",
+    retry: "Riprova",
 };
 
 const EN: Strings = Strings {
@@ -338,6 +358,15 @@ const EN: Strings = Strings {
     searching: "Searching…",
     no_results: "No results",
     space: "space",
+    send_books: "Send books",
+    transfer_hint: "Scan the code with your phone, or open the address in a computer's browser on the same Wi-Fi.",
+    waiting_books: "Waiting for books…",
+    received: "Received",
+    receiving: "receiving…",
+    failed: "failed",
+    no_wifi: "Wi-Fi not connected",
+    no_wifi_hint: "Connect the Kindle to a Wi-Fi network (your phone's hotspot works too), then tap Retry.",
+    retry: "Retry",
 };
 
 /// The UI language for the whole process; set once from the settings at startup.

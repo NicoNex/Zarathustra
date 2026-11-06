@@ -148,6 +148,9 @@ fn main() -> Result<()> {
         home.tap((100, 75), (100, 75), &ctx);
         shot(&mut home, &mut ctx, Some((516, 118)), "prefs.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
+        // Send books as it is now (no network: the retry screen), then with a fixed URL.
+        shot(&mut home, &mut ctx, Some((412, 118)), "transfer.pgm")?;
+        home.tap((100, 75), (100, 75), &ctx);
         // Library search: the field and keyboard, then "gra" typed.
         shot(&mut home, &mut ctx, Some((620, 118)), "search.pgm")?;
         let kb = zarathustra::keyboard::Keyboard::default();
@@ -160,6 +163,11 @@ fn main() -> Result<()> {
             }
         }
         shot(&mut home, &mut ctx, None, "search2.pgm")?;
+        let mut tr = zarathustra::transfer::Transfer::open();
+        tr.set_url("http://192.168.1.42:8080/k7f3x2".into());
+        tr.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        write_pgm(dir.join("transfer-qr.pgm"), &px)?;
+        drop(tr);
         if let Screen::Pdf(p) = &mut screen {
             for n in 0..3 {
                 p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -305,7 +313,10 @@ fn main() -> Result<()> {
         };
         // A search under way only peeks at the input queue between chapters.
         let searching = matches!(&screen, Screen::Reader(r) if r.is_searching()) && !quick.is_open();
-        let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(Duration::from_secs(300)) };
+        // The send-books screen checks for arriving books twice a second.
+        let transferring = matches!(&screen, Screen::Home(h) if h.transferring());
+        let idle = if transferring { Duration::from_millis(500) } else { Duration::from_secs(300) };
+        let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(idle) };
         dev.wait_events(Some(timeout), &mut events)?;
         let mut power = false;
         while let Some(ev) = dev.power_event() {
@@ -529,6 +540,13 @@ fn main() -> Result<()> {
                     }
                 }
                 Screen::Pdf(_) => {}
+            }
+        }
+        if let (Screen::Home(h), false) = (&mut screen, quick.is_open() || asleep) {
+            if h.poll_transfer() {
+                dev.wait_refresh(marker)?;
+                h.render(&mut dev.canvas(), &mut ctx);
+                marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
         if let (Screen::Reader(r), false) = (&mut screen, quick.is_open()) {

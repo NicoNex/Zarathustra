@@ -22,6 +22,7 @@ pub mod settings;
 pub mod sleep;
 pub mod stats;
 pub mod toc;
+pub mod transfer;
 pub mod ui;
 
 use std::path::{Path, PathBuf};
