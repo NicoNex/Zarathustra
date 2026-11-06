@@ -130,6 +130,65 @@ fn write_night_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
     write_pgm(path, &inverted)
 }
 
+/// The exit status that tells run.sh to hand the storage to a computer over USB (the Amazon
+/// UI does that) and start Zarathustra again once the cable is out.
+const USB_EXIT: i32 = 42;
+
+/// A computer was plugged in: ask whether to hand it the storage or just charge. True to
+/// hand it over; false to go on (also when the cable goes away meanwhile).
+// ponytail: the Amazon UI does the mass-storage switch (volumd waits for it); do it ourselves
+// (unmount /mnt/base-us, point g_mass_storage's lun at it) once the framework is gone for good.
+fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::io::Result<bool> {
+    use zarathustra::ui::{button, Label, INK, INK_SOFT, PAPER};
+    let (transfer, charge) = (Rect::new(160, 900, W - 320, 120), Rect::new(160, 1060, W - 320, 120));
+    {
+        let mut c = dev.canvas();
+        c.fill(c.bounds(), PAPER);
+        let Ctx { fonts, raster, .. } = ctx;
+        let s = zarathustra::i18n::t();
+        if let (Some(serif), Some(sans), Some(bold)) =
+            (zarathustra::serif(fonts, true), zarathustra::sans(fonts, false), zarathustra::sans(fonts, true))
+        {
+            Label { face: serif, size: 64.0, ink: INK }.centered(
+                &mut c,
+                raster,
+                s.usb_title,
+                Rect::new(0, 480, W, 100),
+            );
+            let body = Label { face: sans, size: 34.0, ink: INK_SOFT };
+            for (i, line) in body.wrap(s.usb_body, (W - 320) as f32, 5).iter().enumerate() {
+                body.centered(&mut c, raster, line, Rect::new(0, 620 + i as i32 * 52, W, 52));
+            }
+            button(&mut c, transfer, true);
+            Label { face: bold, size: 36.0, ink: PAPER }.centered(&mut c, raster, s.usb_transfer, transfer);
+            button(&mut c, charge, false);
+            Label { face: sans, size: 36.0, ink: INK }.centered(&mut c, raster, s.usb_charge, charge);
+        }
+    }
+    let full = Rect::new(0, 0, W, H);
+    dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
+    let mut events = Vec::new();
+    loop {
+        events.clear();
+        dev.wait_events(None, &mut events)?;
+        while let Some(ev) = dev.power_event() {
+            if let PowerEvent::Usb(false) = ev {
+                return Ok(false);
+            }
+        }
+        for ev in &events {
+            if let Event::Touch(t) = ev {
+                if t.phase == Phase::Up && transfer.contains(t.x, t.y) {
+                    return Ok(true);
+                }
+                if t.phase == Phase::Up && charge.contains(t.x, t.y) {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let (mut book, mut swipe, mut pgm, mut query) = (None, true, None, "natura".to_string());
@@ -486,7 +545,14 @@ fn main() -> Result<()> {
                     asleep = false;
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
-                PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
+                PowerEvent::Usb(true) if !asleep => {
+                    quick.close();
+                    if usb_prompt(&mut dev, &mut ctx)? {
+                        std::process::exit(USB_EXIT);
+                    }
+                    screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
+                }
+                PowerEvent::Suspend { .. } | PowerEvent::Resumed | PowerEvent::Usb(_) => continue,
             }
             marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
             down = None;

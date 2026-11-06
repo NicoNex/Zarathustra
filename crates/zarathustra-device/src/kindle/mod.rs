@@ -64,6 +64,9 @@ pub struct Kindle {
     relight_until: Option<Instant>,
     /// When touches last restarted powerd's idle timeout.
     idle_reset: Option<Instant>,
+    /// The USB controller's state file (`configured` when a computer has enumerated us) and
+    /// the last state seen. The kernel notifies changes through poll(POLLPRI).
+    udc: Option<(std::fs::File, bool)>,
 }
 
 impl Kindle {
@@ -96,7 +99,23 @@ impl Kindle {
             wanted: None,
             relight_until: None,
             idle_reset: None,
+            udc: udc_state_file().map(|f| (f, false)),
         })
+    }
+
+    /// Reads the USB state again; a [`PowerEvent::Usb`] when it changed.
+    fn read_usb(&mut self) {
+        use std::io::{Read, Seek};
+        let Some((file, last)) = &mut self.udc else { return };
+        let mut state = String::new();
+        if file.rewind().and_then(|_| file.read_to_string(&mut state)).is_err() {
+            return;
+        }
+        let host = state.trim() == "configured";
+        if host != *last {
+            *last = host;
+            self.power_events.push_back(PowerEvent::Usb(host));
+        }
     }
 
     fn read_power(&mut self) {
@@ -198,7 +217,13 @@ impl Device for Kindle {
         }
         let pfd = |fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
         // A negative fd makes poll skip the slot once the powerd listener is gone.
-        let mut fds = [pfd(self.touch.fd()), pfd(self.powerd.as_ref().map_or(-1, |p| p.fd()))];
+        use std::os::fd::AsRawFd;
+        let udc = self.udc.as_ref().map_or(-1, |(f, _)| f.as_raw_fd());
+        let mut fds = [
+            pfd(self.touch.fd()),
+            pfd(self.powerd.as_ref().map_or(-1, |p| p.fd())),
+            libc::pollfd { fd: udc, events: libc::POLLPRI | libc::POLLERR, revents: 0 },
+        ];
         // Round up so a sub-millisecond remainder doesn't become a busy-spinning 0.
         // Watching the light after a wake: wake up often enough to catch powerd.
         let timeout = match self.relight_until {
@@ -213,6 +238,11 @@ impl Device for Kindle {
         }
         if fds[1].revents != 0 {
             self.read_power();
+        }
+        // Read on every wake too, in case the notification never comes.
+        self.read_usb();
+        if !self.power_events.is_empty() {
+            return Ok(());
         }
         self.keep_light();
         self.touches.clear();
@@ -264,4 +294,10 @@ impl Device for Kindle {
     fn wifi(&self) -> Option<std::sync::Arc<dyn crate::Wifi>> {
         Some(std::sync::Arc::new(wifi::KindleWifi))
     }
+}
+
+/// `/sys/class/udc/<controller>/state`, opened for reading.
+fn udc_state_file() -> Option<std::fs::File> {
+    let dir = std::fs::read_dir("/sys/class/udc").ok()?.flatten().next()?;
+    std::fs::File::open(dir.path().join("state")).ok()
 }

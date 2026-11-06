@@ -114,6 +114,7 @@ fn main() -> Result<()> {
         while let Some(ev) = dev.power_event() {
             log(&format!("power {ev:?}: state={} light={:?}", powerd_state(), dev.light()));
             match ev {
+                PowerEvent::Usb(_) => {}
                 PowerEvent::Sleep => {
                     asleep = true;
                     let t = Instant::now();

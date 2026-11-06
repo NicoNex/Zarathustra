@@ -91,6 +91,8 @@ pub enum PowerEvent {
     Suspend { delay: u32 },
     /// Woke from suspend but still in the sleep screen, e.g. a timer (informational).
     Resumed,
+    /// A computer is connected over USB (true) or went away (false).
+    Usb(bool),
 }
 
 #[derive(Debug)]
