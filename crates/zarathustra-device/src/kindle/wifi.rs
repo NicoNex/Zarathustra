@@ -55,23 +55,59 @@ fn read_hash(prop: &str) -> io::Result<Vec<Record>> {
     run(Command::new("lipc-hash-prop").args(["-n", WIFID, prop]), None).map(|s| parse_hash_array(&s))
 }
 
-/// Writes a hash-array property, one record on stdin. The PW5's lipc-hash-prop rejected
-/// `{ key = "value" }` ("unexpected KEY, expecting STRING or INTEGER or HEX"); until the
-/// accepted syntax is known, the likely ones are tried in turn and the first that parses wins.
-// ponytail: up to four tries per call; keep only the one that works once the log says which
-// (`wifi: createProfile syntax N`).
+/// Writes a hash-array property, one `{ key = "value", … }` record on stdin (bare keys,
+/// commas between pairs: the grammar the PW5's lipc-hash-prop parses).
 fn write_hash(prop: &str, fields: &[(&str, &str)]) -> io::Result<()> {
-    let mut last = io::Error::other("no record");
-    for (n, record) in hash_records(fields).iter().enumerate() {
-        match run(Command::new("lipc-hash-prop").args([WIFID, prop]), Some(record)) {
-            Ok(_) => {
-                eprintln!("wifi: {prop} syntax {n}");
+    run(Command::new("lipc-hash-prop").args([WIFID, prop]), Some(&hash_record(fields))).map(drop)
+}
+
+/// Joins a new network through wpa_supplicant (`wpa_cli` arguments go straight through, so
+/// any character in the password is fine), saving it in its config. Removed again on failure.
+// ponytail: wifid doesn't learn about this network (it isn't listed as saved, and forgetting
+// it from Zarathustra does nothing); fine until lipc-hash-prop's escaping is known.
+fn wpa_join(ssid: &str, password: Option<&str>) -> io::Result<()> {
+    let wpa = |args: &[&str]| run(Command::new("wpa_cli").args(["-i", "wlan0"]).args(args), None);
+    let ok = |out: io::Result<String>| match out {
+        Ok(o) if o.lines().last().is_some_and(|l| l.trim() == "OK") => Ok(()),
+        Ok(o) => Err(io::Error::other(format!("wpa_cli: {o}"))),
+        Err(e) => Err(e),
+    };
+    let id = wpa(&["add_network"])?.lines().last().unwrap_or_default().trim().to_string();
+    id.parse::<u32>().map_err(|_| io::Error::other(format!("wpa_cli add_network: {id}")))?;
+    let joined = (|| {
+        ok(wpa(&["set_network", &id, "ssid", &format!("\"{ssid}\"")]))?;
+        match password {
+            Some(p) => ok(wpa(&["set_network", &id, "psk", &format!("\"{p}\"")]))?,
+            None => ok(wpa(&["set_network", &id, "key_mgmt", "NONE"]))?,
+        }
+        ok(wpa(&["select_network", &id]))?;
+        let start = Instant::now();
+        while start.elapsed() < CONNECT_TIMEOUT {
+            std::thread::sleep(Duration::from_millis(500));
+            let status = wpa(&["status"]).unwrap_or_default();
+            let line = |key: &str| status.lines().find_map(|l| l.strip_prefix(key)).map(str::to_string);
+            if line("wpa_state=").as_deref() == Some("COMPLETED") && line("ssid=").as_deref() == Some(ssid) {
+                wpa(&["save_config"]).ok();
                 return Ok(());
             }
-            Err(e) => last = e,
         }
+        Err(io::Error::new(io::ErrorKind::TimedOut, format!("{ssid}: not connected after {CONNECT_TIMEOUT:?}")))
+    })();
+    if joined.is_err() {
+        wpa(&["remove_network", &id]).ok();
+        // Back to the networks wifid knows.
+        wpa(&["enable_network", "all"]).ok();
     }
-    Err(last)
+    joined
+}
+
+/// One record: integer fields bare, the rest quoted; values are [`plain`].
+fn hash_record(fields: &[(&str, &str)]) -> String {
+    const INTS: [&str; 1] = ["store_nw_user_pref"];
+    let body: Vec<String> = (fields.iter())
+        .map(|(k, v)| if INTS.contains(k) { format!("{k} = {v}") } else { format!("{k} = \"{v}\"") })
+        .collect();
+    format!("{{ {} }}\n", body.join(", "))
 }
 
 type Record = Vec<(String, String)>;
@@ -88,24 +124,6 @@ fn plain(v: &str) -> io::Result<&str> {
         Some(c) => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unsupported character {c:?}"))),
         None => Ok(v),
     }
-}
-
-/// One record in the `{ key = "value", … }` form lipc-hash-prop takes on stdin.
-/// The candidate syntaxes for one record: bare keys, quoted keys, quoted keys with `:`, bare
-/// keys without commas. Integer fields go bare, the rest quoted; values are [`plain`].
-fn hash_records(fields: &[(&str, &str)]) -> [String; 4] {
-    const INTS: [&str; 1] = ["store_nw_user_pref"];
-    let record = |quote_keys: bool, eq: &str, sep: &str| {
-        let body: Vec<String> = (fields.iter())
-            .map(|(k, v)| {
-                let key = if quote_keys { format!("\"{k}\"") } else { k.to_string() };
-                let value = if INTS.contains(k) { v.to_string() } else { format!("\"{v}\"") };
-                format!("{key} {eq} {value}")
-            })
-            .collect();
-        format!("{{ {} }}\n", body.join(sep))
-    };
-    [record(false, "=", ", "), record(true, "=", ", "), record(true, ":", ", "), record(false, "=", " ")]
 }
 
 /// The records of `lipc-hash-prop -n` output, as a PW5 (5.16) prints them:
@@ -211,7 +229,12 @@ impl Wifi for KindleWifi {
             fields.extend(password.map(|p| ("psk", p)));
             // Keep the password on the device (not synced to Amazon's account).
             fields.push(("store_nw_user_pref", "0"));
-            write_hash("createProfile", &fields)?;
+            // lipc-hash-prop's parser chokes on some characters inside a quoted value (a
+            // password with '#' or '!'): then wpa_supplicant joins it directly.
+            if let Err(e) = write_hash("createProfile", &fields) {
+                eprintln!("wifi: createProfile refused ({e}); joining through wpa_cli");
+                return wpa_join(ssid, password);
+            }
         }
         let joined = || {
             set("-s", CMD, "ensureConnection", &format!("wifi:{ssid}"))?;
@@ -273,8 +296,7 @@ mod tests {
 
     #[test]
     fn writes_ints_bare_and_strings_quoted() {
-        let recs = hash_records(&[("essid", "Casa"), ("store_nw_user_pref", "0")]);
-        assert_eq!(recs[0], "{ essid = \"Casa\", store_nw_user_pref = 0 }\n");
-        assert_eq!(recs[1], "{ \"essid\" = \"Casa\", \"store_nw_user_pref\" = 0 }\n");
+        let rec = hash_record(&[("essid", "Casa"), ("psk", "segreta1"), ("store_nw_user_pref", "0")]);
+        assert_eq!(rec, "{ essid = \"Casa\", psk = \"segreta1\", store_nw_user_pref = 0 }\n");
     }
 }
