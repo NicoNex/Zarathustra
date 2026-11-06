@@ -21,7 +21,7 @@ Review/simplify of d9c7840..HEAD DONE and merged (engine: 9942ffb, 234c71f; shel
 
 Merged (not yet on the device): review fixes (2de82c5 reviewed), library sort, bookmarks + scrubber + back pill (`nav.rs`), footnote popup (`footnote.rs`, engine `note.rs`), dictionaries (StarDict, engine `dict/`, `dict.rs` card on long press of a word; Kindle .azw dicts are DRM → free Wiktionary dicts via `scripts/fetch-dicts.sh [push]` to /mnt/us/dictionaries), in-book search (`keyboard.rs`, `search.rs`, engine `search.rs`). Slow all-books note sweep test is `#[ignore]`.
 
-Running: device agent (power button + slider smoothness), OWNS THE DEVICE. When it reports: merge, `scripts/fetch-dicts.sh push`, deploy, let the user test everything.
+Power-button branch merged (2026-11-06). Book menu (`bookmenu.rs`, long press on a book): open, contents, bookmarks, search (open the book with that reader overlay via `Action::OpenOn`), about, highlights, mark read/unread, delete (second tap confirms). Device offline at last try: `scripts/fetch-dicts.sh push`, deploy, let the user test everything.
 
 Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
 Review rule: next review+simplify from 6897e5e when `git diff --shortstat 6897e5e..HEAD -- crates` passes ~2000 added lines.
