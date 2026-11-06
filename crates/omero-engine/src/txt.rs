@@ -50,21 +50,21 @@ pub fn chapters(bytes: &[u8]) -> (Vec<String>, Vec<TocEntry>) {
     (chapters, toc)
 }
 
-/// Paragraphs: blocks between blank lines, their hard-wrapped lines joined. A block with
+/// Paragraphs: blocks between blank (or whitespace-only) lines, their hard-wrapped lines joined. A block with
 /// long lines is one paragraph per line (files that only break at paragraph ends).
 // ponytail: a poem's short lines get joined into one paragraph; keep breaks as <br/> if
 // verse-heavy TXTs show up.
-fn paragraphs(text: &str) -> impl Iterator<Item = String> + '_ {
-    text.split("\n\n").flat_map(|block| {
-        let lines: Vec<&str> = block.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-        if lines.iter().any(|l| l.chars().count() > 100) {
-            lines.into_iter().map(String::from).collect()
-        } else if lines.is_empty() {
-            Vec::new()
+fn paragraphs(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let mut out = Vec::new();
+    for block in lines.split(|l| l.is_empty()).filter(|b| !b.is_empty()) {
+        if block.iter().any(|l| l.chars().count() > 100) {
+            out.extend(block.iter().map(|l| l.to_string()));
         } else {
-            vec![lines.join(" ")]
+            out.push(block.join(" "));
         }
-    })
+    }
+    out
 }
 
 /// A short line naming a numbered chapter ("Chapter 3", "CAPITOLO IV.", "Part II: The Sea").
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn splits_on_headings_and_joins_wrapped_lines() {
-        let src = "Preface line one\nline two.\r\n\r\nChapter 1\n\nIt was <dark> & stormy.\n\nCHAPTER II.\n\nEnd.";
+        let src = "Preface line one\nline two.\r\n  \r\nChapter 1\n\nIt was <dark> & stormy.\n\nCHAPTER II.\n\nEnd.";
         let (chapters, toc) = chapters(src.as_bytes());
         assert_eq!(chapters.len(), 3);
         assert!(chapters[0].contains("<p>Preface line one line two.</p>"), "{}", chapters[0]);
