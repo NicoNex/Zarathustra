@@ -396,6 +396,14 @@ impl QuickPanel {
         }
     }
 
+    /// Puts the slider levels back on the LEDs: on wake powerd restores its own level, which
+    /// would leave the bar showing one brightness and the screen another.
+    // ponytail: re-applied on Wake and Resumed; if powerd still wins on the device, also set
+    // its `flIntensity` prop to match.
+    pub fn relight(&mut self, dev: &mut dyn Device) {
+        self.apply(dev);
+    }
+
     fn apply(&mut self, dev: &mut dyn Device) {
         self.applied = Some(Instant::now());
         let light = Light { brightness: self.settings.brightness, warmth: self.has_warmth.then_some(self.warmth) };
@@ -692,6 +700,18 @@ mod tests {
         assert_eq!(up, QuickResult::Redraw { rect: Slider::Brightness.rect(), waveform: Waveform::Text });
         assert_eq!(dev.light.brightness, 70);
         assert_eq!(Settings::load(&dir).brightness, 70);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn waking_puts_the_slider_level_back() {
+        let dir = state_dir("wake");
+        let mut dev = Fake::new();
+        let mut q = QuickPanel::new(&dir, &mut dev);
+        // powerd restored its own level while we slept.
+        dev.light = Light { brightness: 80, warmth: Some(0) };
+        q.relight(&mut dev);
+        assert_eq!(dev.light, Light { brightness: 30, warmth: Some(10) });
         std::fs::remove_dir_all(dir).ok();
     }
 

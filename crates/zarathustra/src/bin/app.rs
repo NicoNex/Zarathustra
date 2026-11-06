@@ -361,9 +361,15 @@ fn main() -> Result<()> {
                 }
                 PowerEvent::Wake => {
                     asleep = false;
+                    quick.relight(dev.as_mut());
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
-                PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
+                // powerd may put back its own level after a real suspend: ours wins again.
+                PowerEvent::Resumed => {
+                    quick.relight(dev.as_mut());
+                    continue;
+                }
+                PowerEvent::Suspend { .. } => continue,
             }
             marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
             down = None;
