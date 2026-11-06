@@ -301,15 +301,67 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
         Label { face, size: 32.0, ink: if on { PAPER } else { INK } }.centered(c, raster, &name, *r);
     }
 
-    let mut choice = |c: &mut Canvas, r: Rect, names: &[&str], on: usize| {
-        let segs = segmented(c, r, names.len(), Some(on));
-        for (i, (name, s)) in names.iter().zip(segs).enumerate() {
-            Label { face: sans, size: 30.0, ink: if i == on { PAPER } else { INK } }.centered(c, raster, name, s);
+    // Layout choices as pictures of the page: what changes is visible without reading.
+    for (kind, r, on) in [
+        (Icon::Spacing, l.spacing, typo.spacing),
+        (Icon::Margin, l.margin, typo.margin),
+        (Icon::Align, l.align, typo.align),
+    ] {
+        for (i, s) in segmented(c, r, 3, Some(on)).into_iter().enumerate() {
+            layout_icon(c, kind, i, s, if i == on { PAPER } else { INK });
         }
-    };
-    choice(c, l.spacing, &t().spacings, typo.spacing);
-    choice(c, l.margin, &t().margin_names, typo.margin);
-    choice(c, l.align, &t().aligns, typo.align);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Icon {
+    Spacing,
+    Margin,
+    Align,
+}
+
+/// Choice `i` (narrow to wide, or justified/left/centred) of `kind`, centred in `r`.
+fn layout_icon(c: &mut Canvas, kind: Icon, i: usize, r: Rect, ink: u8) {
+    let (cx, cy) = (r.x + r.w / 2, r.y + r.h / 2);
+    let i = i as i32;
+    let bar = |c: &mut Canvas, x: i32, y: i32, w: i32| c.fill(Rect::new(x, y - 2, w, 4), ink);
+    match kind {
+        // Three lines, further apart.
+        Icon::Spacing => {
+            let gap = 10 + 5 * i;
+            for k in -1..=1 {
+                bar(c, cx - 20, cy + k * gap, 40);
+            }
+        }
+        // A page outline, its text column narrower.
+        Icon::Margin => {
+            let (w, h) = (46, 50);
+            let page = Rect::new(cx - w / 2, cy - h / 2, w, h);
+            for edge in [
+                Rect::new(page.x, page.y, w, 3),
+                Rect::new(page.x, page.bottom() - 3, w, 3),
+                Rect::new(page.x, page.y, 3, h),
+                Rect::new(page.right() - 3, page.y, 3, h),
+            ] {
+                c.fill(edge, ink);
+            }
+            let inset = 8 + 5 * i;
+            for k in -1..=1 {
+                bar(c, page.x + inset, cy + k * 11, w - 2 * inset);
+            }
+        }
+        // Four lines: all full, ragged right, or centred.
+        Icon::Align => {
+            for (k, w) in [40, 28, 36, 22].into_iter().enumerate() {
+                let y = cy - 15 + k as i32 * 10;
+                match i {
+                    0 => bar(c, cx - 20, y, 40),
+                    1 => bar(c, cx - 20, y, w),
+                    _ => bar(c, cx - w / 2, y, w),
+                }
+            }
+        }
+    }
 }
 
 /// The menu's top bar: a back link on the left and a centred title, over a black rule.
