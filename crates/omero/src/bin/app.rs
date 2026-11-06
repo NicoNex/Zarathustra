@@ -146,7 +146,7 @@ fn main() -> Result<()> {
             let (x, y) = (W / 3, H / 2);
             r.long_press((x, y));
             r.drag((x + 350, y + 120));
-            r.release();
+            r.release(&mut ctx);
             snap(r, &mut ctx, "select.pgm")?;
             if let Some(b) = r.popup_button(Button::Highlight) {
                 r.tap(centre(b), centre(b).0, &mut ctx);
@@ -163,6 +163,17 @@ fn main() -> Result<()> {
             snap(r, &mut ctx, "delete.pgm")?;
             if let Some(b) = r.popup_button(Button::Delete) {
                 r.tap(centre(b), centre(b).0, &mut ctx);
+            }
+            // A long press on one word: its definition card (dictionaries from dev-dicts/),
+            // its second page when it has one, then a tap outside closes it.
+            let word = (W / 2, H / 4);
+            r.long_press(word);
+            r.release(&mut ctx);
+            snap(r, &mut ctx, "define.pgm")?;
+            if r.card_open() {
+                r.tap((W - 100, H - 400), W - 100, &mut ctx);
+                snap(r, &mut ctx, "define2.pgm")?;
+                r.tap(word, word.0, &mut ctx);
             }
             r.menu = true;
             r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -287,7 +298,7 @@ fn main() -> Result<()> {
             if std::mem::take(&mut press).fired {
                 // The end of a long press: show the actions for the selection, if any.
                 if let Screen::Reader(r) = &mut screen {
-                    if let Some(rect) = r.release() {
+                    if let Some(rect) = r.release(&mut ctx) {
                         // Drag frames of this batch are not drawn yet: cover them too.
                         let rect = selection.map_or(rect, |s| s.union(&rect));
                         dev.wait_refresh(marker)?;

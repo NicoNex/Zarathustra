@@ -68,6 +68,9 @@ pub struct Strings {
     pub highlight: &'static str,
     pub delete: &'static str,
     pub cancel: &'static str,
+    /// Definition card (long press on a word).
+    pub no_definition: &'static str,
+    pub no_dictionaries: &'static str,
     pub sleeping: &'static str,
     pub untitled: &'static str,
     /// Book menu (long press on a book) and the book's details screen.
@@ -138,6 +141,8 @@ const IT: Strings = Strings {
     highlight: "Evidenzia",
     delete: "Elimina",
     cancel: "Annulla",
+    no_definition: "Nessuna definizione trovata.",
+    no_dictionaries: "Nessun dizionario installato: copia dizionari StarDict in /mnt/us/dictionaries.",
     sleeping: "In sospensione · premi il tasto di accensione",
     untitled: "Senza titolo",
     resume: "Continua a leggere",
@@ -216,6 +221,8 @@ const EN: Strings = Strings {
     highlight: "Highlight",
     delete: "Delete",
     cancel: "Cancel",
+    no_definition: "No definition found.",
+    no_dictionaries: "No dictionaries installed: copy StarDict dictionaries to /mnt/us/dictionaries.",
     sleeping: "Sleeping · press power to wake",
     untitled: "Untitled",
     resume: "Continue reading",

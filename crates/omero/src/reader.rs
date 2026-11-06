@@ -56,6 +56,8 @@ pub struct Reader {
     pace: Pace,
     /// Saved highlights and the selection in progress.
     hl: Highlights,
+    /// The definition card of the selected word, over the page.
+    card: Option<crate::dict::Card>,
 }
 
 /// A saved reading position: chapter, where the page starts (block and byte offset in the
@@ -109,7 +111,9 @@ impl Reader {
             clock: false,
             pace: Pace::load(&ctx.state_dir),
             hl,
+            card: None,
         };
+        crate::dict::dictionaries(&ctx.state_dir); // opened now, indexed in the background
         r.pace.restart(Instant::now());
         // A cover-only, empty or broken chapter: start at the nearest one with pages.
         let start = r.chapter_index;
@@ -259,7 +263,7 @@ impl Reader {
     /// A swipe up from the bottom edge opens the menu (typography sheet), as the quick panel
     /// opens from the top. True when it did.
     pub fn swipe_up(&mut self, (_, y0): (i32, i32), (_, y): (i32, i32)) -> bool {
-        let opens = !self.menu && self.toc.is_none() && y0 >= H - BOTTOM_EDGE && y0 - y > SWIPE;
+        let opens = !self.menu && self.toc.is_none() && self.card.is_none() && y0 >= H - BOTTOM_EDGE && y0 - y > SWIPE;
         if opens {
             self.hl.dismiss();
             self.menu = true;
@@ -275,11 +279,24 @@ impl Reader {
         if self.menu {
             return self.menu_tap((x0, y0), ctx);
         }
+        if let Some(card) = &mut self.card {
+            let save = match card.tap((x0, y0), x) {
+                crate::dict::Tap::None => return Action::None,
+                crate::dict::Tap::Page(rect) => return Action::Region(rect),
+                crate::dict::Tap::Highlight => true,
+                crate::dict::Tap::Close => false,
+            };
+            let rect = card.area();
+            self.card = None;
+            if save {
+                self.file_highlight();
+            }
+            let sel = self.hl.end_selection(&self.chapter, self.page, self.origin(), save);
+            return Action::Region(rect.union(&sel));
+        }
         if (x - x0).abs() <= SWIPE {
             if self.hl.is_active() {
-                // A highlight may be saved: file it under the chapter being read.
-                let entry = self.current_entry().and_then(|i| self.contents.get(i));
-                self.hl.chapter_title = entry.map(|e| e.title.clone());
+                self.file_highlight();
             }
             if let Outcome::Redraw(rect) = self.hl.tap(&self.chapter, self.page, self.origin(), (x0, y0)) {
                 return Action::Region(rect);
@@ -307,6 +324,12 @@ impl Reader {
             self.pace.restart(Instant::now()); // re-reading a page isn't reading speed
         }
         Action::Redraw { turn: Some(forward) }
+    }
+
+    /// A highlight may be saved: file it under the chapter being read.
+    fn file_highlight(&mut self) {
+        let entry = self.current_entry().and_then(|i| self.contents.get(i));
+        self.hl.chapter_title = entry.map(|e| e.title.clone());
     }
 
     fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Action {
@@ -403,7 +426,7 @@ impl Reader {
     /// Long press at `at`: starts a selection on the word there. Returns the screen area to
     /// refresh, `None` when nothing was selected.
     pub fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
-        if self.menu {
+        if self.menu || self.card.is_some() {
             return None;
         }
         outcome_rect(self.hl.long_press(&self.chapter, self.page, self.origin(), at))
@@ -419,9 +442,26 @@ impl Reader {
         self.hl.button(b)
     }
 
-    /// The finger lifted after selecting: shows the highlight actions.
-    pub fn release(&mut self) -> Option<Rect> {
-        outcome_rect(self.hl.release(&self.chapter, self.page, self.origin()))
+    /// The finger lifted after selecting: a single word opens its definition card (which
+    /// offers to highlight it), a longer selection the highlight actions.
+    pub fn release(&mut self, ctx: &mut Ctx) -> Option<Rect> {
+        let origin = self.origin();
+        let word = self.hl.selected_word(&self.chapter);
+        let at = self.hl.selection_rect(&self.chapter, self.page, origin);
+        if let (Some(word), Some(at)) = (word, at) {
+            let dicts = crate::dict::dictionaries(&ctx.state_dir);
+            let lang = self.book.metadata().language.clone();
+            let card = crate::dict::Card::open(dicts, &word, lang.as_deref(), at, &self.prefs, ctx);
+            let rect = card.area().union(&at);
+            self.card = Some(card);
+            return Some(rect);
+        }
+        outcome_rect(self.hl.release(&self.chapter, self.page, origin))
+    }
+
+    /// The definition card is open.
+    pub fn card_open(&self) -> bool {
+        self.card.is_some()
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
@@ -456,6 +496,9 @@ impl Reader {
         self.header(c, ctx);
         self.footer(c, ctx);
         self.hl.render_over(c, ctx);
+        if let Some(card) = &self.card {
+            card.render(c, ctx);
+        }
         if self.menu {
             let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
             let chapter = chapter.or((!self.contents.is_empty()).then_some(""));

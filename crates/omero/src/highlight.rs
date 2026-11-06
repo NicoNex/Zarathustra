@@ -414,6 +414,33 @@ impl Highlights {
         Outcome::Redraw(damage)
     }
 
+    /// The selected word, when the selection is one word (the finger did not drag) with a
+    /// letter in it: what a dictionary can define.
+    pub fn selected_word(&self, chapter: &Chapter) -> Option<String> {
+        let sel = self.selection.as_ref().filter(|s| s.range == s.anchor)?;
+        let block = chapter.blocks.get(sel.range.start.block as usize)?;
+        let word = block.text.get(sel.range.start.offset as usize..sel.range.end.offset as usize)?;
+        word.chars().any(char::is_alphabetic).then(|| word.to_string())
+    }
+
+    /// Screen rectangle of the selection on page `page`.
+    pub fn selection_rect(&self, chapter: &Chapter, page: usize, origin: (i32, i32)) -> Option<Rect> {
+        let (p, sel) = (chapter.pages.get(page)?, self.selection.as_ref()?);
+        Some(self.bounds(p, &chapter.blocks, &sel.range, origin))
+    }
+
+    /// Ends the selection, saving it as a highlight when `save`; the screen area to refresh.
+    pub fn end_selection(&mut self, chapter: &Chapter, page: usize, origin: (i32, i32), save: bool) -> Rect {
+        let rect = self.selection_rect(chapter, page, origin).unwrap_or_default();
+        if let Some(sel) = self.selection.take() {
+            if save {
+                self.save(chapter, page, &sel.range);
+            }
+        }
+        self.popup = None;
+        rect
+    }
+
     /// A tap: a popup button, a tap outside the popup (cancels), or a tap on a saved
     /// highlight (opens its popup). Anything else is the reader's.
     pub fn tap(&mut self, chapter: &Chapter, page: usize, origin: (i32, i32), (x, y): (i32, i32)) -> Outcome {
