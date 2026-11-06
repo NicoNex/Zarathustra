@@ -126,6 +126,11 @@ impl Book {
         }
     }
 
+    /// Chapter `i`'s document, parsed but neither styled nor laid out (for search).
+    pub fn chapter_dom(&self, i: usize) -> Result<Dom, BookError> {
+        self.read_dom(self.chapters.get(i).ok_or(BookError::NoChapter(i))?)
+    }
+
     /// The first listed author.
     pub fn author(&self) -> Option<&str> {
         self.metadata.authors.first().map(String::as_str)
