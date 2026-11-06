@@ -22,6 +22,8 @@ pub struct Settings {
     pub lang: Lang,
     /// Page turns between full (flashing) refreshes that clear e-ink ghosting.
     pub flash_every: u8,
+    /// The home's first page quotes a highlight (else shows the reading figures).
+    pub home_quotes: bool,
 }
 
 impl Default for Settings {
@@ -35,6 +37,7 @@ impl Default for Settings {
             warmth: 0,
             lang: Lang::It,
             flash_every: 8,
+            home_quotes: true,
         }
     }
 }
@@ -76,6 +79,7 @@ impl Settings {
                 "brightness" => percent(&mut s.brightness),
                 "warmth" => percent(&mut s.warmth),
                 "lang" => s.lang = Lang::from_code(value).unwrap_or(s.lang),
+                "home_quotes" => flag(&mut s.home_quotes),
                 "flash_every" => {
                     s.flash_every = value.parse().ok().filter(|n| (1..=100).contains(n)).unwrap_or(s.flash_every)
                 }
@@ -86,12 +90,21 @@ impl Settings {
     }
 
     pub fn to_text(&self) -> String {
-        let Settings { swipe_animation, clock, auto_warmth, night_warmth, brightness, warmth, lang, flash_every } =
-            self;
+        let Settings {
+            swipe_animation,
+            clock,
+            auto_warmth,
+            night_warmth,
+            brightness,
+            warmth,
+            lang,
+            flash_every,
+            home_quotes,
+        } = self;
         format!(
             "swipe_animation={swipe_animation}\nclock={clock}\nauto_warmth={auto_warmth}\n\
              night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\nlang={}\n\
-             flash_every={flash_every}\n",
+             flash_every={flash_every}\nhome_quotes={home_quotes}\n",
             lang.code()
         )
     }
@@ -118,6 +131,7 @@ mod tests {
             warmth: 33,
             lang: Lang::En,
             flash_every: 16,
+            home_quotes: false,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let dir = scratch("round-trip");

@@ -141,6 +141,8 @@ pub struct Home {
     quote: Option<(String, String)>,
 }
 
+/// The band under the continue-reading card.
+const BAND_H: i32 = 190;
 /// Longest highlight the first page quotes, in characters: two lines of the band.
 const QUOTE_MAX: usize = 130;
 
@@ -152,19 +154,35 @@ pub enum Band {
 }
 
 /// Today's reading figures and a highlight that changes daily, for the first page.
-fn band_data(ctx: &Ctx) -> (stats::Summary, Option<(String, String)>) {
+/// The quote comes from `current` (the book being read: its path and title) when it has a
+/// highlight that fits, else from the recent ones of any book.
+fn band_data(ctx: &Ctx, current: Option<(&Path, &str)>) -> (stats::Summary, Option<(String, String)>) {
     let today = crate::clock::local_now().0;
     let reading = stats::summary(&stats::days(&ctx.state_dir, None), today);
-    let recent = zarathustra_store::Store::open(&ctx.state_dir.join("zarathustra.db"))
-        .and_then(|s| s.recent_annotations(50))
-        .unwrap_or_default();
-    let quotes: Vec<(String, String)> = (recent.into_iter())
-        .filter_map(|(a, title)| Some((a.data.quote?.exact, title.unwrap_or_default())))
-        // Whole sentences that fit the band's two lines (about 65 characters each): a quote
-        // cut short reads badly. None of them: the band shows the reading figures instead.
-        .filter(|(q, _)| q.split_whitespace().count() >= 6 && q.chars().count() <= QUOTE_MAX)
-        .collect();
-    let quote = (!quotes.is_empty()).then(|| quotes[today.rem_euclid(quotes.len() as i64) as usize].clone());
+    // Whole sentences that fit the band's two lines (about 65 characters each): a quote cut
+    // short reads badly. None of them: the band shows the reading figures instead.
+    let fits = |q: &String| q.split_whitespace().count() >= 6 && q.chars().count() <= QUOTE_MAX;
+    let pick = |quotes: Vec<(String, String)>| {
+        (!quotes.is_empty()).then(|| quotes[today.rem_euclid(quotes.len() as i64) as usize].clone())
+    };
+    let quote = zarathustra_store::Store::open(&ctx.state_dir.join("zarathustra.db")).ok().and_then(|s| {
+        let own = current.and_then(|(path, title)| {
+            let marks = s.book_by_path(path).ok()??;
+            let quotes = (s.annotations(marks).ok()?.into_iter())
+                .filter_map(|a| Some((a.data.quote?.exact, title.to_string())))
+                .filter(|(q, _)| fits(q))
+                .collect();
+            pick(quotes)
+        });
+        own.or_else(|| {
+            let recent = s.recent_annotations(50).ok()?;
+            let quotes = (recent.into_iter())
+                .filter_map(|(a, title)| Some((a.data.quote?.exact, title.unwrap_or_default())))
+                .filter(|(q, _)| fits(q))
+                .collect();
+            pick(quotes)
+        })
+    });
     (reading, quote)
 }
 
@@ -259,7 +277,9 @@ impl Home {
             })
             .collect();
         let current = current(&books);
-        let (reading, quote) = band_data(ctx);
+        let card_book = current.as_ref().map(|&(i, _)| (books[i].book.path.as_path(), books[i].book.title.as_str()));
+        let (reading, quote) = band_data(ctx, card_book);
+        let band = if crate::settings::Settings::load(&ctx.state_dir).home_quotes { Band::Quote } else { Band::Stats };
         let view_file = ctx.state_dir.join("home_view.txt");
         // "grid|list [title|author|recent]"
         let view = std::fs::read_to_string(&view_file).unwrap_or_default();
@@ -284,7 +304,7 @@ impl Home {
             query: None,
             keyboard: None,
             dirs: dirs.to_vec(),
-            band: Band::Quote,
+            band,
             reading,
             quote,
         };
@@ -322,7 +342,7 @@ impl Home {
 
     fn chips_top(&self, page: usize) -> i32 {
         if self.card(page) {
-            HEADER + CARD_H + 44
+            HEADER + CARD_H + 24 + BAND_H + 24
         } else {
             HEADER
         }
@@ -461,6 +481,8 @@ impl Home {
 
         if let (true, Some((i, big))) = (self.card(self.page), &self.current) {
             self.continue_card(c, raster, &faces, &self.books[*i], big.as_ref());
+            // Under the book being read, before the library: a quote or the reading figures.
+            self.render_band(c, raster, &faces, Rect::new(PAD, HEADER + CARD_H + 24, W - 2 * PAD, BAND_H));
         }
 
         let chip = Label { face: sans, size: 28.0, ink: INK };
@@ -489,14 +511,6 @@ impl Home {
                 list_row(c, raster, &faces, &self.books[i], r);
             }
         }
-        // The first page's leftover space under the row of books: reading figures or a quote.
-        if let (true, Some(&(_, last))) = (self.card(self.page), items.last()) {
-            let top = last.bottom() + 24;
-            let band = Rect::new(PAD, top, W - 2 * PAD, H - FOOTER - 16 - top);
-            if band.h >= 150 {
-                self.render_band(c, raster, &faces, band);
-            }
-        }
 
         if let Some(kb) = &self.keyboard {
             kb.render(c, ctx);
@@ -515,28 +529,27 @@ impl Home {
 
     fn render_band(&self, c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, r: Rect) {
         let s = t();
-        c.fill(Rect::new(r.x, r.y, r.w, 2), LINE);
         let caption = Label { face: f.sans, size: 24.0, ink: INK_SOFT };
         match (self.band, &self.quote) {
             (Band::Quote, Some((quote, title))) => {
-                caption.draw(c, raster, s.from_highlights, r.x as f32, r.y + 50);
+                caption.draw(c, raster, s.from_highlights, r.x as f32, r.y + 34);
                 let text = Label { face: f.serif, size: 34.0, ink: INK };
                 let lines = text.wrap(&format!("«{quote}»"), r.w as f32, 2);
                 for (i, line) in lines.iter().enumerate() {
-                    text.draw(c, raster, line, r.x as f32, r.y + 104 + i as i32 * 48);
+                    text.draw(c, raster, line, r.x as f32, r.y + 86 + i as i32 * 46);
                 }
                 let by = caption.fit(&format!("— {title}"), r.w as f32);
-                caption.draw(c, raster, &by, r.x as f32, r.y + 112 + lines.len() as i32 * 48);
+                caption.draw(c, raster, &by, r.x as f32, r.y + 92 + lines.len() as i32 * 46);
             }
             _ => {
-                caption.draw(c, raster, s.your_reading, r.x as f32, r.y + 50);
+                caption.draw(c, raster, s.your_reading, r.x as f32, r.y + 34);
                 let sum = &self.reading;
                 let items = [
                     (stats::duration(sum.today), s.today),
                     (stats::duration(sum.week), s.this_week),
                     (sum.streak.to_string(), s.streak),
                 ];
-                stats::figures(c, raster, (f.serif_bold, f.sans), Rect::new(r.x, r.y + 64, r.w, 130), &items);
+                stats::figures(c, raster, (f.serif_bold, f.sans), Rect::new(r.x, r.y + 44, r.w, 130), &items);
             }
         }
     }
@@ -755,6 +768,9 @@ impl Home {
                 self.current = current(&self.books);
             }
         }
+        // Highlights made and minutes read meanwhile: the band's quote and figures.
+        let card = self.current.as_ref().map(|&(i, _)| &self.books[i].book);
+        (self.reading, self.quote) = band_data(ctx, card.map(|b| (b.path.as_path(), b.title.as_str())));
         self.refilter(self.filter, self.page);
     }
 

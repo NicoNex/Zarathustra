@@ -545,6 +545,10 @@ fn main() -> Result<()> {
                 },
                 Action::Settings(s) => {
                     quick.update(s);
+                    if let Screen::Home(h) = &mut screen {
+                        h.band =
+                            if s.home_quotes { zarathustra::home::Band::Quote } else { zarathustra::home::Band::Stats };
+                    }
                     (None, false)
                 }
                 Action::Home => {

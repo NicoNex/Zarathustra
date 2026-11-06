@@ -218,6 +218,7 @@ impl QuickPanel {
     pub fn update(&mut self, from: Settings) {
         self.settings.lang = from.lang;
         self.settings.flash_every = from.flash_every;
+        self.settings.home_quotes = from.home_quotes;
         crate::i18n::set_lang(from.lang);
         self.save();
     }
