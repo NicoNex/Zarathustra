@@ -137,6 +137,18 @@ fn main() -> Result<()> {
         home.tap((100, 75), (100, 75), &ctx);
         shot(&mut home, &mut ctx, Some((722, 118)), "stats.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
+        // Library search: the field and keyboard, then "gra" typed.
+        shot(&mut home, &mut ctx, Some((620, 118)), "search.pgm")?;
+        let kb = omero::keyboard::Keyboard::default();
+        for ch in "gra".chars() {
+            let key = kb.keys().into_iter().find(|(k, _)| *k == omero::keyboard::Key::Char(ch));
+            if let Some((_, r)) = key {
+                let at = (r.x + r.w / 2, r.y + r.h / 2);
+                home.press(at);
+                home.tap(at, at, &ctx);
+            }
+        }
+        shot(&mut home, &mut ctx, None, "search2.pgm")?;
         if let Screen::Pdf(p) = &mut screen {
             for n in 0..3 {
                 p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -351,13 +363,15 @@ fn main() -> Result<()> {
                     down = Some((t.x, t.y));
                     press = Press { at: Some(Instant::now()), ..Press::default() };
                     // A search keyboard key under the finger inverts at once, black and white.
-                    if let Screen::Reader(r) = &mut screen {
-                        if let Some(rect) = r.press((t.x, t.y)) {
-                            dev.wait_refresh(marker)?;
-                            r.render(&mut dev.canvas(), &mut ctx);
-                            marker =
-                                dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
-                        }
+                    let pressed = match &mut screen {
+                        Screen::Reader(r) => r.press((t.x, t.y)),
+                        Screen::Home(h) => h.press((t.x, t.y)),
+                        Screen::Pdf(_) => None,
+                    };
+                    if let Some(rect) = pressed {
+                        dev.wait_refresh(marker)?;
+                        screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
+                        marker = dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
                     }
                     continue;
                 }

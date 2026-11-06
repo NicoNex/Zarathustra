@@ -8,10 +8,12 @@ use omero_device::{Canvas, Rect};
 use omero_engine::font::{Face, Rasterizer};
 use omero_engine::image::{self, GrayImage};
 use omero_engine::library::{BookEntry, Format, Library, SortBy};
+use omero_engine::search::fold;
 
 use crate::about::About;
 use crate::bookmenu::{self, BookMenu, Item};
 use crate::i18n::t;
+use crate::keyboard::{self, Key, Keyboard};
 use crate::notebook::{self, Notebook};
 use crate::reader::Position;
 use crate::stats::StatsScreen;
@@ -39,6 +41,11 @@ const RADIUS: i32 = 10;
 const EXIT: Rect = Rect { x: W - PAD - 150, y: 82, w: 150, h: 72 };
 const VIEW: Rect = Rect { x: W - PAD - 150 - 32 - 192, y: 82, w: 192, h: 72 };
 const STATS: Rect = Rect { x: VIEW.x - 32 - 72, y: 82, w: 72, h: 72 };
+const SEARCH: Rect = Rect { x: STATS.x - 32 - 72, y: 82, w: 72, h: 72 };
+/// The search field, over the header's title and buttons while searching.
+const FIELD: Rect = Rect { x: PAD, y: 82, w: W - 2 * PAD, h: 72 };
+const CLEAR: Rect = Rect { x: FIELD.x + FIELD.w - 96, y: FIELD.y, w: 96, h: FIELD.h };
+const MAX_QUERY: usize = 40;
 /// Progress from which a book counts as read.
 const FINISHED: f32 = 0.99;
 
@@ -109,6 +116,10 @@ pub struct Home {
     view_file: PathBuf,
     /// A book's highlights over the library: index into `books`, the list.
     overlay: Option<Overlay>,
+    /// Searching the library: the text typed (titles and authors containing it are shown).
+    query: Option<String>,
+    /// The keyboard, up while typing the query.
+    keyboard: Option<Keyboard>,
 }
 
 fn cover(thumb: Option<&Path>, (w, h): (i32, i32)) -> Option<GrayImage> {
@@ -168,6 +179,8 @@ impl Home {
             page: 0,
             view_file,
             overlay: None,
+            query: None,
+            keyboard: None,
         };
         home.set_filter(Filter::All);
         home
@@ -175,8 +188,14 @@ impl Home {
 
     fn set_filter(&mut self, filter: Filter) {
         self.filter = filter;
-        self.shown =
-            (0..self.books.len()).filter(|&i| filter == Filter::All || self.books[i].status() == filter).collect();
+        let query = self.query.as_deref().map(|q| fold(q).trim().to_string()).filter(|q| !q.is_empty());
+        let matches = |b: &Entry| {
+            query.as_ref().is_none_or(|q| fold(&format!("{} {}", b.book.title, b.author())).contains(q.as_str()))
+        };
+        self.shown = (0..self.books.len())
+            .filter(|&i| filter == Filter::All || self.books[i].status() == filter)
+            .filter(|&i| matches(&self.books[i]))
+            .collect();
         let books = &self.books;
         match self.sort {
             Sort::Title => {}
@@ -192,7 +211,7 @@ impl Home {
 
     /// The "continue reading" card shows on the first page only, leaving later pages to covers.
     fn card(&self, page: usize) -> bool {
-        page == 0 && self.current.is_some()
+        page == 0 && self.current.is_some() && self.query.is_none()
     }
 
     fn chips_top(&self, page: usize) -> i32 {
@@ -209,7 +228,8 @@ impl Home {
 
     /// Books that fit on `page`.
     fn capacity(&self, page: usize) -> usize {
-        let height = H - FOOTER - self.items_top(page);
+        let bottom = if self.keyboard.is_some() { H - keyboard::KEYBOARD_H } else { H - FOOTER };
+        let height = bottom - self.items_top(page);
         if self.grid {
             ((height / CELL_H).max(1) * COLS) as usize
         } else {
@@ -287,12 +307,45 @@ impl Home {
         };
         let faces = Faces { serif, serif_bold, sans, sans_bold };
 
-        Label { face: serif_bold, size: 66.0, ink: INK }.draw(c, raster, t().library, PAD as f32, 150);
-        self.view_toggle(c);
-        stats_button(c);
-        rounded_outline(c, EXIT, EXIT.h / 2, 3, INK, PAPER);
-        let exit = Label { face: sans, size: 30.0, ink: INK };
-        exit.draw_centred(c, raster, t().exit, (EXIT.x + EXIT.w / 2) as f32, EXIT.y + 47);
+        match &self.query {
+            Some(q) => {
+                rounded_outline(c, FIELD, FIELD.h / 2, 3, INK, PAPER);
+                crate::search::icon(c, Rect::new(FIELD.x + 28, FIELD.y + 20, 32, 32), INK, PAPER);
+                let x = (FIELD.x + 84) as f32;
+                let width = (CLEAR.x - FIELD.x - 84) as f32;
+                if q.is_empty() {
+                    Label { face: sans, size: 30.0, ink: INK_SOFT }.draw(
+                        c,
+                        raster,
+                        t().search_library,
+                        x,
+                        FIELD.y + 47,
+                    );
+                } else {
+                    // The end of a long query stays in view.
+                    let text = Label { face: sans, size: 32.0, ink: INK };
+                    let skip = (0..q.len()).filter(|&i| q.is_char_boundary(i)).find(|&i| text.width(&q[i..]) <= width);
+                    text.draw(c, raster, &q[skip.unwrap_or(0)..], x, FIELD.y + 48);
+                }
+                Label { face: sans, size: 40.0, ink: INK }.draw_centred(
+                    c,
+                    raster,
+                    "×",
+                    (CLEAR.x + CLEAR.w / 2) as f32,
+                    CLEAR.y + 50,
+                );
+            }
+            None => {
+                Label { face: serif_bold, size: 66.0, ink: INK }.draw(c, raster, t().library, PAD as f32, 150);
+                self.view_toggle(c);
+                stats_button(c);
+                rounded_outline(c, SEARCH, SEARCH.h / 2, 2, LINE, PAPER);
+                crate::search::icon(c, Rect::new(SEARCH.x + 22, SEARCH.y + 22, 28, 28), INK, PAPER);
+                rounded_outline(c, EXIT, EXIT.h / 2, 3, INK, PAPER);
+                let exit = Label { face: sans, size: 30.0, ink: INK };
+                exit.draw_centred(c, raster, t().exit, (EXIT.x + EXIT.w / 2) as f32, EXIT.y + 47);
+            }
+        }
 
         if let (true, Some((i, big))) = (self.card(self.page), &self.current) {
             self.continue_card(c, raster, &faces, &self.books[*i], big.as_ref());
@@ -324,7 +377,9 @@ impl Home {
             }
         }
 
-        if self.pages() > 1 {
+        if let Some(kb) = &self.keyboard {
+            kb.render(c, ctx);
+        } else if self.pages() > 1 {
             let label = format!("‹   {} / {}   ›", self.page + 1, self.pages());
             soft.draw_centred(c, raster, &label, W as f32 / 2.0, H - FOOTER / 2 + 10);
         }
@@ -525,6 +580,50 @@ impl Home {
         self.page = page.min(self.pages() - 1);
     }
 
+    /// The finger went down: a key of the search keyboard shows pressed. Returns its area.
+    pub fn press(&mut self, (x, y): (i32, i32)) -> Option<Rect> {
+        self.keyboard.as_mut().filter(|_| self.overlay.is_none())?.press(x, y)
+    }
+
+    /// A tap while searching on the field, its clear button or the keyboard; `None` for the
+    /// rest of the screen (chips, books, pages), handled as usual.
+    fn search_tap(&mut self, (x0, y0): (i32, i32)) -> Option<Action> {
+        let q = self.query.as_mut()?;
+        if CLEAR.contains(x0, y0) {
+            self.query = None;
+            self.keyboard = None;
+            self.set_filter(self.filter);
+            return Some(Action::Redraw { turn: None });
+        }
+        if FIELD.contains(x0, y0) {
+            return Some(match self.keyboard {
+                Some(_) => Action::None,
+                None => {
+                    self.keyboard = Some(Keyboard::default());
+                    Action::Redraw { turn: None }
+                }
+            });
+        }
+        let kb = self.keyboard.as_mut().filter(|_| keyboard::area().contains(x0, y0))?;
+        let Some((key, rect)) = kb.tap(x0, y0) else { return Some(Action::None) };
+        match key {
+            Key::Char(c) if q.chars().count() < MAX_QUERY => q.push(c),
+            Key::Space if !q.is_empty() && !q.ends_with(' ') => q.push(' '),
+            Key::Backspace => {
+                q.pop();
+            }
+            Key::Enter => {
+                self.keyboard = None;
+                return Some(Action::Redraw { turn: None });
+            }
+            // The layer switched, a full field or a second space: just the keyboard.
+            _ => return Some(Action::Region(rect)),
+        }
+        self.set_filter(self.filter);
+        // Results and field change above the keyboard: no flash while typing.
+        Some(Action::Region(Rect::new(0, 0, W, H - keyboard::KEYBOARD_H).union(&rect)))
+    }
+
     /// Handles a completed touch from `(x0, y0)` to `(x, y)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), (x, y): (i32, i32), ctx: &Ctx) -> Action {
         if self.overlay.is_some() {
@@ -547,15 +646,24 @@ impl Home {
             return turn(&mut self.page, forward);
         }
         let inside = |r: Rect| r.contains(x0, y0);
-        if inside(STATS) {
+        if self.query.is_some() {
+            if let Some(a) = self.search_tap((x0, y0)) {
+                return a;
+            }
+        } else if inside(SEARCH) {
+            self.query = Some(String::new());
+            self.keyboard = Some(Keyboard::default());
+            self.set_filter(self.filter);
+            return Action::Redraw { turn: None };
+        } else if inside(STATS) {
             let finished = self.books.iter().filter(|b| b.status() == Filter::Finished).count();
             self.overlay = Some(Overlay::Stats(StatsScreen::new(&ctx.state_dir, finished)));
             return Action::Redraw { turn: None };
         }
-        if inside(EXIT) {
+        if inside(EXIT) && self.query.is_none() {
             return Action::Quit;
         }
-        if inside(VIEW) {
+        if inside(VIEW) && self.query.is_none() {
             let grid = x0 < VIEW.x + VIEW.w / 2;
             if grid == self.grid {
                 return Action::None;
