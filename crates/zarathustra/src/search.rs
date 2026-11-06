@@ -94,6 +94,11 @@ impl Search {
         self.results.len().div_ceil(ROWS).max(1)
     }
 
+    /// A finger held on a key: its accents, if any. Returns the area to refresh.
+    pub fn long_press(&mut self, (x, y): (i32, i32)) -> Option<Rect> {
+        self.keyboard.as_mut()?.long_press(x, y)
+    }
+
     /// The finger went down: the key under it shows pressed. Returns the area to refresh.
     pub fn press(&mut self, (x, y): (i32, i32)) -> Option<Rect> {
         self.keyboard.as_mut()?.press(x, y)
@@ -407,11 +412,16 @@ mod tests {
             let r = s.keyboard.as_ref().and_then(|kb| kb.keys().into_iter().find(|&(key, _)| key == k)).expect("key").1;
             (r.x + r.w / 2, r.y + r.h / 2)
         };
-        for k in [Key::Char('p'), Key::Char('è'), Key::Space, Key::Space, Key::Char('a'), Key::Backspace] {
+        for k in [Key::Char('p'), Key::Char(','), Key::Space, Key::Space, Key::Char('a'), Key::Backspace] {
             let at = key(&s, k);
             assert!(matches!(s.tap(at, at.0), Tap::Region(r) if r.contains(at.0, at.1)));
         }
-        assert_eq!(s.query, "pè ");
+        assert_eq!(s.query, "p, ");
+        // Held, e opens its accents; a tap off the strip only closes it.
+        let (e, q) = (key(&s, Key::Char('e')), key(&s, Key::Char('q')));
+        assert!(s.long_press(e).is_some());
+        assert!(matches!(s.tap(q, q.0), Tap::Region(_)));
+        assert_eq!(s.query, "p, ");
         let at = key(&s, Key::Enter);
         assert_eq!(s.tap(at, at.0), Tap::Redraw);
         assert!(s.keyboard.is_none() && s.is_running());

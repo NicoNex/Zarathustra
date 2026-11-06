@@ -70,9 +70,11 @@ impl Press {
     /// otherwise the lift stays a plain tap (menu controls, margins, the popup's buttons).
     fn fire(&mut self, r: &mut Reader, start: (i32, i32), selection: &mut Option<Rect>) {
         self.at = None;
+        let typing = r.typing();
         if let Some(rect) = r.long_press(start) {
             self.fired = true;
-            self.selecting = true;
+            // Accents on the search keyboard are tapped next, not dragged over.
+            self.selecting = !typing;
             *selection = Some(selection.map_or(rect, |s| s.union(&rect)));
         }
     }
@@ -160,6 +162,11 @@ fn main() -> Result<()> {
             }
         }
         shot(&mut home, &mut ctx, None, "search2.pgm")?;
+        // Held, "e" raises its accents strip.
+        if let Some((_, r)) = kb.keys().into_iter().find(|(k, _)| *k == zarathustra::keyboard::Key::Char('e')) {
+            home.long_press((r.x + r.w / 2, r.y + r.h / 2), &ctx);
+        }
+        shot(&mut home, &mut ctx, None, "accents.pgm")?;
         if let Screen::Pdf(p) = &mut screen {
             for n in 0..3 {
                 p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -534,12 +541,17 @@ fn main() -> Result<()> {
                 // turns) the press stays a tap.
                 Screen::Home(h) => {
                     press.at = None;
-                    if let Action::Redraw { .. } = h.long_press(start, &ctx) {
+                    // A book's menu (the whole screen) or a key's accents (their strip).
+                    let rect = match h.long_press(start, &ctx) {
+                        Action::Redraw { .. } => Some(full),
+                        Action::Region(r) => Some(r),
+                        _ => None,
+                    };
+                    if let Some(rect) = rect {
                         press.fired = true;
                         dev.wait_refresh(marker)?;
                         h.render(&mut dev.canvas(), &mut ctx);
-                        marker =
-                            dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
+                        marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                     }
                 }
                 Screen::Pdf(_) => {}

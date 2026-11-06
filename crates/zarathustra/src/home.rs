@@ -535,6 +535,9 @@ impl Home {
         if self.overlay.is_some() {
             return Action::None;
         }
+        if let Some(kb) = self.keyboard.as_mut().filter(|_| keyboard::area().contains(at.0, at.1)) {
+            return kb.long_press(at.0, at.1).map_or(Action::None, Action::Region);
+        }
         let Some((i, anchor)) = self.book_rect_at(at) else { return Action::None };
         let b = &self.books[i];
         let highlights = notebook::load(&ctx.state_dir, &b.book.path).len();

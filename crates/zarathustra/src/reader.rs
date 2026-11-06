@@ -651,6 +651,11 @@ impl Reader {
         }
     }
 
+    /// The search keyboard is up (a long press opens a key's accents, not a selection).
+    pub fn typing(&self) -> bool {
+        self.search_shown()
+    }
+
     /// The search screen is shown over the page.
     fn search_shown(&self) -> bool {
         self.search.as_ref().is_some_and(|s| s.open)
@@ -745,6 +750,9 @@ impl Reader {
     /// Long press at `at`: starts a selection on the word there. Returns the screen area to
     /// refresh, `None` when nothing was selected.
     pub fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
+        if let Some(s) = self.search.as_mut().filter(|s| s.open) {
+            return s.long_press(at);
+        }
         if self.menu || self.toc.is_some() || self.search_shown() || self.note.is_some() || self.card.is_some() {
             return None;
         }
