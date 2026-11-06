@@ -47,6 +47,8 @@ pub struct Kindle {
     touches: Vec<Touch>,
     /// `None` when powerd can't be reached; the device then just never sleeps.
     powerd: Option<power::Powerd>,
+    /// Held for its lifetime: lets powerd honour the power button without the framework.
+    _kaf: Option<power::KafStub>,
     power_events: VecDeque<PowerEvent>,
     /// Set while the sleep screen shows: the light to restore on wake.
     asleep: Option<Option<Light>>,
@@ -70,6 +72,7 @@ impl Kindle {
         // ponytail: one-time bring-up log; drop once more models are verified.
         eprintln!("{} {}x{} rotate={}", model.name, fb.width, fb.height, fb.rotate);
         let powerd = power::Powerd::spawn().map_err(|e| eprintln!("powerd events unavailable: {e}")).ok();
+        let _kaf = power::KafStub::spawn().map_err(|e| eprintln!("kaf stub: {e}")).ok().flatten();
         Ok(Kindle {
             model,
             fb,
@@ -77,6 +80,7 @@ impl Kindle {
             light,
             touches: Vec::new(),
             powerd,
+            _kaf,
             power_events: VecDeque::new(),
             asleep: None,
             idle_reset: None,
