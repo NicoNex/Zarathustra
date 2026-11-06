@@ -809,7 +809,7 @@ impl Reader {
                 search::render_found(c, page, &self.chapter.blocks, found, self.origin());
             }
             let origin = (self.margin_x() as f32, MARGIN_TOP as f32);
-            draw_lines(c, &ctx.fonts, &mut ctx.raster, page, origin, 0);
+            draw_lines(c, &ctx.fonts, &mut ctx.raster, page, origin, self.typo.weight);
         }
         self.header(c, ctx);
         self.footer(c, ctx);
@@ -821,7 +821,7 @@ impl Reader {
         }
         self.hl.render_over(c, ctx);
         if let Some(popup) = &self.note {
-            popup.render(c, ctx);
+            popup.render(c, ctx, self.typo.weight);
         }
         if let Some(card) = &self.card {
             card.render(c, ctx);

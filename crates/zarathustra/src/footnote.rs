@@ -134,7 +134,8 @@ impl Popup {
         Tap::Redraw
     }
 
-    pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+    /// `weight` emboldens the note as the page is (see [`crate::menu::Typography::weight`]).
+    pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx, weight: u8) {
         let r = self.card;
         rounded_rect(c, Rect::new(r.x + SHADOW, r.y + SHADOW, r.w, r.h), RADIUS, INK);
         rounded_outline(c, r, RADIUS, BORDER, INK, PAPER);
@@ -151,7 +152,7 @@ impl Popup {
         cross(c, self.close_button(), 26, 3.0);
 
         if let Some(page) = self.note.pages.get(self.page) {
-            draw_lines(c, fonts, raster, page, ((r.x + PAD) as f32, (r.y + HEADER_H) as f32), 0);
+            draw_lines(c, fonts, raster, page, ((r.x + PAD) as f32, (r.y + HEADER_H) as f32), weight);
         }
         let n = self.pages();
         if n < 2 {

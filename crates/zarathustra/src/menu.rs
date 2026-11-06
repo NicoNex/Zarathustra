@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use zarathustra_device::{Canvas, Rect};
-use zarathustra_engine::font::{Face, Rasterizer};
+use zarathustra_engine::font::{Face, Rasterizer, WEIGHTS};
 use zarathustra_engine::style::css::TextAlign;
 
 use crate::i18n::t;
@@ -46,6 +46,8 @@ pub struct Typography {
     pub margin: usize,
     /// Index into [`ALIGNS`].
     pub align: usize,
+    /// Synthetic emboldening of the book text: a step of `font::WEIGHTS`, 0 = as designed.
+    pub weight: u8,
 }
 
 /// Body text alignment choices, in menu order; named by `Strings::aligns`.
@@ -53,7 +55,7 @@ pub const ALIGNS: [TextAlign; 3] = [TextAlign::Justify, TextAlign::Start, TextAl
 
 impl Default for Typography {
     fn default() -> Self {
-        Typography { size: 3, family: Some("bookerly".into()), spacing: 1, margin: 1, align: 0 }
+        Typography { size: 3, family: Some("bookerly".into()), spacing: 1, margin: 1, align: 0, weight: 0 }
     }
 }
 
@@ -72,6 +74,7 @@ impl Typography {
                 "spacing" => t.spacing = index(SPACINGS.len()).unwrap_or(t.spacing),
                 "margin" => t.margin = index(MARGINS.len()).unwrap_or(t.margin),
                 "align" => t.align = index(ALIGNS.len()).unwrap_or(t.align),
+                "weight" => t.weight = index(WEIGHTS.len()).map_or(t.weight, |i| i as u8),
                 // Before center alignment: justify=false meant left.
                 "justify" => t.align = usize::from(v.trim() == "false"),
                 "family" => t.family = Some(v.trim().to_lowercase()).filter(|f| !f.is_empty()),
@@ -84,8 +87,8 @@ impl Typography {
     pub fn save(&self, state_dir: &Path) {
         let family = self.family.as_deref().unwrap_or("");
         let text = format!(
-            "size={}\nfamily={family}\nspacing={}\nmargin={}\nalign={}\n",
-            self.size, self.spacing, self.margin, self.align
+            "size={}\nfamily={family}\nspacing={}\nmargin={}\nalign={}\nweight={}\n",
+            self.size, self.spacing, self.margin, self.align, self.weight
         );
         if let Err(e) = crate::write_atomic(&Self::path(state_dir), text) {
             eprintln!("typography: {e}");
@@ -117,6 +120,8 @@ pub enum Control {
     Search,
     Smaller,
     Larger,
+    Lighter,
+    Heavier,
     /// The previous (false) or next (true) font.
     Font(bool),
     Spacing(usize),
@@ -138,6 +143,7 @@ struct Layout {
     contents: Rect,
     scrubber: Rect,
     size: Rect,
+    weight: Rect,
     font: Rect,
     spacing: Rect,
     margin: Rect,
@@ -146,7 +152,8 @@ struct Layout {
 
 impl Layout {
     fn new() -> Layout {
-        let height = SHEET_PAD_TOP + CONTENTS_H + ROW_GAP + SCRUB_H + ROW_GAP + 2 * ROW_H + ROW_GAP + SHEET_PAD_BOTTOM;
+        let height =
+            SHEET_PAD_TOP + CONTENTS_H + ROW_GAP + SCRUB_H + ROW_GAP + 3 * ROW_H + 2 * ROW_GAP + SHEET_PAD_BOTTOM;
         let top = H - height;
         let w = W - 2 * PAD;
         // Columns of a row: `n` side by side across the sheet.
@@ -161,24 +168,46 @@ impl Layout {
         let scrubber = Rect::new(PAD - 22, y, W - 2 * (PAD - 22), SCRUB_H);
         y += SCRUB_H + ROW_GAP;
         let mut text = cols(y, 2);
-        let (size, font) = (text.next().unwrap_or_default(), text.next().unwrap_or_default());
+        let (size, weight) = (text.next().unwrap_or_default(), text.next().unwrap_or_default());
+        y += ROW_H + ROW_GAP;
+        let font = Rect::new(PAD, y, w, ROW_H);
         let mut page = cols(y + ROW_H + ROW_GAP, 3);
         let (spacing, margin, align) =
             (page.next().unwrap_or_default(), page.next().unwrap_or_default(), page.next().unwrap_or_default());
-        Layout { top, contents, scrubber, size, font, spacing, margin, align }
+        Layout { top, contents, scrubber, size, weight, font, spacing, margin, align }
     }
+}
+
+/// The font row: narrow ‹ and › at the ends, the name between.
+fn font_segments(r: Rect) -> [Rect; 3] {
+    let arrow = 140;
+    [
+        Rect::new(r.x, r.y, arrow, r.h),
+        Rect::new(r.x + arrow, r.y, r.w - 2 * arrow, r.h),
+        Rect::new(r.right() - arrow, r.y, arrow, r.h),
+    ]
+}
+
+/// Outlines the font row as one control, with dividers after ‹ and before ›.
+fn draw_segments(c: &mut Canvas, r: Rect) {
+    segmented(c, r, 1, None);
+    let [_, mid, _] = font_segments(r);
+    c.fill(Rect::new(mid.x, r.y, 2, r.h), INK);
+    c.fill(Rect::new(mid.right() - 2, r.y, 2, r.h), INK);
 }
 
 /// Every control with its rectangle, top to bottom.
 pub fn controls() -> Vec<(Control, Rect)> {
     let l = Layout::new();
-    let (size, font) = (segments(l.size, 3), segments(l.font, 3));
+    let (size, weight, font) = (segments(l.size, 3), segments(l.weight, 3), font_segments(l.font));
     let mut out = vec![
         (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
         (Control::Search, SEARCH),
         (Control::Contents, l.contents),
         (Control::Smaller, size[0]),
         (Control::Larger, size[2]),
+        (Control::Lighter, weight[0]),
+        (Control::Heavier, weight[2]),
         (Control::Font(false), font[0]),
         // The name steps forward too: the bigger target for the common move.
         (Control::Font(true), font[1].union(&font[2])),
@@ -251,15 +280,29 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     let value = format!("{} / {}", typo.size + 1, SIZES.len());
     Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &value, segs[1]);
 
+    // Weight: − and + around a live "Aa" in the reading face at the current weight.
+    let segs = segmented(c, l.weight, 3, None);
+    let sign = |c: &mut Canvas, r: Rect, plus: bool| {
+        let (cx, cy, arm) = (r.x + r.w / 2, r.y + r.h / 2, 14);
+        c.fill(Rect::new(cx - arm, cy - 2, 2 * arm, 4), INK);
+        if plus {
+            c.fill(Rect::new(cx - 2, cy - arm, 4, 2 * arm), INK);
+        }
+    };
+    sign(c, segs[0], false);
+    sign(c, segs[2], true);
+    let f = &typo.family;
+    let reading = f.as_ref().and_then(|f| fonts.pick(std::slice::from_ref(f), 400, false)).unwrap_or(sans);
+    Label { face: reading, size: 40.0, ink: INK }.centered_weighted(c, raster, "Aa", segs[1], typo.weight);
+
     // Font: ‹ name ›, the name set in its own face.
-    let segs = segmented(c, l.font, 3, None);
+    draw_segments(c, l.font);
+    let segs = font_segments(l.font);
     let chevron = Label { face: sans_bold, size: 40.0, ink: INK };
     chevron.centered(c, raster, "‹", segs[0]);
     chevron.centered(c, raster, "›", segs[2]);
-    let f = &typo.family;
-    let face = f.as_ref().and_then(|f| fonts.pick(std::slice::from_ref(f), 400, false)).unwrap_or(sans);
     let name = f.as_deref().map_or(t().original_font.into(), title_case);
-    Label { face, size: 30.0, ink: INK }.centered(c, raster, &name, segs[1]);
+    Label { face: reading, size: 32.0, ink: INK }.centered(c, raster, &name, segs[1]);
 
     // Layout choices as pictures of the page: what changes is visible without reading.
     for (kind, r, on) in [
@@ -357,6 +400,8 @@ pub fn apply(typo: &mut Typography, ctl: &Control, ctx: &Ctx) -> bool {
         }
         Control::Smaller => typo.size = typo.size.saturating_sub(1),
         Control::Larger => typo.size = (typo.size + 1).min(SIZES.len() - 1),
+        Control::Lighter => typo.weight = typo.weight.saturating_sub(1),
+        Control::Heavier => typo.weight = (typo.weight + 1).min(WEIGHTS.len() as u8 - 1),
         Control::Spacing(i) => typo.spacing = *i,
         Control::Margin(i) => typo.margin = *i,
         Control::Align(i) => typo.align = *i,
@@ -373,7 +418,7 @@ mod tests {
     fn typography_round_trips_and_clamps() {
         let dir = std::env::temp_dir().join(format!("zarathustra-typo-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let t = Typography { size: 5, family: None, spacing: 2, margin: 0, align: 2 };
+        let t = Typography { size: 5, family: None, spacing: 2, margin: 0, align: 2, weight: 3 };
         t.save(&dir);
         assert_eq!(Typography::load(&dir), t);
         std::fs::write(dir.join("typography.txt"), "size=99\nfamily=Baskerville\n").expect("write");

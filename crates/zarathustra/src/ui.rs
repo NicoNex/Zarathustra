@@ -216,10 +216,29 @@ impl Label<'_> {
         self.draw_glyphs(c, raster, &self.shape(text), x, y)
     }
 
+    /// Draws `text` centred in `r`, emboldened by `weight` as book text is (a live sample).
+    pub fn centered_weighted(&self, c: &mut Canvas, raster: &mut Rasterizer, text: &str, r: Rect, weight: u8) {
+        let shaped = self.shape(text);
+        let x = r.x as f32 + (r.w as f32 - advance(&shaped)) / 2.0;
+        self.draw_weighted(c, raster, &shaped, x, self.baseline(r), weight);
+    }
+
     fn draw_glyphs(&self, c: &mut Canvas, raster: &mut Rasterizer, shaped: &[ShapedGlyph], x: f32, y: i32) -> f32 {
+        self.draw_weighted(c, raster, shaped, x, y, 0)
+    }
+
+    fn draw_weighted(
+        &self,
+        c: &mut Canvas,
+        raster: &mut Rasterizer,
+        shaped: &[ShapedGlyph],
+        x: f32,
+        y: i32,
+        weight: u8,
+    ) -> f32 {
         let mut pen = x;
         for g in shaped {
-            let (gx, glyph) = raster.glyph(self.face, g.gid, self.size, pen + g.x_offset);
+            let (gx, glyph) = raster.glyph_weighted(self.face, g.gid, self.size, pen + g.x_offset, weight);
             draw_glyph(c, glyph, gx, y - g.y_offset.round() as i32, self.ink);
             pen += g.x_advance;
         }
