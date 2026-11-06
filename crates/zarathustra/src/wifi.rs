@@ -13,7 +13,7 @@ use zarathustra_device::wifi::{Network, WifiStatus};
 use zarathustra_device::{Canvas, Rect, Wifi};
 
 use crate::i18n::t;
-use crate::keyboard::{Key, Keyboard};
+use crate::keyboard::{Key, Keyboard, Typed};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::ui::{button, rounded_outline, rounded_rect, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
@@ -66,6 +66,8 @@ pub enum Tap {
     None,
     /// Redraw, refreshing this area.
     Redraw(Rect),
+    /// Typing the password: redraw, refreshing what the keyboard says.
+    Typed(Typed),
     /// Back to the quick panel.
     Back,
 }
@@ -196,6 +198,16 @@ impl WifiScreen {
         self.entry.as_mut()?.keyboard.press(x, y)
     }
 
+    /// A finger held on a key of the password keyboard: its accents. The area to refresh.
+    pub fn long_press(&mut self, x: i32, y: i32) -> Option<Rect> {
+        self.entry.as_mut()?.keyboard.long_press(x, y)
+    }
+
+    /// The password keyboard, while it is up.
+    pub fn keyboard(&self) -> Option<&Keyboard> {
+        self.entry.as_ref().map(|e| &e.keyboard)
+    }
+
     pub fn tap(&mut self, x: i32, y: i32) -> Tap {
         if self.entry.is_some() {
             return self.entry_tap(x, y);
@@ -262,7 +274,7 @@ impl WifiScreen {
         let submit = if CONNECT.contains(x, y) {
             true
         } else if e.keyboard.holds(x, y) {
-            let Some((key, rect)) = e.keyboard.tap(x, y) else { return Tap::None };
+            let Some((key, typed)) = e.keyboard.tap(x, y) else { return Tap::None };
             match key {
                 Key::Char(c) if e.password.chars().count() < MAX_PSK => e.password.push(c),
                 Key::Space if e.password.chars().count() < MAX_PSK => e.password.push(' '),
@@ -270,9 +282,10 @@ impl WifiScreen {
                     e.password.pop();
                 }
                 Key::Enter => return self.submit(),
-                _ => return Tap::Redraw(rect),
+                _ => return Tap::Typed(typed),
             }
-            return Tap::Redraw(FIELD.union(&rect));
+            // The connect button greys out or in with the password.
+            return Tap::Typed(typed.and_text(FIELD.union(&CONNECT)));
         } else {
             false
         };
@@ -528,6 +541,21 @@ mod tests {
         settle(&mut s);
         assert!(!s.status.enabled && s.networks.is_empty());
         assert!(matches!(s.tap(100, 60), Tap::Back));
+    }
+
+    #[test]
+    fn the_password_takes_accents_from_a_long_press() {
+        let mut s = screen();
+        let row = WifiScreen::row(s.available_top(), 0);
+        s.tap(centre(row).0, centre(row).1);
+        type_text(&mut s, "caf");
+        let e = s.keyboard().and_then(|kb| kb.keys().into_iter().find(|(k, _)| *k == Key::Char('e')));
+        let (_, e) = e.expect("e");
+        let strip = s.long_press(centre(e).0, centre(e).1).expect("accents strip");
+        // The strip's first key, è, sits at its left end.
+        let (x, y) = (strip.x + 12 + 40, strip.y + 12 + 40);
+        assert!(matches!(s.tap(x, y), Tap::Typed(_)));
+        assert_eq!(s.entry.as_ref().map(|e| e.password.as_str()), Some("cafè"));
     }
 
     #[test]

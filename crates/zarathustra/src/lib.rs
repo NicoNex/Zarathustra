@@ -23,6 +23,7 @@ pub mod sleep;
 pub mod stats;
 pub mod toc;
 pub mod transfer;
+pub mod typing;
 pub mod ui;
 pub mod wifi;
 
@@ -188,6 +189,8 @@ pub enum Action {
     Redraw {
         turn: Option<bool>,
     },
+    /// Typing: redraw the screen into [`typing::Typing::canvas`] and hand it this.
+    Typed(keyboard::Typed),
     /// Redraw the screen but refresh only this area (popups, highlights).
     Region(zarathustra_device::Rect),
     /// Open the book, showing `Landing` first.

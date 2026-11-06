@@ -10,11 +10,13 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use zarathustra::highlight::{Button, LONG_PRESS, SLOP};
 use zarathustra::home::Home;
+use zarathustra::keyboard::{Keyboard, Typed};
 use zarathustra::pdfview::PdfView;
 use zarathustra::quick::{QuickPanel, QuickResult, PANEL};
 use zarathustra::reader::{Reader, HEADER};
 use zarathustra::sleep::render_sleep;
 use zarathustra::toc::Tab;
+use zarathustra::typing::Typing;
 use zarathustra::{Action, Ctx, Landing, H, W};
 use zarathustra_device::{Canvas, Device, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
 use zarathustra_engine::library::Format;
@@ -38,6 +40,15 @@ impl Screen {
                 p.clock = clock;
                 p.render(c, ctx)
             }
+        }
+    }
+
+    /// The keyboard up on the screen, if any.
+    fn keyboard(&self) -> Option<&Keyboard> {
+        match self {
+            Screen::Home(h) => h.keyboard(),
+            Screen::Reader(r) => r.keyboard(),
+            Screen::Pdf(_) => None,
         }
     }
 
@@ -95,6 +106,13 @@ fn go_home(shelf: &mut Option<(Box<Home>, PathBuf)>, ctx: &Ctx) -> Box<Home> {
         }
         None => Box::new(Home::scan(&library_dirs(), ctx)),
     }
+}
+
+/// Before drawing on the panel other than by typing: typing's refreshes over, then the last
+/// refresh from anywhere, so nothing is drawn into an area still refreshing.
+fn ready(dev: &mut dyn Device, typing: &mut Typing, marker: &mut u32) -> std::io::Result<()> {
+    typing.settle(dev, marker)?;
+    dev.wait_refresh(*marker)
 }
 
 fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
@@ -187,6 +205,24 @@ fn main() -> Result<()> {
             press(Key::Char('l'));
             wifi.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
             write_pgm(dir.join("wifi-password.pgm"), &px)?;
+            // The keyboard alone, shift off, once (one tap) and locked (a second quick tap),
+            // then a key held down.
+            let mut kb = Keyboard::default();
+            let centre = |r: Rect| (r.x + r.w / 2, r.y + r.h / 2);
+            let shift = kb.keys().into_iter().find(|(k, _)| *k == Key::Shift).map(|(_, r)| centre(r));
+            for state in ["off", "once", "locked"] {
+                px.fill(255);
+                kb.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+                write_pgm(dir.join(format!("keyboard-shift-{state}.pgm")), &px)?;
+                if let Some((x, y)) = shift {
+                    kb.tap(x, y);
+                }
+            }
+            if let Some((_, r)) = kb.keys().into_iter().find(|(k, _)| *k == Key::Char('g')) {
+                kb.press(centre(r).0, centre(r).1);
+            }
+            kb.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            write_pgm(dir.join("keyboard-pressed.pgm"), &px)?;
         }
         home.tap((900, 800), (300, 800), &ctx); // swipe to the second page
         home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
@@ -373,6 +409,8 @@ fn main() -> Result<()> {
     let mut turns = 0u32;
     let mut down = None;
     let mut press = Press::default();
+    // Keys and the field while typing, refreshed apart and without waiting on each other.
+    let mut typing = Typing::default();
     let mut events = Vec::new();
     let mut asleep = false;
     loop {
@@ -383,6 +421,8 @@ fn main() -> Result<()> {
             (Screen::Reader(_) | Screen::Home(_), Some(at)) if !quick.is_open() => {
                 Some(LONG_PRESS.saturating_sub(at.elapsed()))
             }
+            // The Wi-Fi password's keys have accents too.
+            (_, Some(at)) if quick.keyboard().is_some() => Some(LONG_PRESS.saturating_sub(at.elapsed())),
             _ => None,
         };
         // A search under way only peeks at the input queue between chapters.
@@ -396,12 +436,15 @@ fn main() -> Result<()> {
             Screen::Home(_) => Duration::from_secs(30),
             _ => Duration::from_secs(300),
         };
+        // Typed keys or text waiting for the refresh over them to end.
+        let due = typing.due();
         let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(idle) };
-        dev.wait_events(Some(timeout), &mut events)?;
+        dev.wait_events(Some(due.map_or(timeout, |d| d.min(timeout))), &mut events)?;
+        typing.flush(&mut dev, &mut marker)?;
         let mut power = false;
         while let Some(ev) = dev.power_event() {
             power = true;
-            dev.wait_refresh(marker)?;
+            ready(&mut dev, &mut typing, &mut marker)?;
             match ev {
                 PowerEvent::Sleep => {
                     asleep = true;
@@ -430,18 +473,18 @@ fn main() -> Result<()> {
             press = Press::default();
         }
         // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
-        let periodic = events.is_empty() && long_press.is_none() && !power && !searching;
+        let periodic = events.is_empty() && long_press.is_none() && due.is_none() && !power && !searching;
         // On the home, books that arrived meanwhile.
         if let (true, false, Screen::Home(h)) = (periodic && !quick.is_open(), asleep, &mut screen) {
             if h.refresh(&ctx) {
-                dev.wait_refresh(marker)?;
+                ready(&mut dev, &mut typing, &mut marker)?;
                 h.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
         if periodic && !asleep && !quick.is_open() && quick.settings().clock {
             if let Screen::Reader(_) | Screen::Pdf(_) = screen {
-                dev.wait_refresh(marker)?;
+                ready(&mut dev, &mut typing, &mut marker)?;
                 screen.render(&mut dev.canvas(), &mut ctx, true);
                 marker = dev.refresh(&Refresh { rect: HEADER, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
@@ -459,8 +502,37 @@ fn main() -> Result<()> {
                 Event::Quit => return Ok(()),
             };
             if quick.is_open() {
+                // A finger held on a key of the Wi-Fi password: its accents (below, on the timeout).
+                match t.phase {
+                    Phase::Down => {
+                        down = Some((t.x, t.y));
+                        press = Press { at: Some(Instant::now()), ..Press::default() };
+                    }
+                    Phase::Move => {
+                        if down.is_some_and(|s| (t.x - s.0).abs() > SLOP || (t.y - s.1).abs() > SLOP) {
+                            press.at = None;
+                        }
+                    }
+                    Phase::Up => {
+                        down = None;
+                        // The lift after the accents opened: they are tapped next.
+                        if std::mem::take(&mut press).fired {
+                            continue;
+                        }
+                    }
+                }
                 match quick.touch(t, &mut dev) {
                     QuickResult::None => {}
+                    QuickResult::Pressed(rect) => {
+                        if !quick.keyboard().is_some_and(|kb| kb.draw_key(&mut typing.canvas(), rect)) {
+                            quick.render(&mut typing.canvas(), &mut ctx);
+                        }
+                        typing.typed(&mut dev, &mut marker, Typed::keys(rect))?;
+                    }
+                    QuickResult::Typed(t) => {
+                        quick.render(&mut typing.canvas(), &mut ctx);
+                        typing.typed(&mut dev, &mut marker, t)?;
+                    }
                     QuickResult::Redraw { rect, waveform } => {
                         panel = Some(match panel {
                             // Any settled (non-drag) change in the batch needs the gray waveform.
@@ -488,7 +560,6 @@ fn main() -> Result<()> {
                         repaint = Some(true);
                     }
                 }
-                down = None;
                 continue;
             }
             match t.phase {
@@ -502,9 +573,11 @@ fn main() -> Result<()> {
                         Screen::Pdf(_) => None,
                     };
                     if let Some(rect) = pressed {
-                        dev.wait_refresh(marker)?;
-                        screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
-                        marker = dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
+                        // Copied from the keyboard's own image: nothing else is drawn.
+                        if !screen.keyboard().is_some_and(|kb| kb.draw_key(&mut typing.canvas(), rect)) {
+                            screen.render(&mut typing.canvas(), &mut ctx, quick.settings().clock);
+                        }
+                        typing.typed(&mut dev, &mut marker, Typed::keys(rect))?;
                     }
                     continue;
                 }
@@ -540,7 +613,7 @@ fn main() -> Result<()> {
                     if let Some(rect) = r.release(&mut ctx) {
                         // Drag frames of this batch are not drawn yet: cover them too.
                         let rect = selection.map_or(rect, |s| s.union(&rect));
-                        dev.wait_refresh(marker)?;
+                        ready(&mut dev, &mut typing, &mut marker)?;
                         r.render(&mut dev.canvas(), &mut ctx);
                         marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                     }
@@ -552,7 +625,7 @@ fn main() -> Result<()> {
             // Swipe down from the top edge: the quick-settings panel, on every screen.
             if QuickPanel::opens(start, (t.x, t.y)) {
                 let rect = quick.open(&dev);
-                dev.wait_refresh(marker)?;
+                ready(&mut dev, &mut typing, &mut marker)?;
                 quick.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                 continue;
@@ -589,8 +662,13 @@ fn main() -> Result<()> {
                     }
                     continue;
                 }
+                Action::Typed(t) => {
+                    screen.render(&mut typing.canvas(), &mut ctx, quick.settings().clock);
+                    typing.typed(&mut dev, &mut marker, t)?;
+                    continue;
+                }
                 Action::Region(rect) => {
-                    dev.wait_refresh(marker)?;
+                    ready(&mut dev, &mut typing, &mut marker)?;
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
                     marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                     continue;
@@ -632,7 +710,7 @@ fn main() -> Result<()> {
                     (None, true)
                 }
             };
-            dev.wait_refresh(marker)?;
+            ready(&mut dev, &mut typing, &mut marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             let drawn = t0.elapsed();
             marker = dev.refresh(&Refresh {
@@ -650,8 +728,15 @@ fn main() -> Result<()> {
             eprintln!("drawn in {drawn:?}");
         }
         // A finger held still past the long-press delay (the timeout above woke us).
-        let held = press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) && !quick.is_open();
-        if let Some(start) = down.filter(|_| held) {
+        let held = press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS);
+        if let (Some(start), true, true) = (down, held, quick.is_open()) {
+            press.at = None;
+            if let Some(rect) = quick.long_press(start.0, start.1) {
+                press.fired = true;
+                quick.render(&mut typing.canvas(), &mut ctx);
+                typing.typed(&mut dev, &mut marker, Typed::keys(rect))?;
+            }
+        } else if let Some(start) = down.filter(|_| held) {
             match &mut screen {
                 Screen::Reader(r) => press.fire(r, start, &mut selection),
                 // On a book: its menu, while the finger is still down. Elsewhere (chips, page
@@ -662,11 +747,17 @@ fn main() -> Result<()> {
                     let rect = match h.long_press(start, &ctx) {
                         Action::Redraw { .. } => Some(full),
                         Action::Region(r) => Some(r),
+                        Action::Typed(t) => {
+                            press.fired = true;
+                            h.render(&mut typing.canvas(), &mut ctx);
+                            typing.typed(&mut dev, &mut marker, t)?;
+                            None
+                        }
                         _ => None,
                     };
                     if let Some(rect) = rect {
                         press.fired = true;
-                        dev.wait_refresh(marker)?;
+                        ready(&mut dev, &mut typing, &mut marker)?;
                         h.render(&mut dev.canvas(), &mut ctx);
                         marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                     }
@@ -676,20 +767,20 @@ fn main() -> Result<()> {
         }
         if let (Screen::Home(h), false) = (&mut screen, quick.is_open() || asleep) {
             if h.poll_transfer() {
-                dev.wait_refresh(marker)?;
+                ready(&mut dev, &mut typing, &mut marker)?;
                 h.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
         if let (Screen::Reader(r), false) = (&mut screen, quick.is_open()) {
             if let Some(rect) = r.search_step() {
-                dev.wait_refresh(marker)?;
+                ready(&mut dev, &mut typing, &mut marker)?;
                 r.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
         if let Some(rect) = selection.filter(|r| !r.is_empty()) {
-            dev.wait_refresh(marker)?;
+            ready(&mut dev, &mut typing, &mut marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             // Black-and-white while the finger moves; the gray settles on release.
             marker = dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
@@ -698,7 +789,7 @@ fn main() -> Result<()> {
             panel = Some(panel.map_or((rect, Waveform::Text), |(r, _)| (r.union(&rect), Waveform::Text)));
         }
         if let Some(flash) = repaint {
-            dev.wait_refresh(marker)?;
+            ready(&mut dev, &mut typing, &mut marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             if quick.is_open() {
                 quick.render(&mut dev.canvas(), &mut ctx);
@@ -706,13 +797,13 @@ fn main() -> Result<()> {
             let waveform = if flash { Waveform::Full } else { Waveform::Text };
             marker = dev.refresh(&Refresh { rect: full, waveform, flash, swipe: None })?;
         } else if closed {
-            dev.wait_refresh(marker)?;
+            ready(&mut dev, &mut typing, &mut marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
         } else if let Some((rect, waveform)) = panel.filter(|_| quick.is_open()) {
             // Wait before drawing: the MTK driver reads the framebuffer while an update runs,
             // so drawing into a region still refreshing shows half-drawn gray blocks.
-            dev.wait_refresh(marker)?;
+            ready(&mut dev, &mut typing, &mut marker)?;
             let t0 = Instant::now();
             quick.render(&mut dev.canvas(), &mut ctx);
             marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;

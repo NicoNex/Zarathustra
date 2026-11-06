@@ -14,7 +14,7 @@ use zarathustra_engine::search::fold;
 use crate::about::About;
 use crate::bookmenu::{self, BookMenu, Item};
 use crate::i18n::t;
-use crate::keyboard::{self, Key, Keyboard};
+use crate::keyboard::{self, Key, Keyboard, Typed};
 use crate::notebook::{self, Notebook};
 use crate::prefs::Prefs;
 use crate::reader::Position;
@@ -644,7 +644,7 @@ impl Home {
             return Action::None;
         }
         if let Some(kb) = self.keyboard.as_mut().filter(|kb| kb.holds(at.0, at.1)) {
-            return kb.long_press(at.0, at.1).map_or(Action::None, Action::Region);
+            return kb.long_press(at.0, at.1).map_or(Action::None, |r| Action::Typed(Typed::keys(r)));
         }
         let Some((i, anchor)) = self.book_rect_at(at) else { return Action::None };
         let b = &self.books[i];
@@ -838,6 +838,11 @@ impl Home {
         self.keyboard.as_mut().filter(|_| self.overlay.is_none())?.press(x, y)
     }
 
+    /// The search keyboard, while it is up.
+    pub fn keyboard(&self) -> Option<&Keyboard> {
+        self.keyboard.as_ref().filter(|_| self.overlay.is_none())
+    }
+
     /// A tap while searching on the field, its clear button or the keyboard; `None` for the
     /// rest of the screen (chips, books, pages), handled as usual.
     fn search_tap(&mut self, (x0, y0): (i32, i32)) -> Option<Action> {
@@ -859,7 +864,7 @@ impl Home {
         }
         // The accents strip may stand above the band: its taps are the keyboard's too.
         let kb = self.keyboard.as_mut().filter(|kb| kb.holds(x0, y0))?;
-        let Some((key, rect)) = kb.tap(x0, y0) else { return Some(Action::None) };
+        let Some((key, typed)) = kb.tap(x0, y0) else { return Some(Action::None) };
         match key {
             Key::Char(c) if q.chars().count() < keyboard::MAX_QUERY => q.push(c),
             Key::Space if !q.is_empty() && !q.ends_with(' ') => q.push(' '),
@@ -871,11 +876,11 @@ impl Home {
                 return Some(Action::Redraw { turn: None });
             }
             // The layer switched, a full field or a second space: just the keyboard.
-            _ => return Some(Action::Region(rect)),
+            _ => return Some(Action::Typed(typed)),
         }
         self.set_filter(self.filter);
         // Results and field change above the keyboard: no flash while typing.
-        Some(Action::Region(Rect::new(0, 0, W, H - keyboard::KEYBOARD_H).union(&rect)))
+        Some(Action::Typed(typed.and_text(Rect::new(0, 0, W, H - keyboard::KEYBOARD_H))))
     }
 
     /// Handles a completed touch from `(x0, y0)` to `(x, y)`.
