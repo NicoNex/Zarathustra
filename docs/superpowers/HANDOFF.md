@@ -13,7 +13,7 @@ Usable app on the Kindle: `KINDLE_HOST=192.168.1.113 scripts/deploy.sh` (stops a
 
 Merged and deployed: highlights store + UX (long press, drag, popup; `highlight.rs`), power/sleep screen, menu redesign + TOC (`toc.rs`), reader clock + "min left in chapter" (`pace.rs`), center alignment (`menu::ALIGNS`, `Preferences.align`), frontlight driven by powerd's measured table (`omero-device/src/kindle/pw5-light.txt`, `sysfs::Mix`). Sliders: user confirmed no more gray blocks (fix: wait_refresh BEFORE drawing into the fb). Light mix + center: deployed, NOT yet confirmed by the user.
 
-Review/simplify of d9c7840..HEAD DONE and merged (engine: 9942ffb, 234c71f; shell: b985cbc + shared UI helpers/clock.rs/lazy covers). **Last reviewed: 7069242** (review of 08ca9a6..7069242 merged; f23799f home sort and later not yet). Merged fixes NOT yet deployed (device was offline): deploy and let the user test light mix, center alignment, broken-chapter skip, exact positions, highlight edges.
+Review/simplify of d9c7840..HEAD DONE and merged (engine: 9942ffb, 234c71f; shell: b985cbc + shared UI helpers/clock.rs/lazy covers). **Last reviewed: 2de82c5** (review of 08ca9a6..2de82c5 merged as 9ea4565^; f23799f home sort and later not yet). Merged fixes NOT yet deployed (device was offline): deploy and let the user test light mix, center alignment, broken-chapter skip, exact positions, highlight edges.
 
 ## In flight (2026-11-05 night) — check `git branch | grep worktree-agent` and `git log master..BRANCH`
 
@@ -35,7 +35,7 @@ User asks (2026-11-05): complete reader UI without KOReader-style settings bloat
 3. Merge power/sleep → integrate into app loop per its report.
 4. Reader header: clock (setting exists: `settings.clock`), chapter time-left from reading speed (EWMA), TOC navigation (Mobi/EPUB `toc` already parsed).
 5. Then: kepub/txt/pdf (MuPDF), i18n (Fluent, Italian), launcher for executables, boot without the Amazon framework.
-6. Next review: from 7069242.
+6. Next review: from 2de82c5 (`git diff --shortstat 2de82c5..HEAD -- crates`).
 
 ## Device facts
 
