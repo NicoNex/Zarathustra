@@ -303,11 +303,12 @@ impl QuickPanel {
     pub fn refresh_wifi(&mut self) -> bool {
         let before = self.wifi.clone();
         self.read_wifi();
-        let done = self.wifi.connected.is_some() || !self.wifi.enabled;
-        if done || self.watch.is_some_and(|until| Instant::now() >= until) {
+        let changed = self.wifi != before;
+        // Joined (a new network, maybe replacing the one before) or given up.
+        if (changed && self.wifi.connected.is_some()) || self.watch.is_some_and(|until| Instant::now() >= until) {
             self.watch = None;
         }
-        self.wifi != before
+        changed
     }
 
     /// The tile, to refresh after the radio state changed with the panel open.
@@ -315,9 +316,19 @@ impl QuickPanel {
         (self.open && self.wifi_screen.is_none()).then(|| Tile::Wifi.rect())
     }
 
-    fn watch_wifi(&mut self) {
-        let waiting = self.wifi.enabled && self.wifi.connected.is_none();
+    /// Watches for a network joining: when `joining` (a connection under way, the radio just
+    /// switched on), or while on with none joined.
+    fn watch_wifi(&mut self, joining: bool) {
+        let waiting = joining || (self.wifi.enabled && self.wifi.connected.is_none());
         self.watch = waiting.then(|| Instant::now() + Duration::from_secs(30));
+    }
+
+    /// Leaves the Wi-Fi screen. Its worker may still be connecting: the watch follows it.
+    fn leave_wifi(&mut self) {
+        if let Some(w) = self.wifi_screen.take() {
+            self.wifi = w.status().clone();
+            self.watch_wifi(w.busy());
+        }
     }
 
     /// The keyboard on the panel (the Wi-Fi password's), while it is up.
@@ -345,10 +356,7 @@ impl QuickPanel {
     /// Closes the panel; redraw the screen and refresh the returned rect.
     pub fn close(&mut self) -> Rect {
         self.open = false;
-        if let Some(w) = self.wifi_screen.take() {
-            self.wifi = w.status().clone();
-            self.watch_wifi();
-        }
+        self.leave_wifi();
         self.down = None;
         self.drag = None;
         PANEL
@@ -396,10 +404,7 @@ impl QuickPanel {
                         wifi::Tap::Redraw(rect) => QuickResult::Redraw { rect, waveform: Waveform::Text },
                         wifi::Tap::Typed(t) => QuickResult::Typed(t),
                         wifi::Tap::Back => {
-                            self.wifi = w.status().clone();
-                            self.wifi_screen = None;
-                            // A connection may still be under way on the worker.
-                            self.watch_wifi();
+                            self.leave_wifi();
                             QuickResult::Repaint { flash: false }
                         }
                     }
@@ -456,11 +461,13 @@ impl QuickPanel {
                     self.wifi_screen = Some(WifiScreen::open(w.clone(), self.wifi.clone()));
                     return QuickResult::Redraw { rect: Rect::new(0, 0, W, H), waveform: Waveform::Text };
                 }
-                if let Err(e) = w.set_enabled(!self.wifi.enabled) {
+                let on = !self.wifi.enabled;
+                if let Err(e) = w.set_enabled(on) {
                     eprintln!("quick settings: wifi: {e}");
                 }
                 self.read_wifi();
-                self.watch_wifi();
+                // wifid comes up a moment after the radio: the state read now may lag.
+                self.watch_wifi(on && self.wifi.connected.is_none());
                 return QuickResult::Redraw { rect: r, waveform: Waveform::Text };
             }
             Some(Tile::Transfer) => {
@@ -553,14 +560,6 @@ impl QuickPanel {
                 self.settings.warmth = v;
             }
         }
-    }
-
-    /// Puts the slider levels back on the LEDs: on wake powerd restores its own level, which
-    /// would leave the bar showing one brightness and the screen another.
-    // ponytail: re-applied on Wake and Resumed; if powerd still wins on the device, also set
-    // its `flIntensity` prop to match.
-    pub fn relight(&mut self, dev: &mut dyn Device) {
-        self.apply(dev);
     }
 
     fn apply(&mut self, dev: &mut dyn Device) {
@@ -870,18 +869,6 @@ mod tests {
     }
 
     #[test]
-    fn waking_puts_the_slider_level_back() {
-        let dir = state_dir("wake");
-        let mut dev = Fake::new();
-        let mut q = QuickPanel::new(&dir, &mut dev);
-        // powerd restored its own level while we slept.
-        dev.light = Light { brightness: 80, warmth: Some(0) };
-        q.relight(&mut dev);
-        assert_eq!(dev.light, Light { brightness: 30, warmth: Some(10) });
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
     fn taps_step_toggle_and_close() {
         let dir = state_dir("taps");
         let mut dev = Fake::new();
@@ -950,7 +937,7 @@ mod tests {
         assert_eq!(q.connected(), Some("Casa"), "read at start");
         // The radio just came on, nothing joined yet.
         q.wifi = WifiStatus { enabled: true, connected: None };
-        q.watch_wifi();
+        q.watch_wifi(false);
         assert!(q.watching_wifi());
         assert!(q.refresh_wifi(), "the network joined meanwhile");
         assert_eq!(q.connected(), Some("Casa"));

@@ -138,8 +138,10 @@ impl Typing {
         for f in self.flights.iter().filter(|f| !f.rect.intersect(&rect).is_empty()) {
             dev.wait_refresh(f.marker)?;
         }
+        // Waited for, the overlapping ones go; the others stay until settle() waits for them
+        // too: the durations are estimates, and a slow gray refresh may outlive its own.
+        self.flights.retain(|f| f.rect.intersect(&rect).is_empty());
         let now = Instant::now();
-        self.flights.retain(|f| f.done > now && f.rect.intersect(&rect).is_empty());
         {
             let c = dev.canvas();
             for y in rect.y..rect.bottom() {

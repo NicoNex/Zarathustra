@@ -143,6 +143,14 @@ impl Label<'_> {
     }
 
     /// `text` cut with an ellipsis so it fits in `max_width`.
+    /// The end of `text` that fits in `max_width`: a field's text with the caret in view.
+    // ponytail: measures each suffix in turn, O(n²) shaping; fine for queries and passwords.
+    pub fn fit_tail<'a>(&self, text: &'a str, max_width: f32) -> &'a str {
+        let start =
+            (0..text.len()).filter(|&i| text.is_char_boundary(i)).find(|&i| self.width(&text[i..]) <= max_width);
+        &text[start.unwrap_or(text.len())..]
+    }
+
     pub fn fit(&self, text: &str, max_width: f32) -> String {
         self.cut(text, &self.shape(text), max_width).unwrap_or_else(|| text.to_string())
     }

@@ -37,7 +37,14 @@ impl Prefs {
     fn row(&self, i: usize) -> (&'static str, Vec<String>, usize) {
         let (s, v) = (t(), &self.settings);
         match i {
-            0 => (s.language, vec!["Italiano".into(), "English".into()], usize::from(v.lang == Lang::En)),
+            0 => (
+                s.language,
+                vec![
+                    crate::i18n::strings(Lang::It).language_name.into(),
+                    crate::i18n::strings(Lang::En).language_name.into(),
+                ],
+                usize::from(v.lang == Lang::En),
+            ),
             1 => {
                 let on = FLASHES.iter().position(|&f| f == v.flash_every).unwrap_or(1);
                 (s.full_refresh, FLASHES.iter().map(|f| s.every_pages.replace("{}", &f.to_string())).collect(), on)

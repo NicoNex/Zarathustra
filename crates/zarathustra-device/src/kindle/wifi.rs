@@ -66,6 +66,16 @@ fn field<'a>(r: &'a Record, key: &str) -> Option<&'a str> {
     r.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
 }
 
+/// Refuses what could break out of a quoted value: SSIDs come off the air. Whether
+/// lipc-hash-prop honours `\` escapes is unverified, so quotes, backslashes, braces and
+/// control characters are rejected rather than escaped.
+fn plain(v: &str) -> io::Result<&str> {
+    match v.chars().find(|c| matches!(c, '"' | '\\' | '{' | '}') || c.is_control()) {
+        Some(c) => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unsupported character {c:?}"))),
+        None => Ok(v),
+    }
+}
+
 /// One record in the `{ key = "value", … }` form lipc-hash-prop takes on stdin.
 fn hash_record(fields: &[(&str, &str)]) -> String {
     let quote = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
@@ -158,13 +168,15 @@ impl Wifi for KindleWifi {
     }
 
     fn scan(&self) -> io::Result<Vec<Network>> {
-        // Listen first, then ask: the event can't slip between the two.
+        // Listen first, then ask. spawn() returns at exec, before the listener has subscribed:
+        // give it a moment, or a quick scanComplete slips and the scan waits its full timeout.
         let mut wait = Command::new("lipc-wait-event")
             .args(["-s", &SCAN_TIMEOUT.to_string(), WIFID, "scanComplete,scanFailed"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
+        std::thread::sleep(Duration::from_millis(150));
         if let Err(e) = set("-s", WIFID, "scan", "") {
             wait.kill().ok();
             wait.wait().ok();
@@ -195,7 +207,10 @@ impl Wifi for KindleWifi {
     }
 
     fn connect(&self, ssid: &str, password: Option<&str>) -> io::Result<()> {
-        if !self.saved()?.iter().any(|s| s == ssid) {
+        plain(ssid)?;
+        password.map(plain).transpose()?;
+        let created = !self.saved()?.iter().any(|s| s == ssid);
+        if created {
             let secured = if password.is_some() { "yes" } else { "no" };
             let mut fields = vec![("essid", ssid), ("secured", secured)];
             fields.extend(password.map(|p| ("psk", p)));
@@ -203,15 +218,24 @@ impl Wifi for KindleWifi {
             fields.push(("store_nw_user_pref", "0"));
             write_hash("createProfile", &fields)?;
         }
-        set("-s", CMD, "ensureConnection", &format!("wifi:{ssid}"))?;
-        let start = Instant::now();
-        while start.elapsed() < CONNECT_TIMEOUT {
-            std::thread::sleep(Duration::from_millis(500));
-            if self.status()?.connected.as_deref() == Some(ssid) {
-                return Ok(());
+        let joined = || {
+            set("-s", CMD, "ensureConnection", &format!("wifi:{ssid}"))?;
+            let start = Instant::now();
+            while start.elapsed() < CONNECT_TIMEOUT {
+                std::thread::sleep(Duration::from_millis(500));
+                // wifid can be busy while associating: a failed read is not a failed join.
+                if self.status().is_ok_and(|s| s.connected.as_deref() == Some(ssid)) {
+                    return Ok(());
+                }
             }
+            Err(io::Error::new(io::ErrorKind::TimedOut, format!("{ssid}: not connected after {CONNECT_TIMEOUT:?}")))
+        };
+        let result = joined();
+        // A wrong password must not stay saved: the next tap would reuse it without asking.
+        if result.is_err() && created {
+            self.forget(ssid).ok();
         }
-        Err(io::Error::new(io::ErrorKind::TimedOut, format!("{ssid}: not connected after {CONNECT_TIMEOUT:?}")))
+        result
     }
 
     fn forget(&self, ssid: &str) -> io::Result<()> {
@@ -222,6 +246,15 @@ impl Wifi for KindleWifi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn values_that_could_escape_a_record_are_refused() {
+        assert!(plain("Casa Rossi 5G").is_ok());
+        assert!(plain("caffè·wifi").is_ok());
+        for bad in ["x\", store_nw_user_pref = \"1", "a\\b", "{x}", "a\nb"] {
+            assert!(plain(bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn parses_hash_arrays_leniently() {

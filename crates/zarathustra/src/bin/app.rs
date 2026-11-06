@@ -97,15 +97,17 @@ fn library_dirs() -> Vec<PathBuf> {
 }
 
 /// The home kept on the shelf while reading (brought up to date), or a fresh scan.
-fn go_home(shelf: &mut Option<(Box<Home>, PathBuf)>, ctx: &Ctx) -> Box<Home> {
-    match shelf.take() {
+fn go_home(shelf: &mut Option<(Box<Home>, PathBuf)>, ctx: &Ctx, wifi: bool) -> Box<Home> {
+    let mut home = match shelf.take() {
         Some((mut h, path)) => {
             h.returned(&path, ctx);
             h.refresh(ctx);
             h
         }
         None => Box::new(Home::scan(&library_dirs(), ctx)),
-    }
+    };
+    home.wifi = wifi;
+    home
 }
 
 /// Before drawing on the panel other than by typing: typing's refreshes over, then the last
@@ -421,6 +423,9 @@ fn main() -> Result<()> {
     let full = Rect::new(0, 0, W, H);
     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
     let mut marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
+    // When the home next looks for new books, and the radio state is next read: their own
+    // cadences, whatever else wakes the loop (a Wi-Fi operation polls every 300 ms).
+    let (mut rescan_at, mut wifi_read) = (Instant::now(), Instant::now());
     let mut turns = 0u32;
     let mut down = None;
     let mut press = Press::default();
@@ -479,15 +484,9 @@ fn main() -> Result<()> {
                 }
                 PowerEvent::Wake => {
                     asleep = false;
-                    quick.relight(&mut dev);
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
-                // powerd may put back its own level after a real suspend: ours wins again.
-                PowerEvent::Resumed => {
-                    quick.relight(&mut dev);
-                    continue;
-                }
-                PowerEvent::Suspend { .. } => continue,
+                PowerEvent::Suspend { .. } | PowerEvent::Resumed => continue,
             }
             marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
             down = None;
@@ -496,7 +495,9 @@ fn main() -> Result<()> {
         // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
         let periodic = events.is_empty() && long_press.is_none() && due.is_none() && !power && !searching;
         // On the home, books that arrived meanwhile.
-        if let (true, false, Screen::Home(h)) = (periodic && !quick.is_open(), asleep, &mut screen) {
+        let rescan = periodic && Instant::now() >= rescan_at;
+        if let (true, false, Screen::Home(h)) = (rescan && !quick.is_open(), asleep, &mut screen) {
+            rescan_at = Instant::now() + Duration::from_secs(30);
             if h.refresh(&ctx) {
                 ready(&mut dev, &mut typing, &mut marker)?;
                 h.render(&mut dev.canvas(), &mut ctx);
@@ -513,8 +514,12 @@ fn main() -> Result<()> {
         // Panel changes from the whole batch, drawn once: a drag queues many moves per frame.
         let mut panel: Option<(Rect, Waveform)> = quick.tick(&mut dev).map(|r| (r, Waveform::Text));
         // The radio state: every second while a network joins, every half minute on the home.
-        let home = matches!(screen, Screen::Home(_));
-        if periodic && !asleep && (quick.watching_wifi() || home) && quick.refresh_wifi() {
+        let every = Duration::from_secs(if quick.watching_wifi() { 1 } else { 30 });
+        let read_wifi = periodic && !asleep && wifi_read.elapsed() >= every && (quick.watching_wifi() || home);
+        if read_wifi {
+            wifi_read = Instant::now();
+        }
+        if read_wifi && quick.refresh_wifi() {
             if let Some(tile) = quick.wifi_tile() {
                 panel = Some(panel.map_or((tile, Waveform::Text), |(r, w)| (r.union(&tile), w)));
             } else if let (false, Screen::Home(h)) = (quick.is_open(), &mut screen) {
@@ -586,7 +591,7 @@ fn main() -> Result<()> {
                     QuickResult::Transfer => {
                         // From a book: back to the library first, where the screen lives.
                         if !matches!(screen, Screen::Home(_)) {
-                            screen = Screen::Home(go_home(&mut shelf, &ctx));
+                            screen = Screen::Home(go_home(&mut shelf, &ctx, quick.connected().is_some()));
                         }
                         if let Screen::Home(h) = &mut screen {
                             h.open_transfer();
@@ -740,7 +745,7 @@ fn main() -> Result<()> {
                     (None, false)
                 }
                 Action::Home => {
-                    screen = Screen::Home(go_home(&mut shelf, &ctx));
+                    screen = Screen::Home(go_home(&mut shelf, &ctx, quick.connected().is_some()));
                     (None, true)
                 }
             };

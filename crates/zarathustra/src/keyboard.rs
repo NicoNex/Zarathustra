@@ -215,7 +215,8 @@ impl Keyboard {
 
     /// `key` was typed: a one-shot shift is used up. Whether the letters changed with it.
     fn typed(&mut self, key: Key) -> bool {
-        let used = matches!(key, Key::Char(_)) && self.shift == Shift::Once;
+        // A digit or symbol in between leaves the capital for the next letter.
+        let used = matches!(key, Key::Char(c) if c.is_alphabetic()) && self.shift == Shift::Once;
         if used {
             self.shift = Shift::Off;
         }

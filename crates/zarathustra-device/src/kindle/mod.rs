@@ -53,6 +53,9 @@ pub struct Kindle {
     power_events: VecDeque<PowerEvent>,
     /// Set while the sleep screen shows: the light to restore on wake.
     asleep: Option<Option<Light>>,
+    /// The level last asked for. On wake powerd puts back its own, so reading sysfs at sleep
+    /// could save powerd's level instead of ours.
+    wanted: Option<Light>,
     /// When touches last restarted powerd's idle timeout.
     idle_reset: Option<Instant>,
 }
@@ -84,6 +87,7 @@ impl Kindle {
             _kaf,
             power_events: VecDeque::new(),
             asleep: None,
+            wanted: None,
             idle_reset: None,
         })
     }
@@ -109,7 +113,7 @@ impl Kindle {
     fn on_power(&mut self, ev: PowerEvent) {
         match ev {
             PowerEvent::Sleep if self.asleep.is_none() => {
-                let saved = self.light();
+                let saved = self.wanted.or_else(|| self.light());
                 if let Some(l) = saved {
                     self.set_light(Light { brightness: 0, ..l }).ok();
                 }
@@ -123,6 +127,12 @@ impl Kindle {
                 // with an Up whose Down was never delivered, which callers already ignore.
                 self.touches.clear();
                 self.touch.read(&mut self.touches).ok();
+            }
+            // After a real suspend powerd may have set its level again: ours wins.
+            PowerEvent::Resumed if self.asleep.is_none() => {
+                if let Some(l) = self.wanted {
+                    self.set_light(l).ok();
+                }
             }
             _ => {}
         }
@@ -194,6 +204,7 @@ impl Device for Kindle {
 
     fn set_light(&mut self, light: Light) -> io::Result<()> {
         // Asleep the light stays off; keep the newest level (auto warmth) for the wake.
+        self.wanted = Some(light);
         if let Some(saved) = &mut self.asleep {
             *saved = Some(light);
             return Ok(());

@@ -244,6 +244,7 @@ impl Home {
         let old = std::mem::replace(self, Self::build(library, &self.dirs.clone(), ctx, covers));
         self.query = old.query;
         self.keyboard = old.keyboard;
+        self.wifi = old.wifi;
         self.refilter(old.filter, old.page);
         true
     }
@@ -459,8 +460,7 @@ impl Home {
                 } else {
                     // The end of a long query stays in view.
                     let text = Label { face: sans, size: 32.0, ink: INK };
-                    let skip = (0..q.len()).filter(|&i| q.is_char_boundary(i)).find(|&i| text.width(&q[i..]) <= width);
-                    text.draw(c, raster, &q[skip.unwrap_or(0)..], x, FIELD.y + 48);
+                    text.draw(c, raster, text.fit_tail(q, width), x, FIELD.y + 48);
                 }
                 Label { face: sans, size: 40.0, ink: INK }.draw_centred(
                     c,
@@ -766,6 +766,12 @@ impl Home {
         }
     }
 
+    /// The band's quote and figures for the book on the card.
+    fn reload_band(&mut self, ctx: &Ctx) {
+        let card = self.current.as_ref().map(|&(i, _)| &self.books[i].book);
+        (self.reading, self.quote) = band_data(ctx, card.map(|b| (b.path.as_path(), b.title.as_str())));
+    }
+
     /// Back from reading `path`: its progress (and so the card, filters and order) as saved,
     /// without scanning the library or decoding covers again.
     pub fn returned(&mut self, path: &Path, ctx: &Ctx) {
@@ -776,8 +782,7 @@ impl Home {
             }
         }
         // Highlights made and minutes read meanwhile: the band's quote and figures.
-        let card = self.current.as_ref().map(|&(i, _)| &self.books[i].book);
-        (self.reading, self.quote) = band_data(ctx, card.map(|b| (b.path.as_path(), b.title.as_str())));
+        self.reload_band(ctx);
         self.refilter(self.filter, self.page);
     }
 
@@ -816,8 +821,7 @@ impl Home {
         // The card falls back to the book read before it, not to nothing.
         if self.current.as_ref().is_some_and(|(c, _)| *c == i) {
             self.current = current(&self.books);
-            let card = self.current.as_ref().map(|&(i, _)| &self.books[i].book);
-            (self.reading, self.quote) = band_data(ctx, card.map(|b| (b.path.as_path(), b.title.as_str())));
+            self.reload_band(ctx);
         }
         self.refilter(self.filter, self.page);
     }

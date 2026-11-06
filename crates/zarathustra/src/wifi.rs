@@ -30,6 +30,11 @@ const LIST_TOP: i32 = SWITCH_ROW.y + SWITCH_ROW.h;
 const ACTION_W: i32 = 220;
 /// The longest WPA passphrase.
 const MAX_PSK: usize = 63;
+
+/// A WPA passphrase: 8 to 63 bytes. Anything else fails only after the 30 s connect.
+fn valid_psk(p: &str) -> bool {
+    (8..=MAX_PSK).contains(&p.len())
+}
 /// Password entry: the field (with the show/hide eye at its right end) and the connect button.
 const FIELD: Rect = Rect { x: PAD, y: TOPBAR_H + 100, w: W - 2 * PAD, h: 112 };
 const EYE: Rect = Rect { x: W - PAD - 112, y: TOPBAR_H + 100, w: 112, h: 112 };
@@ -42,9 +47,9 @@ const FULL: Rect = Rect { x: 0, y: 0, w: W, h: H };
 enum Busy {
     /// Status, saved networks and a scan, on opening, a rescan or the radio turned on.
     Scanning,
-    Switching,
     Connecting(String),
-    Forgetting,
+    /// Switching the radio, forgetting a network.
+    Working,
 }
 
 /// What a worker brings back; `None` for what it didn't read (or failed to).
@@ -284,7 +289,17 @@ impl WifiScreen {
         }
         if SWITCH_ROW.contains(x, y) {
             let on = !self.status.enabled;
-            self.start(Busy::Switching, on, move |w| w.set_enabled(on));
+            self.start(Busy::Working, on, move |w| {
+                w.set_enabled(on)?;
+                // The radio and wifid take a moment: scan once they say so, not before.
+                for _ in 0..10 {
+                    if w.status()?.enabled == on {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                Ok(())
+            });
             return Tap::Redraw(FULL);
         }
         let (rows, pages) = self.page();
@@ -299,7 +314,7 @@ impl WifiScreen {
             Row::Saved(i) => {
                 let ssid = self.saved[i].clone();
                 if Self::forget_button(r).contains(x, y) {
-                    self.start(Busy::Forgetting, false, move |w| w.forget(&ssid));
+                    self.start(Busy::Working, false, move |w| w.forget(&ssid));
                 } else if self.status.connected.as_ref() != Some(&ssid) {
                     self.join(ssid, None);
                 } else {
@@ -345,8 +360,8 @@ impl WifiScreen {
         } else if e.keyboard.holds(x, y) {
             let Some((key, typed)) = e.keyboard.tap(x, y) else { return Tap::None };
             match key {
-                Key::Char(c) if e.password.chars().count() < MAX_PSK => e.password.push(c),
-                Key::Space if e.password.chars().count() < MAX_PSK => e.password.push(' '),
+                Key::Char(c) if e.password.len() + c.len_utf8() <= MAX_PSK => e.password.push(c),
+                Key::Space if e.password.len() < MAX_PSK => e.password.push(' '),
                 Key::Backspace => {
                     e.password.pop();
                 }
@@ -367,7 +382,7 @@ impl WifiScreen {
 
     fn submit(&mut self) -> Tap {
         match self.entry.take() {
-            Some(e) if !e.password.is_empty() => {
+            Some(e) if valid_psk(&e.password) => {
                 self.join(e.ssid, Some(e.password));
                 Tap::Redraw(FULL)
             }
@@ -412,17 +427,9 @@ impl WifiScreen {
             let text: String = if e.show { e.password.clone() } else { "•".repeat(e.password.chars().count()) };
             let field = Label { face: sans, size: 40.0, ink: INK };
             let width = (EYE.x - FIELD.x - 48) as f32;
-            // The end of a long password stays in view.
-            let shown: String = {
-                let mut chars: Vec<char> = text.chars().collect();
-                while !chars.is_empty() && field.width(&chars.iter().collect::<String>()) > width {
-                    chars.remove(0);
-                }
-                chars.into_iter().collect()
-            };
-            field.draw(c, raster, &shown, (FIELD.x + 28) as f32, field.baseline(FIELD));
+            field.draw(c, raster, field.fit_tail(&text, width), (FIELD.x + 28) as f32, field.baseline(FIELD));
             eye(c, EYE, e.show);
-            rounded_rect(c, CONNECT, CONNECT.h / 2, if e.password.is_empty() { LINE } else { INK });
+            rounded_rect(c, CONNECT, CONNECT.h / 2, if valid_psk(&e.password) { INK } else { LINE });
             Label { face: sans_bold, size: 34.0, ink: PAPER }.centered(c, raster, s.connect, CONNECT);
             e.keyboard.render(c, ctx);
             return;
@@ -590,7 +597,7 @@ mod tests {
         let row = s.available_row(0);
         assert!(matches!(s.tap(centre(row).0, centre(row).1), Tap::Redraw(_)));
         assert!(s.entry.is_some());
-        type_text(&mut s, "nope");
+        type_text(&mut s, "nopenope");
         s.tap(centre(CONNECT).0, centre(CONNECT).1);
         assert!(s.entry.is_none() && s.busy());
         assert!(s.state_line().contains("Vodafone-A1B2"), "connecting…");

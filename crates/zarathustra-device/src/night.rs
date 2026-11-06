@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{Battery, Canvas, Device, Event, Light, PowerEvent, Refresh, Wifi};
+use crate::{Battery, Canvas, Device, Event, Light, PowerEvent, Rect, Refresh, Wifi};
 
 /// Night mode, process-wide: one panel, one mode. A global so the image blit can ask without
 /// threading a flag through every screen's render.
@@ -34,28 +34,40 @@ pub fn set_night(on: bool) {
 
 pub struct Night {
     inner: Box<dyn Device>,
-    /// The framebuffer is inverted for the refresh with this marker.
-    inverted: Option<u32>,
+    /// Areas inverted for refreshes still to be undone, each with its refresh's marker.
+    inverted: Vec<(Rect, u32)>,
 }
 
 impl Night {
     pub fn new(inner: Box<dyn Device>) -> Night {
-        Night { inner, inverted: None }
+        Night { inner, inverted: Vec::new() }
     }
 
-    fn invert(&mut self) {
-        for p in self.inner.canvas().pixels.iter_mut() {
-            *p = !*p;
+    /// Inverts only the refreshed area: a key press costs its key, not the 2 MB frame.
+    fn invert(&mut self, r: Rect) {
+        let c = self.inner.canvas();
+        let r = r.intersect(&c.bounds());
+        for y in r.y..r.bottom() {
+            let start = y as usize * c.stride + r.x as usize;
+            for p in &mut c.pixels[start..start + r.w as usize] {
+                *p = !*p;
+            }
         }
     }
 
-    /// Back to the pixels as drawn, once the panel has read the inverted ones.
+    /// Back to the pixels as drawn once the panel has read the inverted ones; put back even
+    /// when a wait fails, so drawing never lands on inverted pixels.
+    // ponytail: waits for every pending refresh, so typing in night mode is serialized again;
+    // drawing in night colours (a flag on Canvas) would remove the inversion and the wait.
     fn restore(&mut self) -> io::Result<()> {
-        if let Some(marker) = self.inverted.take() {
-            self.inner.wait_refresh(marker)?;
-            self.invert();
+        let mut result = Ok(());
+        for (r, marker) in std::mem::take(&mut self.inverted) {
+            if let Err(e) = self.inner.wait_refresh(marker) {
+                result = Err(e);
+            }
+            self.invert(r);
         }
-        Ok(())
+        result
     }
 }
 
@@ -82,12 +94,13 @@ impl Device for Night {
             self.restore()?;
             return self.inner.refresh(r);
         }
-        // Already inverted when nothing was drawn since the last refresh.
-        if self.inverted.is_none() {
-            self.invert();
+        // An area still inverted would flip back: undo those first.
+        if self.inverted.iter().any(|(done, _)| !done.intersect(&r.rect).is_empty()) {
+            self.restore()?;
         }
+        self.invert(r.rect);
         let marker = self.inner.refresh(r)?;
-        self.inverted = Some(marker);
+        self.inverted.push((r.rect, marker));
         Ok(marker)
     }
 
