@@ -16,7 +16,7 @@ use crate::notebook::{self, Notebook};
 use crate::reader::Position;
 use crate::stats::StatsScreen;
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
-use crate::{Action, Ctx, H, W};
+use crate::{Action, Ctx, Landing, H, W};
 
 const PAD: i32 = 72;
 const HEADER: i32 = 210;
@@ -413,8 +413,8 @@ impl Home {
         let b = &self.books[i];
         let highlights = notebook::load(&ctx.state_dir, &b.book.path).len();
         let finished = b.status() == Filter::Finished;
-        let pdf = Format::from_path(&b.book.path) == Some(Format::Pdf);
-        let menu = BookMenu::new(&b.book.title, &b.author(), b.progress.map(|p| p.0), finished, highlights, !pdf);
+        let reflowable = b.book.format != Format::Pdf;
+        let menu = BookMenu::new(&b.book.title, &b.author(), b.progress.map(|p| p.0), finished, highlights, reflowable);
         self.overlay = Some(Overlay::Menu(i, menu));
         Action::Redraw { turn: None }
     }
@@ -429,16 +429,18 @@ impl Home {
                 let b = &self.books[i];
                 match menu.tap(start) {
                     bookmenu::Tap::None => return Action::None,
+                    bookmenu::Tap::Redraw => {}
                     bookmenu::Tap::Close => self.overlay = None,
-                    bookmenu::Tap::Item(Item::Open) => {
+                    bookmenu::Tap::Item(it @ (Item::Open | Item::Contents | Item::Bookmarks | Item::Search)) => {
                         self.overlay = None;
-                        return Action::Open(b.book.path.clone());
+                        let landing = match it {
+                            Item::Contents => Landing::Contents,
+                            Item::Bookmarks => Landing::Bookmarks,
+                            Item::Search => Landing::Search,
+                            _ => Landing::Resume,
+                        };
+                        return Action::Open(b.book.path.clone(), landing);
                     }
-                    bookmenu::Tap::Item(it @ (Item::Contents | Item::Bookmarks | Item::Search)) => {
-                        self.overlay = None;
-                        return Action::OpenOn(b.book.path.clone(), it);
-                    }
-                    bookmenu::Tap::Item(Item::Delete) if !menu.armed => menu.armed = true,
                     bookmenu::Tap::Item(Item::Delete) => {
                         self.overlay = None;
                         return self.delete(i, ctx);
@@ -469,7 +471,7 @@ impl Home {
                     let path = self.books[*i].book.path.clone();
                     let data = nb.highlights[n].data.clone();
                     self.overlay = None;
-                    Action::OpenAt(path, Box::new(data))
+                    Action::Open(path, Landing::At(Box::new(data)))
                 }
             },
             Overlay::About(_, about) if about.back(start) => {
@@ -485,8 +487,10 @@ impl Home {
     }
 
     /// Deletes book `i`'s file and its reading position, then reloads the library.
-    // ponytail: highlights and bookmarks stay in the database (they return if the same path
-    // is added again); calibre's sidecars (cover.jpg, metadata.opf) and the folder stay too.
+    // ponytail: highlights and bookmarks stay in the database (they return if a book is added
+    // again at the same path, even a different one); calibre's sidecars (cover.jpg,
+    // metadata.opf) and the folder stay too; the library reloads, so filter and page reset.
+    // Add a `Store::delete_book` and remove the entry in place when that shows up in use.
     fn delete(&self, i: usize, ctx: &Ctx) -> Action {
         let path = &self.books[i].book.path;
         if let Err(e) = std::fs::remove_file(path) {
@@ -581,7 +585,7 @@ impl Home {
             }
         }
         match self.book_at((x0, y0)) {
-            Some(i) => Action::Open(self.books[i].book.path.clone()),
+            Some(i) => Action::Open(self.books[i].book.path.clone(), Landing::Resume),
             None => Action::None,
         }
     }

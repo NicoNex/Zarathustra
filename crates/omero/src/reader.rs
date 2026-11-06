@@ -180,6 +180,11 @@ impl Reader {
         };
         self.page = pos.map_or(0, |p| self.page_of(p));
         self.found = None;
+        self.landed(from);
+    }
+
+    /// A jump from `from` ended here: the back pill returns there, the position is saved.
+    fn landed(&mut self, from: Mark) {
         self.back.jumped(from, self.mark());
         self.save();
     }
@@ -189,7 +194,6 @@ impl Reader {
         Mark { chapter: self.chapter_index, pos: self.start(), page: self.page }
     }
 
-    /// Back to where the reader was before the last jump.
     /// The time on the page shown counts as read (a forward turn, the menu opening, leaving
     /// the book): into the reading speed and today's statistics.
     fn bank_page(&mut self) {
@@ -204,15 +208,24 @@ impl Reader {
         self.menu = true;
     }
 
+    /// A list or the search opened straight from the home closed over the page: reading time
+    /// starts now, not when the book opened. (Under the menu, closing the menu restarts it.)
+    fn resume_pace(&mut self) {
+        if !self.menu {
+            self.pace.restart(Instant::now());
+        }
+    }
+
     /// Closes the menu: reading time starts again from here.
     fn close_menu(&mut self) {
         self.menu = false;
         self.pace.restart(Instant::now());
     }
 
+    /// Back to where the reader was before the last jump.
     fn go_back(&mut self, ctx: &mut Ctx) {
-        self.pace.restart(Instant::now());
         let Some(m) = self.back.take() else { return };
+        self.bank_page();
         self.found = None;
         if m.chapter != self.chapter_index {
             if let Err(e) = self.load(m.chapter, ctx) {
@@ -544,11 +557,11 @@ impl Reader {
     /// Opens the table of contents (the bookmarks, for a book without one) over the page.
     pub fn show_contents(&mut self) {
         let tab = if self.contents.is_empty() { toc::Tab::Bookmarks } else { toc::Tab::Contents };
-        self.toc = Some(Toc::new(self.current_entry(), tab));
+        self.show_toc(tab);
     }
 
-    pub fn show_bookmarks(&mut self) {
-        self.toc = Some(Toc::new(self.current_entry(), toc::Tab::Bookmarks));
+    pub fn show_toc(&mut self, tab: toc::Tab) {
+        self.toc = Some(Toc::new(self.current_entry(), tab));
     }
 
     /// The finger moved from `start` to `at`: while it drags the menu's scrubber, the area
@@ -579,8 +592,7 @@ impl Reader {
             self.page = nav::page_in(within, self.chapter.pages.len());
         }
         self.close_menu();
-        self.back.jumped(from, self.mark());
-        self.save();
+        self.landed(from);
         Action::Redraw { turn: None }
     }
 
@@ -591,6 +603,7 @@ impl Reader {
             toc::Tap::Redraw => Action::Redraw { turn: None },
             toc::Tap::Back => {
                 self.toc = None;
+                self.resume_pace();
                 Action::Redraw { turn: None }
             }
             toc::Tap::Jump(i) => {
@@ -627,8 +640,7 @@ impl Reader {
         }
         self.toc = None;
         self.close_menu();
-        self.back.jumped(from, self.mark());
-        self.save();
+        self.landed(from);
     }
 
     /// Opens the search over the page, on the last results when there are some.
@@ -667,6 +679,7 @@ impl Reader {
             search::Tap::Region(r) => Action::Region(r),
             search::Tap::Close => {
                 s.open = false;
+                self.resume_pace();
                 Action::Redraw { turn: None }
             }
             search::Tap::Open(i) => {
@@ -697,8 +710,7 @@ impl Reader {
         self.toc = None;
         self.page = self.found.as_ref().map_or(0, |r| self.page_of(r.start));
         self.close_menu();
-        self.back.jumped(from, self.mark());
-        self.save();
+        self.landed(from);
     }
 
     /// The table-of-contents entry being read.

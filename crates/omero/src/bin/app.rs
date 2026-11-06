@@ -8,14 +8,14 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use omero::bookmenu::Item;
 use omero::highlight::{Button, LONG_PRESS, SLOP};
 use omero::home::Home;
 use omero::pdfview::PdfView;
 use omero::quick::{QuickPanel, QuickResult, PANEL};
 use omero::reader::{Reader, HEADER};
 use omero::sleep::render_sleep;
-use omero::{first_existing, Action, Ctx, H, W};
+use omero::toc::Tab;
+use omero::{first_existing, Action, Ctx, Landing, H, W};
 use omero_device::{Canvas, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
 use omero_engine::library::Format;
 
@@ -436,35 +436,15 @@ fn main() -> Result<()> {
                     turns += 1;
                     (turn, turns.is_multiple_of(FLASH_EVERY))
                 }
-                Action::Open(path) => match Screen::open(&path, &mut ctx) {
-                    Ok(s) => {
-                        screen = s;
-                        (None, true)
-                    }
-                    Err(e) => {
-                        eprintln!("{e:#}");
-                        continue;
-                    }
-                },
-                Action::OpenAt(path, data) => match Reader::open(&path, &mut ctx) {
-                    Ok(mut r) => {
-                        r.goto(&data, &mut ctx);
-                        screen = Screen::Reader(Box::new(r));
-                        (None, true)
-                    }
-                    Err(e) => {
-                        eprintln!("{e:#}");
-                        continue;
-                    }
-                },
-                Action::OpenOn(path, item) => match Screen::open(&path, &mut ctx) {
+                Action::Open(path, landing) => match Screen::open(&path, &mut ctx) {
                     Ok(mut s) => {
-                        match &mut s {
-                            Screen::Reader(r) if item == Item::Bookmarks => r.show_bookmarks(),
-                            Screen::Reader(r) if item == Item::Search => r.show_search(),
-                            Screen::Reader(r) => r.show_contents(),
-                            Screen::Pdf(p) => p.show_contents(),
-                            Screen::Home(_) => {}
+                        match (&mut s, landing) {
+                            (Screen::Reader(r), Landing::At(data)) => r.goto(&data, &mut ctx),
+                            (Screen::Reader(r), Landing::Contents) => r.show_contents(),
+                            (Screen::Reader(r), Landing::Bookmarks) => r.show_toc(Tab::Bookmarks),
+                            (Screen::Reader(r), Landing::Search) => r.show_search(),
+                            (Screen::Pdf(p), Landing::Contents) => p.show_contents(),
+                            _ => {}
                         }
                         screen = s;
                         (None, true)

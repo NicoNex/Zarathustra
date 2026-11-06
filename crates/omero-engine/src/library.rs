@@ -304,20 +304,21 @@ pub fn plain_text(html: &str) -> String {
 }
 
 /// "tempo.In uno": publishers' stores often drop the paragraph tags of a blurb, gluing a
-/// sentence to the next. A space after `.`, `!` or `?` between a lowercase and an uppercase
-/// letter (abbreviations like "U.S." have an uppercase before the dot and are left alone).
+/// sentence to the next. A space after `.`, `!` or `?` that ends a lowercase word of two or
+/// more letters and starts a capitalised one; abbreviations ("a.C.", "S.p.A.", "Ph.D.",
+/// "U.S.A.") have a single letter or a capital on one side and are left alone.
 fn space_glued_sentences(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len() + 16);
-    for (i, &c) in chars.iter().enumerate() {
+    let mut lower_run = 0; // lowercase letters just before `c`
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
         out.push(c);
-        let glued = matches!(c, '.' | '!' | '?')
-            && i > 0
-            && chars[i - 1].is_lowercase()
-            && chars.get(i + 1).is_some_and(|n| n.is_uppercase());
-        if glued {
+        let mut ahead = chars.clone();
+        let capitalised = ahead.next().is_some_and(char::is_uppercase) && ahead.next().is_some_and(char::is_lowercase);
+        if matches!(c, '.' | '!' | '?') && lower_run >= 2 && capitalised {
             out.push(' ');
         }
+        lower_run = if c.is_lowercase() { lower_run + 1 } else { 0 };
     }
     out
 }
@@ -499,6 +500,8 @@ mod tests {
             plain_text("nel tempo.In uno stile, gli U.S.A. e 3.5!Fine"),
             "nel tempo. In uno stile, gli U.S.A. e 3.5!Fine"
         );
+        let abbrev = "nel 50 a.C. la S.p.A. di un Ph.D. vide Roma";
+        assert_eq!(plain_text(abbrev), abbrev);
     }
     use std::io::{Cursor, Write};
 

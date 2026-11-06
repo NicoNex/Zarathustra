@@ -10,7 +10,9 @@ use crate::{Ctx, H, W};
 
 const PAD: i32 = 72;
 const HEAD_H: i32 = 250;
-const ROW_H: i32 = 104;
+const ROW_H: i32 = 118;
+/// Space under the last row.
+const BOTTOM: i32 = 40;
 const RADIUS: i32 = 36;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +36,8 @@ pub enum Tap {
     Close,
     /// On the sheet but no row.
     None,
+    /// The sheet changed (Delete armed): draw it again.
+    Redraw,
     Item(Item),
 }
 
@@ -44,7 +48,7 @@ pub struct BookMenu {
     highlights: usize,
     rows: Vec<(Item, Rect)>,
     /// Delete was tapped once: the row asks for a second tap.
-    pub armed: bool,
+    armed: bool,
 }
 
 impl BookMenu {
@@ -57,17 +61,25 @@ impl BookMenu {
         highlights: usize,
         reflowable: bool,
     ) -> BookMenu {
-        let items: Vec<Item> = [Item::Open, Item::Contents, Item::Bookmarks, Item::Search]
-            .into_iter()
-            .filter(|&it| reflowable || !matches!(it, Item::Bookmarks | Item::Search))
-            .chain([Item::About, Item::Highlights, Item::MarkRead(true), Item::MarkRead(false), Item::Delete])
-            // Read: not when finished. Unread (starts over): not when never opened.
-            .filter(|&it| it != Item::MarkRead(true) || !finished)
-            .filter(|&it| it != Item::MarkRead(false) || progress.is_some())
-            .collect();
-        let top = H - HEAD_H - items.len() as i32 * ROW_H - 40;
+        let mut items = vec![Item::Open, Item::Contents];
+        if reflowable {
+            items.extend([Item::Bookmarks, Item::Search]);
+        }
+        items.extend([Item::About, Item::Highlights]);
+        if !finished {
+            items.push(Item::MarkRead(true));
+        }
+        if progress.is_some() {
+            // Unread starts over: nothing to undo on a book never opened.
+            items.push(Item::MarkRead(false));
+        }
+        items.push(Item::Delete);
+        // Rows shrink to keep the sheet within the screen's lower three quarters.
+        let n = items.len() as i32;
+        let row_h = ROW_H.min((H - H / 4 - HEAD_H - BOTTOM) / n);
+        let top = H - HEAD_H - n * row_h - BOTTOM;
         let rows = (items.iter().enumerate())
-            .map(|(i, &it)| (it, Rect::new(0, top + HEAD_H + i as i32 * ROW_H, W, ROW_H)))
+            .map(|(i, &it)| (it, Rect::new(0, top + HEAD_H + i as i32 * row_h, W, row_h)))
             .collect();
         BookMenu { title: title.into(), author: author.into(), progress, highlights, rows, armed: false }
     }
@@ -78,11 +90,19 @@ impl BookMenu {
         Rect::new(0, top, W, H - top + RADIUS)
     }
 
-    pub fn tap(&self, (x, y): (i32, i32)) -> Tap {
+    /// `Item(Delete)` only on the second tap of the Delete row.
+    pub fn tap(&mut self, (x, y): (i32, i32)) -> Tap {
         if !self.rect().contains(x, y) {
             return Tap::Close;
         }
-        self.rows.iter().find(|(_, r)| r.contains(x, y)).map_or(Tap::None, |&(it, _)| Tap::Item(it))
+        match self.rows.iter().find(|(_, r)| r.contains(x, y)).map(|&(it, _)| it) {
+            Some(Item::Delete) if !self.armed => {
+                self.armed = true;
+                Tap::Redraw
+            }
+            Some(it) => Tap::Item(it),
+            None => Tap::None,
+        }
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx, cover: Option<&GrayImage>) {
@@ -151,16 +171,18 @@ mod tests {
 
     #[test]
     fn rows_hit_and_outside_closes() {
-        let m = BookMenu::new("Inferno", "Dante", Some(0.4), false, 3, true);
+        let mut m = BookMenu::new("Inferno", "Dante", Some(0.4), false, 3, true);
         let r = m.rect();
         assert!(r.y > H / 4 && r.bottom() > H, "a bottom sheet");
-        let row = |i: usize| m.rows[i].1;
+        let rows = m.rows.clone();
+        let row = |i: usize| rows[i].1;
         let mid = |r: Rect| (r.x + r.w / 2, r.y + r.h / 2);
         assert_eq!(m.tap(mid(row(0))), Tap::Item(Item::Open));
         assert_eq!(m.tap(mid(row(2))), Tap::Item(Item::Bookmarks));
         assert_eq!(m.tap(mid(row(3))), Tap::Item(Item::Search));
         assert_eq!(m.tap(mid(row(6))), Tap::Item(Item::MarkRead(true)));
         assert_eq!(m.tap(mid(row(7))), Tap::Item(Item::MarkRead(false)), "in progress: both");
+        assert_eq!(m.tap(mid(row(8))), Tap::Redraw, "the first tap arms");
         assert_eq!(m.tap(mid(row(8))), Tap::Item(Item::Delete));
         let pdf = BookMenu::new("Inferno", "Dante", None, false, 0, false);
         assert!(!pdf.rows.iter().any(|&(it, _)| it == Item::MarkRead(false)), "never opened");

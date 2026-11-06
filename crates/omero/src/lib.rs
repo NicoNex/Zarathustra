@@ -128,6 +128,17 @@ impl Default for Ctx {
     }
 }
 
+/// What an opened book shows first.
+pub enum Landing {
+    /// The saved position.
+    Resume,
+    /// The page of a saved highlight or bookmark.
+    At(Box<omero_store::AnnotationData>),
+    Contents,
+    Bookmarks,
+    Search,
+}
+
 /// What a screen wants after handling a tap.
 pub enum Action {
     None,
@@ -137,11 +148,8 @@ pub enum Action {
     },
     /// Redraw the screen but refresh only this area (popups, highlights).
     Region(omero_device::Rect),
-    Open(PathBuf),
-    /// Open the book on a saved highlight.
-    OpenAt(PathBuf, Box<omero_store::AnnotationData>),
-    /// Open the book showing its contents, bookmarks or search (the book menu's row).
-    OpenOn(PathBuf, crate::bookmenu::Item),
+    /// Open the book, showing `Landing` first.
+    Open(PathBuf, Landing),
     Home,
     Quit,
 }

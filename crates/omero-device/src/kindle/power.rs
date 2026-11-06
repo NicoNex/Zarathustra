@@ -99,10 +99,10 @@ impl KafStub {
     pub fn spawn() -> io::Result<Option<Self>> {
         let framework = Command::new("lipc-get-prop")
             .args(["com.lab126.kaf", "frameworkStarted"])
-            .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()?;
-        if framework.success() {
+            .output()?;
+        // A framework still starting answers 0: powerd would ignore the button all the same.
+        if framework.status.success() && String::from_utf8_lossy(&framework.stdout).trim() != "0" {
             return Ok(None);
         }
         let mut cmd = Command::new("lua");
