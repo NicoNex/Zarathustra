@@ -62,18 +62,21 @@ static DICTS: OnceLock<Dictionaries> = OnceLock::new();
 /// opened on first use; their index tables are then built (or read back from the state
 /// dir) on a background thread, so the first lookup does not pay for it.
 pub fn dictionaries(state_dir: &Path) -> &'static Dictionaries {
-    DICTS.get_or_init(|| {
+    let mut opened = false;
+    let dicts = DICTS.get_or_init(|| {
+        opened = true;
         let dirs = vec![crate::first_existing(&["/mnt/us/dictionaries", "dev-dicts"])];
         let cache: PathBuf = state_dir.join("dict-cache");
         let d = Dictionaries::open(&dirs, Some(&cache));
         eprintln!("dictionaries: {:?}", d.names().collect::<Vec<_>>());
-        std::thread::spawn(|| {
-            if let Some(d) = DICTS.get() {
-                d.warm();
-            }
-        });
         d
-    })
+    });
+    // Spawned once the cell is set: from inside the initializer, the thread could look
+    // before it is and skip the warm-up.
+    if opened {
+        std::thread::spawn(|| dicts.warm());
+    }
+    dicts
 }
 
 /// What a tap on the open card did.

@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, ErrorKind, Read};
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use super::dictzip::{read_up_to, DictFile};
 
@@ -68,6 +68,9 @@ struct Table {
     cache_dir: Option<PathBuf>,
     /// File offset of every BLOCKth entry.
     sparse: OnceLock<Vec<u32>>,
+    /// Held while `sparse` is built: a lookup during the background warm-up waits for it
+    /// rather than reading the whole index a second time.
+    building: Mutex<()>,
 }
 
 impl Table {
@@ -77,10 +80,22 @@ impl Table {
         if len > u32::MAX as u64 {
             return Err(Error::new(ErrorKind::InvalidData, "index over 4 GiB"));
         }
-        Ok(Table { file, path: path.into(), len, tail, cache_dir: cache_dir.map(Into::into), sparse: OnceLock::new() })
+        Ok(Table {
+            file,
+            path: path.into(),
+            len,
+            tail,
+            cache_dir: cache_dir.map(Into::into),
+            sparse: OnceLock::new(),
+            building: Mutex::new(()),
+        })
     }
 
     fn sparse(&self) -> io::Result<&[u32]> {
+        if let Some(s) = self.sparse.get() {
+            return Ok(s);
+        }
+        let _building = self.building.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(s) = self.sparse.get() {
             return Ok(s);
         }

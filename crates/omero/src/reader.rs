@@ -179,6 +179,7 @@ impl Reader {
             _ => resolve(dom, &map, blocks, data).map(|r| r.start),
         };
         self.page = pos.map_or(0, |p| self.page_of(p));
+        self.found = None;
         self.back.jumped(from, self.mark());
         self.save();
     }
@@ -191,6 +192,7 @@ impl Reader {
     /// Back to where the reader was before the last jump.
     fn go_back(&mut self, ctx: &mut Ctx) {
         let Some(m) = self.back.take() else { return };
+        self.found = None;
         if m.chapter != self.chapter_index {
             if let Err(e) = self.load(m.chapter, ctx) {
                 return eprintln!("chapter {}: {e:#}", m.chapter);
@@ -218,6 +220,8 @@ impl Reader {
         self.chapter_index = i;
         self.page = 0;
         self.note = None;
+        // The card belongs to the selection `chapter_loaded` drops.
+        self.card = None;
         let spine = self.book.spine.get(i).copied().unwrap_or(i);
         let spine = u32::try_from(spine).unwrap_or(u32::MAX);
         self.hl.chapter_loaded(&self.chapter, spine);
@@ -341,7 +345,7 @@ impl Reader {
 
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
-        if self.search.as_ref().is_some_and(|s| s.open) {
+        if self.search_shown() {
             return self.search_tap((x0, y0), x, ctx);
         }
         if self.toc.is_some() {
@@ -527,8 +531,12 @@ impl Reader {
     /// The finger moved from `start` to `at`: while it drags the menu's scrubber, the area
     /// to redraw (the scrubber); `None` otherwise or when nothing changed.
     pub fn scrub(&mut self, start: (i32, i32), (x, _): (i32, i32), ctx: &Ctx) -> Option<Rect> {
+        if !self.menu || self.toc.is_some() || self.search_shown() {
+            return None;
+        }
+        // Checked after the flags: it lays the sheet out, and this runs on every finger move.
         let r = menu::scrubber(ctx);
-        if !self.menu || self.toc.is_some() || !r.contains(start.0, start.1) {
+        if !r.contains(start.0, start.1) {
             return None;
         }
         let f = nav::fraction(r, x);
@@ -539,6 +547,7 @@ impl Reader {
     /// and the page as far into it, and closes the menu.
     fn scrub_to(&mut self, x: i32, ctx: &mut Ctx) -> Action {
         self.scrub = None;
+        self.found = None;
         let from = self.mark();
         let (chapter, within) = nav::target(nav::fraction(menu::scrubber(ctx), x), self.book.chapters.len());
         if chapter != self.chapter_index && !self.load_readable(chapter, true, ctx) {
@@ -586,6 +595,7 @@ impl Reader {
         let Some(e) = self.contents.get(i).cloned() else { return };
         let (chapter, page) = (self.chapter_index, self.page);
         let from = self.mark();
+        self.found = None;
         if !self.load_readable(e.chapter, true, ctx) {
             self.restore(chapter, page, ctx);
         } else if let Some(f) = e.fragment.as_deref().filter(|_| self.chapter_index == e.chapter) {
@@ -604,6 +614,11 @@ impl Reader {
             Some(s) if !s.results.is_empty() || s.is_running() => s.open = true,
             _ => self.search = Some(Search::new()),
         }
+    }
+
+    /// The search screen is shown over the page.
+    fn search_shown(&self) -> bool {
+        self.search.as_ref().is_some_and(|s| s.open)
     }
 
     /// A search shown is under way: call [`Reader::search_step`] until it is not.
@@ -643,6 +658,7 @@ impl Reader {
     /// Shows the page with search hit `hit`, marked; stays put when its chapter doesn't load.
     fn open_hit(&mut self, hit: &search::Found, ctx: &mut Ctx) {
         let (chapter, page) = (self.chapter_index, self.page);
+        let from = self.mark();
         if hit.chapter != chapter {
             match self.load(hit.chapter, ctx) {
                 Ok(()) if !self.chapter.pages.is_empty() => {}
@@ -658,6 +674,7 @@ impl Reader {
         self.toc = None;
         self.page = self.found.as_ref().map_or(0, |r| self.page_of(r.start));
         self.menu = false;
+        self.back.jumped(from, self.mark());
         self.save();
     }
 
@@ -693,7 +710,7 @@ impl Reader {
     /// Long press at `at`: starts a selection on the word there. Returns the screen area to
     /// refresh, `None` when nothing was selected.
     pub fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
-        if self.menu || self.note.is_some() || self.card.is_some() {
+        if self.menu || self.toc.is_some() || self.search_shown() || self.note.is_some() || self.card.is_some() {
             return None;
         }
         outcome_rect(self.hl.long_press(&self.chapter, self.page, self.origin(), at))
