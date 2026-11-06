@@ -378,6 +378,8 @@ mod tests {
     /// Most marker-like links of the local books open a note. The rest are rightly refused:
     /// back-links in notes files, page-number links of an index, links to headings.
     #[test]
+    // Lays out every chapter of every local book: minutes in a debug build.
+    #[ignore = "slow: cargo test --release -- --ignored dev_books_noterefs"]
     fn dev_books_noterefs_resolve() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         let (mut fonts, mut ts, prefs) = layout_env();
