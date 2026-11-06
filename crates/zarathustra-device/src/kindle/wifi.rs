@@ -55,9 +55,23 @@ fn read_hash(prop: &str) -> io::Result<Vec<Record>> {
     run(Command::new("lipc-hash-prop").args(["-n", WIFID, prop]), None).map(|s| parse_hash_array(&s))
 }
 
-/// Writes a hash-array property, one record given as `{ key = "value", … }` on stdin.
+/// Writes a hash-array property, one record on stdin. The PW5's lipc-hash-prop rejected
+/// `{ key = "value" }` ("unexpected KEY, expecting STRING or INTEGER or HEX"); until the
+/// accepted syntax is known, the likely ones are tried in turn and the first that parses wins.
+// ponytail: up to four tries per call; keep only the one that works once the log says which
+// (`wifi: createProfile syntax N`).
 fn write_hash(prop: &str, fields: &[(&str, &str)]) -> io::Result<()> {
-    run(Command::new("lipc-hash-prop").args([WIFID, prop]), Some(&hash_record(fields))).map(drop)
+    let mut last = io::Error::other("no record");
+    for (n, record) in hash_records(fields).iter().enumerate() {
+        match run(Command::new("lipc-hash-prop").args([WIFID, prop]), Some(record)) {
+            Ok(_) => {
+                eprintln!("wifi: {prop} syntax {n}");
+                return Ok(());
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 type Record = Vec<(String, String)>;
@@ -77,15 +91,21 @@ fn plain(v: &str) -> io::Result<&str> {
 }
 
 /// One record in the `{ key = "value", … }` form lipc-hash-prop takes on stdin.
-/// Integer fields go bare, the rest quoted; values are [`plain`], so nothing needs escaping.
-// ponytail: the stdin syntax is the one MobileRead users feed lipc-hash-prop; unverified on
-// this firmware until a profile is created from Zarathustra.
-fn hash_record(fields: &[(&str, &str)]) -> String {
+/// The candidate syntaxes for one record: bare keys, quoted keys, quoted keys with `:`, bare
+/// keys without commas. Integer fields go bare, the rest quoted; values are [`plain`].
+fn hash_records(fields: &[(&str, &str)]) -> [String; 4] {
     const INTS: [&str; 1] = ["store_nw_user_pref"];
-    let body: Vec<String> = (fields.iter())
-        .map(|(k, v)| if INTS.contains(k) { format!("{k} = {v}") } else { format!("{k} = \"{v}\"") })
-        .collect();
-    format!("{{ {} }}\n", body.join(", "))
+    let record = |quote_keys: bool, eq: &str, sep: &str| {
+        let body: Vec<String> = (fields.iter())
+            .map(|(k, v)| {
+                let key = if quote_keys { format!("\"{k}\"") } else { k.to_string() };
+                let value = if INTS.contains(k) { v.to_string() } else { format!("\"{v}\"") };
+                format!("{key} {eq} {value}")
+            })
+            .collect();
+        format!("{{ {} }}\n", body.join(sep))
+    };
+    [record(false, "=", ", "), record(true, "=", ", "), record(true, ":", ", "), record(false, "=", " ")]
 }
 
 /// The records of `lipc-hash-prop -n` output, as a PW5 (5.16) prints them:
@@ -253,7 +273,8 @@ mod tests {
 
     #[test]
     fn writes_ints_bare_and_strings_quoted() {
-        let rec = hash_record(&[("essid", "Casa"), ("psk", "segreta1"), ("store_nw_user_pref", "0")]);
-        assert_eq!(rec, "{ essid = \"Casa\", psk = \"segreta1\", store_nw_user_pref = 0 }\n");
+        let recs = hash_records(&[("essid", "Casa"), ("store_nw_user_pref", "0")]);
+        assert_eq!(recs[0], "{ essid = \"Casa\", store_nw_user_pref = 0 }\n");
+        assert_eq!(recs[1], "{ \"essid\" = \"Casa\", \"store_nw_user_pref\" = 0 }\n");
     }
 }
