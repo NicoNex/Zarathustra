@@ -2,6 +2,7 @@
 
 mod mtk;
 mod power;
+mod wifi;
 
 use std::collections::VecDeque;
 use std::io;
@@ -213,5 +214,9 @@ impl Device for Kindle {
 
     fn sleep(&mut self) -> io::Result<()> {
         power::set_prop("powerButton", 1)
+    }
+
+    fn wifi(&self) -> Option<std::sync::Arc<dyn crate::Wifi>> {
+        Some(std::sync::Arc::new(wifi::KindleWifi))
     }
 }
