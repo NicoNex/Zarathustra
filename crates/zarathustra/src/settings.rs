@@ -22,6 +22,8 @@ pub struct Settings {
     pub lang: Lang,
     /// Page turns between full (flashing) refreshes that clear e-ink ghosting.
     pub flash_every: u8,
+    /// Night mode: the whole screen inverted, white on black.
+    pub night: bool,
 }
 
 impl Default for Settings {
@@ -35,6 +37,7 @@ impl Default for Settings {
             warmth: 0,
             lang: Lang::It,
             flash_every: 8,
+            night: false,
         }
     }
 }
@@ -72,6 +75,7 @@ impl Settings {
                 "swipe_animation" => flag(&mut s.swipe_animation),
                 "clock" => flag(&mut s.clock),
                 "auto_warmth" => flag(&mut s.auto_warmth),
+                "night" => flag(&mut s.night),
                 "night_warmth" => percent(&mut s.night_warmth),
                 "brightness" => percent(&mut s.brightness),
                 "warmth" => percent(&mut s.warmth),
@@ -86,12 +90,21 @@ impl Settings {
     }
 
     pub fn to_text(&self) -> String {
-        let Settings { swipe_animation, clock, auto_warmth, night_warmth, brightness, warmth, lang, flash_every } =
-            self;
+        let Settings {
+            swipe_animation,
+            clock,
+            auto_warmth,
+            night_warmth,
+            brightness,
+            warmth,
+            lang,
+            flash_every,
+            night,
+        } = self;
         format!(
             "swipe_animation={swipe_animation}\nclock={clock}\nauto_warmth={auto_warmth}\n\
              night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\nlang={}\n\
-             flash_every={flash_every}\n",
+             flash_every={flash_every}\nnight={night}\n",
             lang.code()
         )
     }
@@ -118,6 +131,7 @@ mod tests {
             warmth: 33,
             lang: Lang::En,
             flash_every: 16,
+            night: true,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let dir = scratch("round-trip");

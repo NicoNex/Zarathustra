@@ -715,6 +715,11 @@ impl Home {
         self.refilter(self.filter, self.page);
     }
 
+    /// Opens the send-books screen (from the header, or the quick panel's tile).
+    pub fn open_transfer(&mut self) {
+        self.overlay = Some(Overlay::Transfer(Transfer::open()));
+    }
+
     /// Whether the send-books screen is open (the app then polls it often).
     pub fn transferring(&self) -> bool {
         matches!(self.overlay, Some(Overlay::Transfer(_)))
@@ -805,7 +810,7 @@ impl Home {
             self.set_filter(self.filter);
             return Action::Redraw { turn: None };
         } else if inside(TRANSFER) {
-            self.overlay = Some(Overlay::Transfer(Transfer::open()));
+            self.open_transfer();
             return Action::Redraw { turn: None };
         } else if inside(GEAR) {
             self.overlay = Some(Overlay::Prefs(Prefs::new(crate::settings::Settings::load(&ctx.state_dir))));

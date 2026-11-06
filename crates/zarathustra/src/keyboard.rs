@@ -1,9 +1,9 @@
 //! A compact on-screen keyboard for e-ink: QWERTY with a row of Italian accented vowels, a
-//! numbers-and-symbols layer, backspace, space and a search key. Keys are 100 px tall
-//! (≈ 8.5 mm at 300 dpi); a press inverts only the key under the finger, so feedback is one
-//! small black-and-white refresh.
-// ponytail: no shift: search and library filtering ignore case. Add a shift key (and
-// long-press accents) when the keyboard is used for notes.
+//! numbers-and-symbols layer, a caps key, backspace, space and a search key. Keys are 100 px
+//! tall (≈ 8.5 mm at 300 dpi); a press inverts only the key under the finger, so feedback is
+//! one small black-and-white refresh.
+// ponytail: caps is a toggle (tap again for lower case), no one-shot shift: enough for
+// passwords. Add one-shot shift when the keyboard is used for notes.
 
 use zarathustra_device::{Canvas, Rect};
 
@@ -56,6 +56,8 @@ pub enum Key {
     Space,
     /// Switch between letters and numbers/symbols.
     Layer,
+    /// Capitals on or off (letters only).
+    Shift,
     Enter,
     /// A tap that only closes the accents strip.
     Dismiss,
@@ -64,6 +66,10 @@ pub enum Key {
 #[derive(Debug, Default)]
 pub struct Keyboard {
     symbols: bool,
+    /// Letters type (and show) as capitals.
+    caps: bool,
+    /// The enter key's label; `None` is "Search".
+    pub enter: Option<&'static str>,
     /// The key held down, drawn inverted.
     pressed: Option<Rect>,
     /// The accents strip opened by a long press: each variant with its key.
@@ -95,8 +101,11 @@ impl Keyboard {
             let start = (UNITS - 2 * n) / 2;
             for (i, c) in chars.chars().enumerate() {
                 let u = start + 2 * i as i32;
-                out.push((Key::Char(c), key(row as i32, u, u + 2)));
+                out.push((Key::Char(self.case(c)), key(row as i32, u, u + 2)));
             }
+        }
+        if !self.symbols {
+            out.push((Key::Shift, key(2, 0, 3)));
         }
         out.push((Key::Backspace, key(2, 17, UNITS)));
         // Comma and full stop beside the space, on both layers.
@@ -106,6 +115,15 @@ impl Keyboard {
         out.push((Key::Char('.'), key(3, 13, 15)));
         out.push((Key::Enter, key(3, 15, UNITS)));
         out
+    }
+
+    /// `c` in capitals while caps is on.
+    fn case(&self, c: char) -> char {
+        if self.caps {
+            c.to_uppercase().next().unwrap_or(c)
+        } else {
+            c
+        }
     }
 
     /// The key at `(x, y)`, if any.
@@ -129,7 +147,7 @@ impl Keyboard {
     /// Returns the area to redraw.
     pub fn long_press(&mut self, x: i32, y: i32) -> Option<Rect> {
         let (Key::Char(c), key) = self.hit(x, y)? else { return None };
-        let chars = variants(c);
+        let chars = variants(c.to_lowercase().next().unwrap_or(c));
         if chars.is_empty() {
             return None;
         }
@@ -137,7 +155,8 @@ impl Keyboard {
         let w = unit_x(2) - unit_x(0);
         let x0 = (key.x + key.w / 2 - n * w / 2).clamp(SIDE, W - SIDE - n * w);
         let y = key.y - ROW_PITCH - 8;
-        self.strip = chars.chars().enumerate().map(|(i, v)| (v, Rect::new(x0 + i as i32 * w, y, w, KEY_H))).collect();
+        self.strip =
+            chars.chars().enumerate().map(|(i, v)| (self.case(v), Rect::new(x0 + i as i32 * w, y, w, KEY_H))).collect();
         self.pressed = None;
         Some(self.strip_area().union(&key))
     }
@@ -161,11 +180,12 @@ impl Keyboard {
         }
         let pressed = self.pressed.take();
         let (key, rect) = self.hit(x, y)?;
-        if key == Key::Layer {
-            self.symbols = !self.symbols;
-            return Some((key, area()));
+        match key {
+            Key::Layer => self.symbols = !self.symbols,
+            Key::Shift => self.caps = !self.caps,
+            _ => return Some((key, pressed.map_or(rect, |p| p.union(&rect)))),
         }
-        Some((key, pressed.map_or(rect, |p| p.union(&rect))))
+        Some((key, area()))
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
@@ -179,8 +199,8 @@ impl Keyboard {
             return;
         };
         for (key, r) in self.keys() {
-            // Pressed keys and the search key are solid black; the rest outlined.
-            let on = self.pressed == Some(r) || key == Key::Enter;
+            // Pressed keys, the search key and caps when on are solid black; the rest outlined.
+            let on = self.pressed == Some(r) || key == Key::Enter || (key == Key::Shift && self.caps);
             let ink = if on { PAPER } else { INK };
             button(c, r, on);
             match key {
@@ -194,8 +214,11 @@ impl Keyboard {
                     let text = if self.symbols { "abc" } else { "?123" };
                     Label { face: sans_bold, size: 32.0, ink }.centered(c, raster, text, r);
                 }
-                Key::Enter => Label { face: sans_bold, size: 32.0, ink }.centered(c, raster, t().search, r),
+                Key::Enter => {
+                    Label { face: sans_bold, size: 32.0, ink }.centered(c, raster, self.enter.unwrap_or(t().search), r)
+                }
                 Key::Backspace => backspace(c, r, ink),
+                Key::Shift => shift(c, r, ink),
                 Key::Dismiss => {}
             }
         }
@@ -210,6 +233,15 @@ impl Keyboard {
             }
         }
     }
+}
+
+/// The caps glyph, drawn: an arrow up, a triangle on a stem.
+fn shift(c: &mut Canvas, r: Rect, ink: u8) {
+    let (cx, top) = (r.x + r.w / 2, r.y + r.h / 2 - 24);
+    for dy in 0..22 {
+        c.fill(Rect::new(cx - dy - 1, top + dy, 2 * dy + 2, 1), ink);
+    }
+    c.fill(Rect::new(cx - 9, top + 22, 18, 24), ink);
 }
 
 /// The backspace glyph, drawn: a solid tag pointing left with a cross cut out of it.
@@ -245,7 +277,8 @@ mod tests {
         for symbols in [false, true] {
             let kb = Keyboard { symbols, ..Keyboard::default() };
             let keys = kb.keys();
-            assert_eq!(keys.len(), if symbols { 10 + 10 + 7 } else { 10 + 9 + 7 } + 6);
+            // Letters: 26 and caps; symbols: 27. Then six function keys on both.
+            assert_eq!(keys.len(), 27 + 6);
             for (i, (_, a)) in keys.iter().enumerate() {
                 assert!(a.h >= 96 && a.w >= 96, "touch target {a:?}");
                 assert!(a.x >= 0 && a.right() <= W && a.y >= H - KEYBOARD_H && a.bottom() <= H, "{a:?}");
@@ -283,5 +316,20 @@ mod tests {
         assert_eq!(kb.tap(centre(layer).0, centre(layer).1), Some((Key::Layer, area())));
         assert_eq!(kb.hit(centre(q).0, centre(q).1).map(|h| h.0), Some(Key::Char('1')));
         assert!(find(&kb, Key::Char('€')).is_some());
+    }
+
+    #[test]
+    fn caps_types_capitals_and_their_accents() {
+        let mut kb = Keyboard::default();
+        let find = |kb: &Keyboard, k: Key| kb.keys().into_iter().find(|&(key, _)| key == k).map(|(_, r)| r);
+        let shift = find(&kb, Key::Shift).expect("shift");
+        assert_eq!(kb.tap(centre(shift).0, centre(shift).1), Some((Key::Shift, area())));
+        let a = find(&kb, Key::Char('A')).expect("capital A once caps is on");
+        assert_eq!(kb.tap(centre(a).0, centre(a).1).map(|t| t.0), Some(Key::Char('A')), "caps stays on");
+        assert!(kb.long_press(centre(a).0, centre(a).1).is_some());
+        assert_eq!(kb.strip[0].0, 'À');
+        kb.tap(0, 0);
+        kb.tap(centre(shift).0, centre(shift).1);
+        assert!(find(&kb, Key::Char('a')).is_some(), "back to lower case");
     }
 }
