@@ -8,7 +8,11 @@ use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, OutlinePen, SmoothMode, Target};
 use skrifa::{FontRef, MetadataProvider};
 use zarathustra_device::{Canvas, Rect};
-use zeno::{Command, Format, Mask, PathBuilder};
+use zeno::{Command, Format, Join, Mask, PathBuilder, Stroke};
+
+/// Synthetic emboldening steps, as stroke width in em: 0 draws the font as designed, each
+/// further step thickens every stem by the stroke width (step 3 is close to a Bold cut).
+pub const WEIGHTS: [f32; 4] = [0.0, 0.015, 0.03, 0.045];
 
 /// Horizontal subpixel positions cached per glyph (quarter pixels).
 const SUBPIXEL_STEPS: u32 = 4;
@@ -97,6 +101,8 @@ struct GlyphKey {
     /// Size in 1/64 pixel.
     size: u32,
     subpixel: u32,
+    /// Index into [`WEIGHTS`].
+    weight: u8,
 }
 
 /// Collects skrifa outline commands into a zeno path, flipping y to raster space.
@@ -147,9 +153,22 @@ impl Rasterizer {
     /// The glyph for pen position `x`, and the integer x to draw it at: `x` is rounded to the
     /// nearest quarter pixel, whose fraction is baked into the cached bitmap.
     pub fn glyph(&mut self, face: &Face, gid: u32, size: f32, x: f32) -> (i32, &Glyph) {
+        self.glyph_weighted(face, gid, size, x, 0)
+    }
+
+    /// [`Self::glyph`] emboldened by `WEIGHTS[weight]` (clamped). Emboldening is purely a
+    /// rasterization effect: shaping, advances and therefore line breaks and pagination are
+    /// untouched, so changing the weight never moves text between pages.
+    pub fn glyph_weighted(&mut self, face: &Face, gid: u32, size: f32, x: f32, weight: u8) -> (i32, &Glyph) {
         let q = (x * SUBPIXEL_STEPS as f32).round() as i32;
         let (ix, subpixel) = (q.div_euclid(SUBPIXEL_STEPS as i32), q.rem_euclid(SUBPIXEL_STEPS as i32) as u32);
-        let key = GlyphKey { face: face.id, gid, size: (size * 64.0).round() as u32, subpixel };
+        let key = GlyphKey {
+            face: face.id,
+            gid,
+            size: (size * 64.0).round() as u32,
+            subpixel,
+            weight: weight.min(WEIGHTS.len() as u8 - 1),
+        };
         if !self.glyphs.contains_key(&key) {
             let glyph = self.render(face, key, size);
             self.glyphs.insert(key, glyph);
@@ -183,7 +202,21 @@ impl Rasterizer {
         if !drawn || self.path.is_empty() {
             return empty;
         }
-        let (mut coverage, p) = Mask::new(&self.path).format(Format::Alpha).render();
+        let (mut coverage, mut p) = Mask::new(&self.path).format(Format::Alpha).render();
+        let stroke = WEIGHTS[key.weight as usize] * size;
+        if stroke > 0.0 {
+            // Fill ∪ stroke of the same path grows the outline by stroke/2 on every side. The
+            // stroke's bounds contain the fill's, so the fill is merged into the stroke mask.
+            let (mut bold, sp) = Mask::new(&self.path).style(Stroke::new(stroke).join(Join::Round)).render();
+            let (dx, dy) = ((p.left - sp.left) as usize, (p.top - sp.top) as usize);
+            for (row, src) in coverage.chunks_exact(p.width.max(1) as usize).enumerate() {
+                let dst = &mut bold[(row + dy) * sp.width as usize + dx..][..src.len()];
+                for (d, s) in dst.iter_mut().zip(src) {
+                    *d = (*d).max(*s);
+                }
+            }
+            (coverage, p) = (bold, sp);
+        }
         for c in &mut coverage {
             *c = self.lut[*c as usize];
         }
@@ -246,6 +279,18 @@ mod tests {
         let dirty = draw_glyph(&mut c, &glyph, 0, 0, 0); // half off-canvas
         assert_eq!(dirty, Rect::new(0, 0, 1, 1));
         assert_eq!(px[0], 0); // coverage 255 at (0,0)
+    }
+
+    #[test]
+    fn heavier_weight_adds_ink() {
+        let Some(face) = bookerly() else { return };
+        let mut o = Vec::new();
+        face.shape("o", 32.0, None, &mut o);
+        let mut r = Rasterizer::new(1.0);
+        let ink = |g: &Glyph| g.coverage.iter().map(|&c| c as u32).sum::<u32>();
+        let regular = ink(r.glyph(&face, o[0].gid, 32.0, 0.0).1);
+        let heavy = ink(r.glyph_weighted(&face, o[0].gid, 32.0, 0.0, 3).1);
+        assert!(heavy > regular * 11 / 10, "regular {regular}, heavy {heavy}");
     }
 
     #[test]

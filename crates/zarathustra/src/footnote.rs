@@ -151,7 +151,7 @@ impl Popup {
         cross(c, self.close_button(), 26, 3.0);
 
         if let Some(page) = self.note.pages.get(self.page) {
-            draw_lines(c, fonts, raster, page, ((r.x + PAD) as f32, (r.y + HEADER_H) as f32));
+            draw_lines(c, fonts, raster, page, ((r.x + PAD) as f32, (r.y + HEADER_H) as f32), 0);
         }
         let n = self.pages();
         if n < 2 {
