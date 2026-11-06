@@ -26,6 +26,10 @@ Power-button branch merged (2026-11-06). Book menu (`bookmenu.rs`, long press on
 Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
 Review rule: next review+simplify from e6f60ec when `git diff --shortstat e6f60ec..HEAD -- crates` passes ~2000 added lines.
 
+## 2026-11-06 late: done, waiting on the user
+
+Done (not on the device; Kindle IP unknown, subnet scan denied: ask the user): review fixes e6f60ec, book menu while held (31c8324), library search (d22d582), settings screen language + full-refresh interval (6b80ef0, `prefs.rs`). Typography sheet: 4 mockups (A current, B live preview, C presets, D tabs) at https://claude.ai/artifact/F7aALS3NeypwZtXyZKSHWm, user to pick. Open: collections in the library (design not agreed), landscape (W/H are consts everywhere: big refactor).
+
 ## Next steps (user priorities)
 
 1. Fix bugs 1–2, merge menu redesign, deploy, let the user test.
