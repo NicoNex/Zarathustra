@@ -155,4 +155,9 @@ pub enum Action {
     Settings(settings::Settings),
     Home,
     Quit,
+    /// Standby (the sleep screen), as the power button does.
+    Sleep,
+    /// Restart or power off the device.
+    Reboot,
+    PowerOff,
 }

@@ -36,6 +36,9 @@ impl Lang {
 pub struct Strings {
     pub library: &'static str,
     pub exit: &'static str,
+    pub standby: &'static str,
+    pub restart: &'static str,
+    pub power_off: &'static str,
     pub continue_reading: &'static str,
     /// Home filter chips: all, unread, reading, finished.
     pub filters: [&'static str; 4],
@@ -141,6 +144,9 @@ pub struct Strings {
 const IT: Strings = Strings {
     library: "Libreria",
     exit: "Esci",
+    standby: "Standby",
+    restart: "Riavvia",
+    power_off: "Spegni",
     continue_reading: "CONTINUA A LEGGERE",
     filters: ["Tutti", "Da leggere", "In lettura", "Letti"],
     finished: "Letto",
@@ -242,6 +248,9 @@ const IT: Strings = Strings {
 const EN: Strings = Strings {
     library: "Library",
     exit: "Exit",
+    standby: "Standby",
+    restart: "Restart",
+    power_off: "Power off",
     continue_reading: "CONTINUE READING",
     filters: ["All", "Unread", "Reading", "Read"],
     finished: "Read",

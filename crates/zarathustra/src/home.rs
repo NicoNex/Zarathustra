@@ -40,8 +40,11 @@ const _: () = assert!(GUTTER >= 48, "covers keep their breathing room");
 const ROW_H: i32 = 190;
 const ROW_COVER: (i32, i32) = (100, 150);
 const RADIUS: i32 = 10;
-const EXIT: Rect = Rect { x: W - PAD - 150, y: 82, w: 150, h: 72 };
-const VIEW: Rect = Rect { x: W - PAD - 150 - 32 - 192, y: 82, w: 192, h: 72 };
+const POWER: Rect = Rect { x: W - PAD - 72, y: 82, w: 72, h: 72 };
+const VIEW: Rect = Rect { x: POWER.x - 32 - 192, y: 82, w: 192, h: 72 };
+/// The power menu, hanging under its button.
+const POWER_ROW_H: i32 = 100;
+const POWER_MENU: Rect = Rect { x: W - PAD - 440, y: POWER.y + POWER.h + 16, w: 440, h: 4 * POWER_ROW_H + 16 };
 const STATS: Rect = Rect { x: VIEW.x - 32 - 72, y: 82, w: 72, h: 72 };
 const SEARCH: Rect = Rect { x: STATS.x - 32 - 72, y: 82, w: 72, h: 72 };
 const GEAR: Rect = Rect { x: SEARCH.x - 32 - 72, y: 82, w: 72, h: 72 };
@@ -93,6 +96,8 @@ enum Overlay {
     About(usize, Box<About>),
     Stats(StatsScreen),
     Prefs(Prefs),
+    /// Standby, exit, restart, power off.
+    Power,
 }
 
 /// Library order: title, author, or recently read first (then recently added).
@@ -353,6 +358,10 @@ impl Home {
             Some(Overlay::About(i, about)) => about.render(c, ctx, self.books[*i].cover.as_ref()),
             Some(Overlay::Stats(stats)) => stats.render(c, ctx),
             Some(Overlay::Prefs(p)) => p.render(c, ctx),
+            Some(Overlay::Power) => {
+                self.render_library(c, ctx);
+                power_menu(c, ctx);
+            }
         }
     }
 
@@ -404,9 +413,7 @@ impl Home {
                 gear_button(c);
                 rounded_outline(c, SEARCH, SEARCH.h / 2, 2, LINE, PAPER);
                 crate::search::icon(c, Rect::new(SEARCH.x + 22, SEARCH.y + 22, 28, 28), INK, PAPER);
-                rounded_outline(c, EXIT, EXIT.h / 2, 3, INK, PAPER);
-                let exit = Label { face: sans, size: 30.0, ink: INK };
-                exit.draw_centred(c, raster, t().exit, (EXIT.x + EXIT.w / 2) as f32, EXIT.y + 47);
+                power_button(c);
             }
         }
 
@@ -623,6 +630,18 @@ impl Home {
                 self.overlay = None;
                 redraw
             }),
+            Overlay::Power => {
+                self.overlay = None;
+                let (x0, y0) = start;
+                let row = (y0 - POWER_MENU.y - 8).div_euclid(POWER_ROW_H);
+                match (POWER_MENU.contains(x0, y0), row) {
+                    (true, 0) => Action::Sleep,
+                    (true, 1) => Action::Quit,
+                    (true, 2) => Action::Reboot,
+                    (true, 3) => Action::PowerOff,
+                    _ => redraw,
+                }
+            }
             Overlay::About(..) | Overlay::Stats(_) => Action::None,
         }
     }
@@ -764,8 +783,9 @@ impl Home {
             self.overlay = Some(Overlay::Stats(StatsScreen::new(&ctx.state_dir, finished)));
             return Action::Redraw { turn: None };
         }
-        if inside(EXIT) && self.query.is_none() {
-            return Action::Quit;
+        if inside(POWER) && self.query.is_none() {
+            self.overlay = Some(Overlay::Power);
+            return Action::Redraw { turn: None };
         }
         if inside(VIEW) && self.query.is_none() {
             let grid = x0 < VIEW.x + VIEW.w / 2;
@@ -831,6 +851,46 @@ fn gear_button(c: &mut Canvas) {
                 c.fill(Rect::new(cx as i32 + px, cy as i32 + py, 1, 1), ink as u8);
             }
         }
+    }
+}
+
+/// The power button: the standby symbol, a ring open at the top crossed by a bar.
+fn power_button(c: &mut Canvas) {
+    rounded_outline(c, POWER, POWER.h / 2, 2, LINE, PAPER);
+    let (cx, cy) = ((POWER.x + POWER.w / 2) as f32, (POWER.y + POWER.h / 2 + 2) as f32);
+    let inside = |x: f32, y: f32| {
+        let r = x.hypot(y);
+        // The ring, with a gap of ±40° round the top for the bar.
+        let ring = (11.5..=15.5).contains(&r) && (y > 0.0 || x.abs() > -y * 0.84);
+        let bar = x.abs() <= 2.0 && (-19.0..=-3.0).contains(&y);
+        ring || bar
+    };
+    for py in -21..=17 {
+        for px in -17..=17 {
+            let hits = (0..16)
+                .filter(|k| inside(px as f32 + (k % 4) as f32 / 4.0 - 0.375, py as f32 + (k / 4) as f32 / 4.0 - 0.375))
+                .count() as i32;
+            if hits > 0 {
+                let ink = PAPER as i32 - (PAPER as i32 - INK as i32) * hits / 16;
+                c.fill(Rect::new(cx as i32 + px, cy as i32 + py, 1, 1), ink as u8);
+            }
+        }
+    }
+}
+
+/// The power menu: four rows under the button, each one tap.
+fn power_menu(c: &mut Canvas, ctx: &mut Ctx) {
+    rounded_outline(c, POWER_MENU, 24, 4, INK, PAPER);
+    let Ctx { fonts, raster, .. } = ctx;
+    let Some(serif) = crate::serif(fonts, false) else { return };
+    let label = Label { face: serif, size: 34.0, ink: INK };
+    let s = t();
+    for (i, text) in [s.standby, s.exit, s.restart, s.power_off].into_iter().enumerate() {
+        let r = Rect::new(POWER_MENU.x, POWER_MENU.y + 8 + i as i32 * POWER_ROW_H, POWER_MENU.w, POWER_ROW_H);
+        if i > 0 {
+            c.fill(Rect::new(r.x + 32, r.y, r.w - 64, 2), LINE);
+        }
+        label.draw(c, raster, text, (r.x + 40) as f32, label.baseline(r));
     }
 }
 

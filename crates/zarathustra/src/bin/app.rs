@@ -146,12 +146,14 @@ fn main() -> Result<()> {
         shot(&mut home, &mut ctx, None, "bookmenu.pgm")?;
         shot(&mut home, &mut ctx, Some((600, 1313)), "about.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
-        shot(&mut home, &mut ctx, Some((722, 118)), "stats.pgm")?;
+        shot(&mut home, &mut ctx, Some((722 + 78, 118)), "stats.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
-        shot(&mut home, &mut ctx, Some((516, 118)), "prefs.pgm")?;
+        shot(&mut home, &mut ctx, Some((W - 72 - 36, 118)), "power.pgm")?;
+        home.tap((5, 5), (5, 5), &ctx);
+        shot(&mut home, &mut ctx, Some((516 + 78, 118)), "prefs.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
         // Library search: the field and keyboard, then "gra" typed.
-        shot(&mut home, &mut ctx, Some((620, 118)), "search.pgm")?;
+        shot(&mut home, &mut ctx, Some((620 + 78, 118)), "search.pgm")?;
         let kb = zarathustra::keyboard::Keyboard::default();
         for ch in "gra".chars() {
             let key = kb.keys().into_iter().find(|(k, _)| *k == zarathustra::keyboard::Key::Char(ch));
@@ -468,6 +470,21 @@ fn main() -> Result<()> {
             let (turn, flash) = match action {
                 Action::None => continue,
                 Action::Quit => return Ok(()),
+                Action::Sleep => {
+                    dev.sleep()?;
+                    continue;
+                }
+                Action::Reboot | Action::PowerOff => {
+                    let cmd = if matches!(action, Action::Reboot) { "reboot" } else { "poweroff" };
+                    // Only on the device: a desktop run just quits.
+                    if std::path::Path::new("/mnt/us").exists() {
+                        if let Err(e) = std::process::Command::new(cmd).status() {
+                            eprintln!("{cmd}: {e}");
+                            continue;
+                        }
+                    }
+                    return Ok(());
+                }
                 Action::Region(rect) => {
                     dev.wait_refresh(marker)?;
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
