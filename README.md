@@ -28,6 +28,18 @@ The old readers are *décadents*. They justify text the way the herd walks, word
 
 Zarathustra was built against all of that.
 
+### An interface for free spirits
+
+The decadent readers were designed by herd and for the herd: grey toolbars stacked like tax forms, menus three levels deep, settings that hide behind settings, a home screen that is a shop window with your books somewhere behind the glass. They are *infrolliti*, old men's interfaces, softened by years of committee meetings until nothing in them has an edge.
+
+Zarathustra's interface was drawn for the eye and the thumb:
+
+- **One gesture, one place.** Swipe down for light, warmth, Wi-Fi, night mode and suspend. Hold a cover for everything about that book. Tap the page for typography. Nothing is more than one step away.
+- **Drawn for e-ink, not ported to it.** Each element is placed for a 300 dpi greyscale panel: crisp rules, generous margins, and icons drawn pixel by pixel instead of borrowed from a phone. Only the area that changed is refreshed, with the fastest waveform that still looks clean.
+- **Your books first.** The home opens on the book you are reading and a line you underlined, then your library. There are no ads, no "recommended for you", no store.
+- **A keyboard that keeps up.** Only the key you press and the field you type into are redrawn. Hold a letter for its accents. Tap shift for one capital, twice to lock it.
+- **Bilingual.** English and Italian, switched in settings.
+
 ### Typography beyond good and evil
 
 - **Knuth–Plass line breaking**: the whole paragraph is weighed before a single line is set, the way TeX does it. No rivers, no gaping justified lines.
@@ -86,12 +98,14 @@ It cross-compiles to one static `armv7-unknown-linux-musleabihf` binary. A KUAL 
 
 ## Become who you are: install it
 
-You need a **jailbroken Kindle** with KUAL and SSH (KOReader's server on port 2222 works). It has been built for the Paperwhite 5 and the code is written to be portable.
+You need a **jailbroken Kindle** with KUAL. To install over the network you also need SSH (KOReader's server on port 2222 works). It has been built for the Paperwhite 5 and the code is written to be portable.
 
 ```sh
 # the cross toolchain: arm-linux-musleabihf-cross-bin (AUR) for the C dependencies
-make install                     # build and install over SSH (KINDLE_HOST=…)
-make install KINDLE_HOST=        # or over USB, with the Kindle mounted
+make install-ssh                     # build, then install the app and the dictionaries over SSH
+make install-ssh KINDLE_HOST=1.2.3.4 # another address
+make install-usb                     # or onto a Kindle mounted over USB (KINDLE=/path to override)
+make run-ssh BIN=zarathustra-probe   # install, run a binary on the device, show its log
 ```
 
 Put your books in `/mnt/us/library` (by cable, or with the transfer screen), then start Zarathustra from KUAL.
