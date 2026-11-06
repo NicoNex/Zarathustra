@@ -74,6 +74,8 @@ pub struct Strings {
     pub highlight: &'static str,
     pub delete: &'static str,
     pub cancel: &'static str,
+    /// Footnote popup title, followed by the note's marker.
+    pub note: &'static str,
     pub sleeping: &'static str,
     pub untitled: &'static str,
     /// Book menu (long press on a book) and the book's details screen.
@@ -151,6 +153,7 @@ const IT: Strings = Strings {
     highlight: "Evidenzia",
     delete: "Elimina",
     cancel: "Annulla",
+    note: "Nota",
     sleeping: "In sospensione · premi il tasto di accensione",
     untitled: "Senza titolo",
     resume: "Continua a leggere",
@@ -235,6 +238,7 @@ const EN: Strings = Strings {
     highlight: "Highlight",
     delete: "Delete",
     cancel: "Cancel",
+    note: "Note",
     sleeping: "Sleeping · press power to wake",
     untitled: "Untitled",
     resume: "Continue reading",

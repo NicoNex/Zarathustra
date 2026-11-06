@@ -3,6 +3,8 @@
 
 use omero_device::{Canvas, Rect};
 use omero_engine::font::{draw_glyph, Face, Rasterizer, ShapedGlyph};
+use omero_engine::fonts::FontLibrary;
+use omero_engine::layout::page::Page;
 
 /// Palette (0 = black).
 pub const INK: u8 = 0;
@@ -222,6 +224,17 @@ impl Label<'_> {
             pen += g.x_advance;
         }
         pen - x
+    }
+}
+
+/// Draws the text lines of a laid-out page with the text area's top-left corner at `origin`.
+pub fn draw_lines(c: &mut Canvas, fonts: &FontLibrary, raster: &mut Rasterizer, page: &Page, (ox, oy): (f32, f32)) {
+    for line in &page.lines {
+        for g in &line.glyphs {
+            let Some(face) = fonts.face(g.face) else { continue };
+            let (gx, glyph) = raster.glyph(face, g.gid, g.size, ox + line.x + g.x);
+            draw_glyph(c, glyph, gx, (oy + line.baseline + g.y).round() as i32, INK);
+        }
     }
 }
 

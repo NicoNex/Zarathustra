@@ -6,7 +6,7 @@ use std::io::BufReader;
 use std::mem::take;
 use std::path::Path;
 
-use crate::dom::{Dom, NodeKind};
+use crate::dom::{Dom, NodeId, NodeKind};
 use crate::epub::{resolve, Epub, EpubError, Metadata, TocEntry};
 use crate::fonts::FontLibrary;
 use crate::image;
@@ -15,6 +15,7 @@ use crate::layout::page::{self, Page};
 use crate::layout::paragraph::Typesetter;
 use crate::library::Format;
 use crate::mobi::{Mobi, MobiError};
+use crate::note;
 use crate::style::cascade::{compute, Preferences, Stylesheets};
 
 #[derive(Debug, thiserror::Error)]
@@ -157,12 +158,63 @@ impl Book {
         let sheets = self.stylesheets(&dom, &path);
         let styles = compute(&dom, &sheets, prefs);
         let mut blocks = flow::blocks(&dom, &styles, self.metadata.language.as_deref());
-        for img in blocks.iter_mut().filter_map(|b| b.image.as_mut()) {
-            img.src = resolve(&path, &img.src);
-            img.intrinsic = self.image_size(&img.src);
-        }
+        self.size_images(&mut blocks, &path);
         let pages = page::layout(&blocks, &styles, fonts, ts, height);
         Ok(Chapter { dom, blocks, pages })
+    }
+
+    /// Resolves the image sources of `blocks` (from document `path`) and reads their sizes.
+    fn size_images(&self, blocks: &mut [Block], path: &str) {
+        for img in blocks.iter_mut().filter_map(|b| b.image.as_mut()) {
+            img.src = resolve(path, &img.src);
+            img.intrinsic = self.image_size(&img.src);
+        }
+    }
+
+    /// The note that link `a` of laid-out chapter `i` (whose document is `dom`) refers to, laid
+    /// out into pages `height` tall (`prefs.page_width` wide), back-links hidden. `None` when
+    /// the link is no note reference or its target isn't found: a link whose text doesn't look
+    /// like a note marker still counts when it leads into a note-typed element.
+    // ponytail: the note's document is read and styled on every tap (a few ms); cache the last
+    // one if endnote chapters turn out slow on the device.
+    #[allow(clippy::too_many_arguments)]
+    pub fn note(
+        &mut self,
+        i: usize,
+        dom: &Dom,
+        a: NodeId,
+        prefs: &Preferences,
+        fonts: &FontLibrary,
+        ts: &mut Typesetter,
+        height: f32,
+    ) -> Option<Chapter> {
+        let path = self.chapters.get(i)?.clone();
+        let target = resolve(&path, dom.attr(a, "href")?);
+        let (file, id) = target.split_once('#')?;
+        let note_dom = self.read_dom(file).ok()?;
+        let node = (note_dom.descendants(Dom::ROOT)).find(|&n| {
+            note_dom.attr(n, "id") == Some(id)
+                || (note_dom.name(n) == Some("a") && note_dom.attr(n, "name") == Some(id))
+        })?;
+        if !note::is_noteref(dom, a) && !note::is_marked_note(&note_dom, node) {
+            return None;
+        }
+        let sheets = self.stylesheets(&note_dom, file);
+        let mut styles = compute(&note_dom, &sheets, prefs);
+        let root = note::note_root(&note_dom, &styles, node)?;
+        // The note fills the popup: the margins of the containers around it (body, a notes
+        // section) widen the page by as much as they take.
+        let parent = note_dom.parent(root).and_then(|p| styles.get(p.index())?.as_ref());
+        let inset = parent.map_or(0.0, |s| prefs.page_width - s.content_width);
+        if inset > 0.5 {
+            styles =
+                compute(&note_dom, &sheets, &Preferences { page_width: prefs.page_width + inset, ..prefs.clone() });
+        }
+        note::hide_backlinks(&note_dom, &mut styles, root, dom.attr(a, "id"), &path, file);
+        let mut blocks = flow::blocks_from(&note_dom, &styles, root, self.metadata.language.as_deref());
+        self.size_images(&mut blocks, file);
+        let pages = page::layout(&blocks, &styles, fonts, ts, height);
+        (!pages.is_empty()).then_some(Chapter { dom: note_dom, blocks, pages })
     }
 
     /// The blocks of laid-out chapter `i` that the elements with `ids` (link fragments) land in.
@@ -262,6 +314,84 @@ mod tests {
         let ch = book.chapter(0, &prefs, &fonts, &mut ts, 1400.0).expect("lays out");
         let text: Vec<_> = ch.blocks.iter().map(|b| b.text.as_str()).collect();
         assert_eq!(text, ["Call me Ishmael. Some years ago."]);
+    }
+
+    /// A same-file footnote aside (hidden from the chapter) and a cross-file endnote resolve,
+    /// lose their back-links, and a long note paginates.
+    #[test]
+    fn footnotes_resolve_across_files() {
+        let container = r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>
+            <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+        let opf = r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/>
+            <manifest><item id="c" href="text/c.xhtml" media-type="application/xhtml+xml"/>
+            <item id="n" href="text/notes.xhtml" media-type="application/xhtml+xml"/></manifest>
+            <spine><itemref idref="c"/><itemref idref="n" linear="no"/></spine></package>"#;
+        let long = "A very long note that goes on and on. ".repeat(60);
+        let chapter = r##"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+            <p>Text<a id="r1" epub:type="noteref" href="#fn1">1</a> and more<sup><a id="r2" href="notes.xhtml#en2">2</a></sup>
+            and <a href="notes.xhtml#en3">[3]</a> and <a href="notes.xhtml#top">Notes</a>.</p>
+            <aside epub:type="footnote" id="fn1"><p><a href="#r1">1.</a> The <i>first</i> note.</p></aside>
+            <p>After.</p></body></html>"##;
+        let notes = format!(
+            r##"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="top">Notes</h1>
+            <p><a id="en2" href="c.xhtml#r2">2</a> Second note, in another file. <a href="c.xhtml#r2">↩</a></p>
+            <p id="en3">{long}</p></body></html>"##
+        );
+        let files = [
+            ("META-INF/container.xml", container),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/text/c.xhtml", chapter),
+            ("OEBPS/text/notes.xhtml", &notes),
+        ];
+        let mut book = open_temp("notes.epub", crate::epub::tests::epub(&files).get_ref());
+        let (mut fonts, mut ts, prefs) = layout_env();
+        fonts.add_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dev-fonts"));
+        if fonts.pick(&["serif".into()], 400, false).is_none() {
+            return; // no fonts, no pages
+        }
+        let ch = book.chapter(0, &prefs, &fonts, &mut ts, 1400.0).expect("lays out");
+        let texts: Vec<&str> = ch.blocks.iter().map(|b| b.text.as_str()).collect();
+        assert_eq!(texts.len(), 2, "the aside is out of the flow: {texts:?}");
+        let link = |text: &str| {
+            (ch.dom.descendants(Dom::ROOT))
+                .find(|&n| ch.dom.name(n) == Some("a") && ch.dom.text(n) == text)
+                .expect(text)
+        };
+        let note = |book: &mut Book, ts: &mut Typesetter, a: &str, h: f32| {
+            book.note(0, &ch.dom, link(a), &prefs, &fonts, ts, h).map(|n| {
+                let text: Vec<String> = n.blocks.iter().map(|b| b.text.clone()).collect();
+                (text.join("|"), n.pages.len())
+            })
+        };
+        assert_eq!(note(&mut book, &mut ts, "1", 600.0), Some(("The first note.".into(), 1)));
+        assert_eq!(note(&mut book, &mut ts, "2", 600.0), Some(("Second note, in another file.".into(), 1)));
+        let (text, pages) = note(&mut book, &mut ts, "[3]", 600.0).expect("long note");
+        assert!(text.starts_with("A very long note") && pages > 1, "{pages} pages");
+        assert_eq!(note(&mut book, &mut ts, "Notes", 600.0), None, "a link to a heading is no note");
+    }
+
+    /// Most marker-like links of the local books open a note. The rest are rightly refused:
+    /// back-links in notes files, page-number links of an index, links to headings.
+    #[test]
+    fn dev_books_noterefs_resolve() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let (mut fonts, mut ts, prefs) = layout_env();
+        fonts.add_dir(&root.join("dev-fonts"));
+        let books = ["dev-books", "dev-books/azw3"].iter().filter_map(|d| std::fs::read_dir(root.join(d)).ok());
+        for path in books.flatten().flatten().map(|e| e.path()) {
+            let Ok(mut book) = Book::open(&path) else { continue };
+            let (mut refs, mut found) = (0, 0);
+            for i in 0..book.chapters.len() {
+                let Ok(ch) = book.chapter(i, &prefs, &fonts, &mut ts, 1400.0) else { continue };
+                let links = ch.dom.descendants(Dom::ROOT).filter(|&n| ch.dom.name(n) == Some("a"));
+                for a in links.filter(|&a| note::is_noteref(&ch.dom, a)).take(5) {
+                    refs += 1;
+                    found += usize::from(book.note(i, &ch.dom, a, &prefs, &fonts, &mut ts, 600.0).is_some());
+                }
+            }
+            eprintln!("{}: {found}/{refs} noterefs open a note", path.display());
+            assert!(found * 2 >= refs, "{}: {found}/{refs}", path.display());
+        }
     }
 
     #[test]
