@@ -9,7 +9,7 @@ mod compress;
 mod index;
 mod kf8;
 mod mobi6;
-mod xhtml;
+pub(crate) mod xhtml;
 
 use std::cell::{OnceCell, RefCell};
 use std::io::{Read, Seek, SeekFrom};

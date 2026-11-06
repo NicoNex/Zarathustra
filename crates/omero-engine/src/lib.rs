@@ -1,5 +1,6 @@
 pub mod anchor;
 pub mod book;
+pub mod dict;
 pub mod dom;
 pub mod epub;
 pub mod font;

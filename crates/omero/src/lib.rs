@@ -3,6 +3,7 @@
 pub mod about;
 pub mod bookmenu;
 pub mod clock;
+pub mod dict;
 pub mod footnote;
 pub mod highlight;
 pub mod home;
