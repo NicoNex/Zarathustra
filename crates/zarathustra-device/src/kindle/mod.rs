@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 
 /// How often touches restart powerd's idle timeout (a spawned `lipc-set-prop` each time).
 const IDLE_RESET_EVERY: Duration = Duration::from_secs(30);
+/// How long, and how often, the light is watched after a wake.
+const RELIGHT_FOR: Duration = Duration::from_secs(4);
+const RELIGHT_EVERY: Duration = Duration::from_millis(200);
 
 use crate::input::{Touch, TouchPanel, Transform};
 use crate::sysfs::{self, Led, SysfsLight};
@@ -56,6 +59,9 @@ pub struct Kindle {
     /// The level last asked for. On wake powerd puts back its own, so reading sysfs at sleep
     /// could save powerd's level instead of ours.
     wanted: Option<Light>,
+    /// Until when the light is checked after a wake: powerd puts back its own level some
+    /// moments after telling us, so one restore at the event is overwritten.
+    relight_until: Option<Instant>,
     /// When touches last restarted powerd's idle timeout.
     idle_reset: Option<Instant>,
 }
@@ -88,6 +94,7 @@ impl Kindle {
             power_events: VecDeque::new(),
             asleep: None,
             wanted: None,
+            relight_until: None,
             idle_reset: None,
         })
     }
@@ -109,6 +116,25 @@ impl Kindle {
         }
     }
 
+    /// After a wake, puts our level back whenever powerd has changed it (checked every poll,
+    /// at most every [`RELIGHT_EVERY`], for [`RELIGHT_FOR`]).
+    // ponytail: polls sysfs for a few seconds; setting powerd's own stored level instead
+    // (`flIntensity`) would stop the fight, once its scale is known.
+    fn keep_light(&mut self) {
+        let Some(until) = self.relight_until else { return };
+        if Instant::now() >= until {
+            self.relight_until = None;
+            return;
+        }
+        let (Some(want), Some(now)) = (self.wanted, self.light()) else { return };
+        // Reading back goes through the LED mix: a point either way is the same level.
+        let off = |a: u8, b: u8| a.abs_diff(b) > 1;
+        let warmth_off = matches!((want.warmth, now.warmth), (Some(a), Some(b)) if off(a, b));
+        if off(want.brightness, now.brightness) || warmth_off {
+            self.set_light(want).ok();
+        }
+    }
+
     /// Light off and touch muted while asleep; both restored on wake.
     fn on_power(&mut self, ev: PowerEvent) {
         match ev {
@@ -123,6 +149,7 @@ impl Kindle {
                 if let Some(Some(l)) = self.asleep.take() {
                     self.set_light(l).ok();
                 }
+                self.relight_until = Some(Instant::now() + RELIGHT_FOR);
                 // Drop what the panel queued while asleep. A contact begun asleep then ends
                 // with an Up whose Down was never delivered, which callers already ignore.
                 self.touches.clear();
@@ -133,6 +160,7 @@ impl Kindle {
                 if let Some(l) = self.wanted {
                     self.set_light(l).ok();
                 }
+                self.relight_until = Some(Instant::now() + RELIGHT_FOR);
             }
             _ => {}
         }
@@ -172,6 +200,11 @@ impl Device for Kindle {
         // A negative fd makes poll skip the slot once the powerd listener is gone.
         let mut fds = [pfd(self.touch.fd()), pfd(self.powerd.as_ref().map_or(-1, |p| p.fd()))];
         // Round up so a sub-millisecond remainder doesn't become a busy-spinning 0.
+        // Watching the light after a wake: wake up often enough to catch powerd.
+        let timeout = match self.relight_until {
+            Some(_) => Some(timeout.map_or(RELIGHT_EVERY, |t| t.min(RELIGHT_EVERY))),
+            None => timeout,
+        };
         let ms = timeout.map_or(-1, |t| t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32);
         // SAFETY: `fds` is a valid array of `fds.len()` pollfds.
         if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) } < 0 {
@@ -181,6 +214,7 @@ impl Device for Kindle {
         if fds[1].revents != 0 {
             self.read_power();
         }
+        self.keep_light();
         self.touches.clear();
         self.touch.read(&mut self.touches)?;
         if self.asleep.is_none() && !self.touches.is_empty() {
