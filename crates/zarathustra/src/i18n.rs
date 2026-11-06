@@ -144,7 +144,7 @@ pub struct Strings {
 const IT: Strings = Strings {
     library: "Libreria",
     exit: "Esci",
-    standby: "Standby",
+    standby: "Sospendi",
     restart: "Riavvia",
     power_off: "Spegni",
     continue_reading: "CONTINUA A LEGGERE",
@@ -248,7 +248,7 @@ const IT: Strings = Strings {
 const EN: Strings = Strings {
     library: "Library",
     exit: "Exit",
-    standby: "Standby",
+    standby: "Suspend",
     restart: "Restart",
     power_off: "Power off",
     continue_reading: "CONTINUE READING",

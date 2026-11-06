@@ -96,7 +96,7 @@ enum Overlay {
     About(usize, Box<About>),
     Stats(StatsScreen),
     Prefs(Prefs),
-    /// Standby, exit, restart, power off.
+    /// Suspend, exit, restart, power off.
     Power,
 }
 
