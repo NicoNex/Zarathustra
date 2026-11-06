@@ -4,25 +4,43 @@
 //! to the panel, and the next drawing access (or refresh with the mode off) waits for that
 //! refresh and turns it back. Drawing code never sees inverted pixels, so partial redraws
 //! (a panel over a page, a key under a finger) keep working unchanged.
+//!
+//! Pictures (covers, book images, PDF pages) must look as they are, not as negatives: their
+//! blit asks [`night`] and draws them pre-inverted, so the frame's inversion turns them back.
 // ponytail: inverts the whole frame (2 MB) twice per refresh, a few ms on the PW5. Use the
 // controller's own inversion flag if the MTK driver turns out to have a working one.
 
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{Battery, Canvas, Device, Event, Light, PowerEvent, Refresh, Wifi};
 
+/// Night mode, process-wide: one panel, one mode. A global so the image blit can ask without
+/// threading a flag through every screen's render.
+static ON: AtomicBool = AtomicBool::new(false);
+
+/// Whether night mode is on: refreshes go out inverted.
+pub fn night() -> bool {
+    ON.load(Ordering::Relaxed)
+}
+
+/// Turns night mode on or off. The screen's pictures were drawn for the old mode, so the
+/// caller repaints the whole screen after a change.
+pub fn set_night(on: bool) {
+    ON.store(on, Ordering::Relaxed);
+}
+
 pub struct Night {
     inner: Box<dyn Device>,
-    pub on: bool,
     /// The framebuffer is inverted for the refresh with this marker.
     inverted: Option<u32>,
 }
 
 impl Night {
     pub fn new(inner: Box<dyn Device>) -> Night {
-        Night { inner, on: false, inverted: None }
+        Night { inner, inverted: None }
     }
 
     fn invert(&mut self) {
@@ -60,7 +78,7 @@ impl Device for Night {
     }
 
     fn refresh(&mut self, r: &Refresh) -> io::Result<u32> {
-        if !self.on {
+        if !night() {
             self.restore()?;
             return self.inner.refresh(r);
         }
@@ -151,13 +169,13 @@ mod tests {
         let mut n = Night::new(Box::new(Panel { px: vec![255; 4], sent: sent.clone() }));
         let r = Refresh { rect: Rect::new(0, 0, 4, 1), waveform: Waveform::Text, flash: false, swipe: None };
         n.refresh(&r).unwrap();
-        n.on = true;
+        set_night(true);
         n.refresh(&r).unwrap();
         n.refresh(&r).unwrap(); // nothing drawn in between: still inverted, not twice
         assert_eq!(n.canvas().pixels[0], 255, "drawing code sees what it drew");
         n.canvas().pixels[0] = 10;
         n.refresh(&r).unwrap();
-        n.on = false;
+        set_night(false);
         n.refresh(&r).unwrap();
         assert_eq!(*sent.lock().unwrap(), vec![255, 0, 0, 245, 10]);
     }
