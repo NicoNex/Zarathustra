@@ -62,3 +62,7 @@ PW5, FW 5.17.1, MTK hwtcon, fb 8bpp rotate=3 handled by driver, touch `/dev/inpu
   2. **Platform bits into the driver**: `/mnt/us` paths (`on_device`, `library_dir`, state dir, fonts, dictionaries, hyphenation), lipc, KUAL/`run.sh` launch and exit, USB handling. A small platform part of the backend says where books/state live and how to launch/quit.
   3. **"Add a device" guide**: trait to implement, testing with the emulator and `--pgm`, model detection.
 - Then `kobo/`: framebuffer (mxcfb or MTK per model), touch, light (sysfs), power (no powerd: own suspend), Wi-Fi (wpa_cli; Kobo scripts), launch via NickelMenu/KFMon.
+
+## Requested: highlight across pages (2026-11-06)
+
+While selecting, dragging into the bottom-right corner (or past the last line) turns the page and the selection continues on the next one; the saved highlight spans both pages. Needs a selection anchored in the text (chapter/block/offset, not page-local), a page turn during the drag (a short dwell at the edge, Fast waveform), and highlight drawing that clips the range to each page.
