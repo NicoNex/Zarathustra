@@ -178,12 +178,23 @@ fn main() -> Result<()> {
             if let Some(b) = r.popup_button(Button::Delete) {
                 r.tap(centre(b), centre(b).0, &mut ctx);
             }
+            // Bookmark the page (the dog-ear corner), then the menu with its scrubber at rest
+            // and dragged, the jump on release (with the way back), and the bookmarks tab.
+            r.tap((W - 40, 40), W - 40, &mut ctx);
+            snap(r, &mut ctx, "bookmark.pgm")?;
             r.menu = true;
-            r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
-            write_pgm(dir.join("menu.pgm"), &px)?;
+            snap(r, &mut ctx, "menu.pgm")?;
+            let bar = omero::menu::scrubber(&ctx);
+            let (from, to) = ((bar.x + 40, bar.y + bar.h / 2), (bar.x + bar.w * 2 / 3, bar.y + bar.h / 2));
+            r.scrub(from, to, &ctx);
+            snap(r, &mut ctx, "scrub.pgm")?;
+            r.tap(from, to.0, &mut ctx);
+            snap(r, &mut ctx, "jumped.pgm")?;
+            r.menu = true;
             r.show_contents();
-            r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
-            write_pgm(dir.join("toc.pgm"), &px)?;
+            snap(r, &mut ctx, "toc.pgm")?;
+            r.tap((W - 100, 200), W - 100, &mut ctx);
+            snap(r, &mut ctx, "bookmarks.pgm")?;
         }
         return Ok(());
     }
@@ -289,6 +300,12 @@ fn main() -> Result<()> {
                     } else if let Screen::Reader(r) = &mut screen {
                         if press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) {
                             press.fire(r, start, &mut selection);
+                        }
+                    }
+                    // Dragging the menu's scrubber: redrawn with the selection's fast waveform.
+                    if let Screen::Reader(r) = &mut screen {
+                        if let Some(rect) = r.scrub(start, (t.x, t.y), &ctx).filter(|_| !press.selecting) {
+                            selection = Some(selection.map_or(rect, |s| s.union(&rect)));
                         }
                     }
                     continue;

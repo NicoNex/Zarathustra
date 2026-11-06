@@ -1,25 +1,31 @@
-//! The table of contents: a paginated list over the whole screen, opened from the reader
-//! menu. The entry being read is marked; a tap on an entry jumps to it.
+//! The table of contents and the bookmarks: paginated lists over the whole screen, opened
+//! from the reader menu, one tab each. The entry being read is marked; a tap on an entry or a
+//! bookmark jumps to it, the cross at a bookmark's end removes it.
 
 use omero_device::{Canvas, Rect};
 use omero_engine::book::{Book, Chapter};
 use omero_engine::epub::TocEntry;
+use omero_store::Annotation;
 
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
-use crate::ui::{button, rounded_rect, Label, INK, INK_SOFT};
+use crate::ui::{button, rounded_rect, segmented, Label, INK, INK_SOFT, PAPER};
 use crate::{Ctx, H, W};
 
-const LIST_TOP: i32 = TOPBAR_H + 20;
+/// The tabs: contents | bookmarks.
+const TABS: Rect = Rect { x: PAD, y: TOPBAR_H + 28, w: W - 2 * PAD, h: ROW_H };
+/// Top of the list under the tabs, and without them (PDFs: contents only).
+const LIST_TOP: i32 = TOPBAR_H + 28 + ROW_H + 20;
+const BARE_TOP: i32 = TOPBAR_H + 20;
 const ENTRY_H: i32 = 110;
 const FOOTER_H: i32 = 150;
-/// Entries per screen.
-const ROWS: usize = ((H - LIST_TOP - FOOTER_H) / ENTRY_H) as usize;
 /// Indent per nesting level, up to `MAX_DEPTH` levels.
 const INDENT: i32 = 56;
 const MAX_DEPTH: usize = 3;
 const BACK_W: i32 = 360;
 const PAGE_BUTTON_W: i32 = 300;
+/// The cross removing a bookmark: this wide at the row's right end.
+const REMOVE_W: i32 = 130;
 /// Horizontal travel that makes a touch a swipe (as in the reader).
 const SWIPE: i32 = 100;
 
@@ -83,22 +89,68 @@ pub enum Tap {
     Back,
     /// Go to this entry.
     Jump(usize),
+    /// Go to this bookmark.
+    Bookmark(usize),
+    /// Delete this bookmark.
+    Remove(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Contents,
+    Bookmarks,
 }
 
 /// The open list: which screen of entries is shown and which entry is being read.
 pub struct Toc {
     page: usize,
     current: Option<usize>,
+    tab: Tab,
+    /// The tabs are shown (else the contents only).
+    tabs: bool,
 }
 
 impl Toc {
-    /// Opens on the screen holding the current entry.
-    pub fn new(current: Option<usize>) -> Toc {
-        Toc { page: current.map_or(0, |i| i / ROWS), current }
+    /// Opens on `tab`; the contents on the screen holding the current entry.
+    pub fn new(current: Option<usize>, tab: Tab) -> Toc {
+        Toc { page: 0, current, tab, tabs: true }.on_current()
     }
 
-    fn pages(entries: &[Entry]) -> usize {
-        entries.len().div_ceil(ROWS).max(1)
+    /// The contents alone, without tabs.
+    pub fn contents(current: Option<usize>) -> Toc {
+        Toc { page: 0, current, tab: Tab::Contents, tabs: false }.on_current()
+    }
+
+    fn on_current(mut self) -> Toc {
+        if self.tab == Tab::Contents {
+            self.page = self.current.map_or(0, |i| i / self.per_screen());
+        }
+        self
+    }
+
+    fn top(&self) -> i32 {
+        if self.tabs {
+            LIST_TOP
+        } else {
+            BARE_TOP
+        }
+    }
+
+    /// Rows per screen.
+    fn per_screen(&self) -> usize {
+        ((H - self.top() - FOOTER_H) / ENTRY_H) as usize
+    }
+
+    fn pages(&self, rows: usize) -> usize {
+        rows.div_ceil(self.per_screen()).max(1)
+    }
+
+    /// Rows in the tab shown.
+    fn rows(&self, entries: usize, marks: usize) -> usize {
+        match self.tab {
+            Tab::Contents => entries,
+            Tab::Bookmarks => marks,
+        }
     }
 
     fn prev_button() -> Rect {
@@ -109,8 +161,8 @@ impl Toc {
         Rect::new(W - PAD - PAGE_BUTTON_W, H - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
     }
 
-    fn flip(&mut self, entries: &[Entry], forward: bool) -> Tap {
-        let page = if forward { (self.page + 1).min(Self::pages(entries) - 1) } else { self.page.saturating_sub(1) };
+    fn flip(&mut self, rows: usize, forward: bool) -> Tap {
+        let page = if forward { (self.page + 1).min(self.pages(rows) - 1) } else { self.page.saturating_sub(1) };
         if page == self.page {
             return Tap::None;
         }
@@ -118,46 +170,100 @@ impl Toc {
         Tap::Redraw
     }
 
-    /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
-    pub fn tap(&mut self, entries: &[Entry], (x0, y0): (i32, i32), x: i32) -> Tap {
+    /// Handles a completed touch from `(x0, y0)` to `(x, _)`; `marks` bookmarks are listed.
+    pub fn tap(&mut self, entries: &[Entry], marks: usize, (x0, y0): (i32, i32), x: i32) -> Tap {
         let inside = |r: Rect| r.contains(x0, y0);
+        let rows = self.rows(entries.len(), marks);
         match x - x0 {
-            dx if dx < -SWIPE => return self.flip(entries, true),
-            dx if dx > SWIPE => return self.flip(entries, false),
+            dx if dx < -SWIPE => return self.flip(rows, true),
+            dx if dx > SWIPE => return self.flip(rows, false),
             _ => {}
         }
         if y0 < TOPBAR_H {
             return if x0 < BACK_W { Tap::Back } else { Tap::None };
         }
+        if self.tabs && inside(TABS) {
+            let tab = if x0 < TABS.x + TABS.w / 2 { Tab::Contents } else { Tab::Bookmarks };
+            if tab == self.tab {
+                return Tap::None;
+            }
+            *self = Toc::new(self.current, tab);
+            return Tap::Redraw;
+        }
         if y0 >= H - FOOTER_H {
             return match () {
-                _ if inside(Self::prev_button()) => self.flip(entries, false),
-                _ if inside(Self::next_button()) => self.flip(entries, true),
+                _ if inside(Self::prev_button()) => self.flip(rows, false),
+                _ if inside(Self::next_button()) => self.flip(rows, true),
                 _ => Tap::None,
             };
         }
-        let row = (y0 - LIST_TOP).max(0) / ENTRY_H;
-        let i = self.page * ROWS + row as usize;
-        if (row as usize) < ROWS && i < entries.len() {
-            Tap::Jump(i)
-        } else {
-            Tap::None
+        if y0 < self.top() {
+            return Tap::None;
+        }
+        let row = ((y0 - self.top()) / ENTRY_H) as usize;
+        let i = self.page * self.per_screen() + row;
+        match self.tab {
+            _ if row >= self.per_screen() || i >= rows => Tap::None,
+            Tab::Contents => Tap::Jump(i),
+            Tab::Bookmarks if x0 >= W - REMOVE_W => Tap::Remove(i),
+            Tab::Bookmarks => Tap::Bookmark(i),
         }
     }
 
-    pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx, entries: &[Entry]) {
-        c.fill(c.bounds(), crate::ui::PAPER);
+    pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx, entries: &[Entry], marks: &[Annotation]) {
+        c.fill(c.bounds(), PAPER);
         let Ctx { fonts, raster, .. } = ctx;
-        let (Some(sans), Some(serif), Some(serif_bold)) =
-            (crate::sans(fonts, false), crate::serif(fonts, false), crate::serif(fonts, true))
-        else {
+        let (Some(sans), Some(sans_bold), Some(serif), Some(serif_bold)) = (
+            crate::sans(fonts, false),
+            crate::sans(fonts, true),
+            crate::serif(fonts, false),
+            crate::serif(fonts, true),
+        ) else {
             return;
         };
-        topbar(c, raster, sans, serif_bold, t().back, t().contents);
+        topbar(c, raster, sans, serif_bold, t().back, if self.tabs { "" } else { t().contents });
+        if self.tabs {
+            let on = usize::from(self.tab == Tab::Bookmarks);
+            let names = [t().contents, t().bookmarks];
+            for (i, (name, r)) in names.into_iter().zip(segmented(c, TABS, 2, Some(on))).enumerate() {
+                Label { face: sans_bold, size: 30.0, ink: if i == on { PAPER } else { INK } }
+                    .centered(c, raster, name, r);
+            }
+        }
 
-        let first = self.page * ROWS;
-        for (row, (i, e)) in entries.iter().enumerate().skip(first).take(ROWS).enumerate() {
-            let r = Rect::new(0, LIST_TOP + row as i32 * ENTRY_H, W, ENTRY_H);
+        let (top, per) = (self.top(), self.per_screen());
+        let first = self.page * per;
+        if self.tab == Tab::Bookmarks {
+            if marks.is_empty() {
+                let mid = (top + H - FOOTER_H) / 2;
+                let head = Label { face: serif_bold, size: 36.0, ink: INK };
+                head.draw_centred(c, raster, t().no_bookmarks, W as f32 / 2.0, mid - 30);
+                let hint = Label { face: sans, size: 28.0, ink: INK_SOFT };
+                for (n, line) in hint.wrap(t().no_bookmarks_hint, (W - 4 * PAD) as f32, 2).iter().enumerate() {
+                    hint.draw_centred(c, raster, line, W as f32 / 2.0, mid + 30 + 42 * n as i32);
+                }
+            }
+            for (row, a) in marks.iter().skip(first).take(per).enumerate() {
+                let r = Rect::new(0, top + row as i32 * ENTRY_H, W, ENTRY_H);
+                // The ribbon drawn on bookmarked pages, small, in the margin.
+                c.fill(Rect::new(PAD - 40, r.y + 24, 14, 34), INK);
+                let room = (W - PAD - REMOVE_W) as f32;
+                let title = Label { face: serif_bold, size: 33.0, ink: INK };
+                let name = a.data.chapter.as_deref().filter(|s| !s.is_empty()).unwrap_or(t().bookmark);
+                title.draw(c, raster, &title.fit(name, room - PAD as f32), PAD as f32, r.y + 50);
+                if let Some(q) = a.data.quote.as_ref().filter(|q| !q.exact.is_empty()) {
+                    let quote = Label { face: serif, size: 28.0, ink: INK_SOFT };
+                    let text = quote.fit(&format!("“{}…”", q.exact), room - PAD as f32);
+                    quote.draw(c, raster, &text, PAD as f32, r.y + 92);
+                }
+                let cross = Label { face: sans, size: 44.0, ink: INK_SOFT };
+                cross.centered(c, raster, "×", Rect::new(W - REMOVE_W, r.y, REMOVE_W - PAD / 2, r.h));
+            }
+        }
+        for (row, (i, e)) in
+            entries.iter().enumerate().skip(first).take(if self.tab == Tab::Contents { per } else { 0 }).enumerate()
+        {
+            let r = Rect::new(0, top + row as i32 * ENTRY_H, W, ENTRY_H);
             let x = PAD + INDENT * e.depth.min(MAX_DEPTH) as i32;
             let on = self.current == Some(i);
             if on {
@@ -171,7 +277,7 @@ impl Toc {
             label.draw(c, raster, &text, x as f32, label.baseline(r));
         }
 
-        let pages = Self::pages(entries);
+        let pages = self.pages(self.rows(entries.len(), marks.len()));
         if pages > 1 {
             let nav = Label { face: sans, size: 30.0, ink: INK };
             if self.page > 0 {
@@ -199,17 +305,33 @@ mod tests {
 
     #[test]
     fn taps_pick_rows_and_flip_pages() {
+        const ROWS: usize = ((H - LIST_TOP - FOOTER_H) / ENTRY_H) as usize;
         let e = entries(ROWS + 3);
-        let mut t = Toc::new(Some(ROWS + 1));
+        let mut t = Toc::new(Some(ROWS + 1), Tab::Contents);
         assert_eq!(t.page, 1, "opens on the current entry's screen");
         let row_y = |row: i32| LIST_TOP + row * ENTRY_H + ENTRY_H / 2;
-        assert_eq!(t.tap(&e, (600, row_y(2)), 600), Tap::Jump(ROWS + 2));
-        assert_eq!(t.tap(&e, (600, row_y(3)), 600), Tap::None, "past the last entry");
-        assert_eq!(t.tap(&e, (600, row_y(0)), 900), Tap::Redraw, "swipe right: previous screen");
+        assert_eq!(t.tap(&e, 0, (600, row_y(2)), 600), Tap::Jump(ROWS + 2));
+        assert_eq!(t.tap(&e, 0, (600, row_y(3)), 600), Tap::None, "past the last entry");
+        assert_eq!(t.tap(&e, 0, (600, row_y(0)), 900), Tap::Redraw, "swipe right: previous screen");
         assert_eq!(t.page, 0);
-        assert_eq!(t.tap(&e, (600, row_y(0)), 900), Tap::None, "already on the first screen");
+        assert_eq!(t.tap(&e, 0, (600, row_y(0)), 900), Tap::None, "already on the first screen");
         let next = Toc::next_button();
-        assert_eq!(t.tap(&e, (next.x + 10, next.y + 10), next.x + 10), Tap::Redraw);
-        assert_eq!(t.tap(&e, (50, 50), 50), Tap::Back);
+        assert_eq!(t.tap(&e, 0, (next.x + 10, next.y + 10), next.x + 10), Tap::Redraw);
+        assert_eq!(t.tap(&e, 0, (50, 50), 50), Tap::Back);
+
+        // The bookmarks tab: rows jump, the cross at their end removes.
+        let tab = (TABS.right() - 50, TABS.y + 10);
+        assert_eq!(t.tap(&e, 2, tab, tab.0), Tap::Redraw);
+        assert_eq!((t.tab, t.page), (Tab::Bookmarks, 0));
+        assert_eq!(t.tap(&e, 2, (600, row_y(1)), 600), Tap::Bookmark(1));
+        assert_eq!(t.tap(&e, 2, (W - 40, row_y(1)), W - 40), Tap::Remove(1));
+        assert_eq!(t.tap(&e, 2, (600, row_y(2)), 600), Tap::None, "past the last bookmark");
+        assert_eq!(t.tap(&e, 2, (TABS.x + 10, TABS.y + 10), TABS.x + 10), Tap::Redraw);
+        assert_eq!((t.tab, t.page), (Tab::Contents, 1), "back on the current entry's screen");
+
+        // Without tabs (PDFs) the list starts higher and the tab band is a row.
+        let mut bare = Toc::contents(None);
+        assert_eq!(bare.tap(&e, 0, (600, BARE_TOP + 10), 600), Tap::Jump(0));
+        assert!(bare.per_screen() > ROWS);
     }
 }

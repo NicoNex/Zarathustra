@@ -1,5 +1,5 @@
 //! The reader menu: a top bar (back to the library, book title) and a bottom sheet with the
-//! table of contents entry and the typography settings, grouped as Text (size, font) and
+//! table of contents entry, the position scrubber and the typography settings, grouped as Text (size, font) and
 //! Layout (spacing, margins, alignment). The settings persist across books and sessions.
 
 use std::path::Path;
@@ -23,6 +23,8 @@ const CHIP_GAP: i32 = 16;
 const SECTION_GAP: i32 = 40;
 const HEADER_H: i32 = 60;
 const CONTENTS_H: i32 = 104;
+/// The position scrubber under the contents row (drawn by [`crate::nav`]).
+const SCRUB_H: i32 = 120;
 const SHEET_PAD_TOP: i32 = 44;
 const SHEET_PAD_BOTTOM: i32 = 52;
 const FONT_COLS: usize = 3;
@@ -133,6 +135,7 @@ fn families(ctx: &Ctx) -> Vec<Option<String>> {
 struct Layout {
     top: i32,
     contents: Rect,
+    scrubber: Rect,
     /// Section headers: text and the band they sit in.
     headers: [(&'static str, Rect); 2],
     /// Row labels with the row they name.
@@ -150,6 +153,8 @@ impl Layout {
         let fonts_h = font_rows * ROW_H + (font_rows - 1) * CHIP_GAP;
         let height = SHEET_PAD_TOP
             + CONTENTS_H
+            + ROW_GAP
+            + SCRUB_H
             + 2 * (SECTION_GAP + HEADER_H)
             + ROW_H
             + ROW_GAP
@@ -163,7 +168,10 @@ impl Layout {
 
         let mut y = top + SHEET_PAD_TOP;
         let contents = Rect::new(PAD, y, W - 2 * PAD, CONTENTS_H);
-        y += CONTENTS_H + SECTION_GAP;
+        y += CONTENTS_H + ROW_GAP;
+        // Wider than the rows by the knob's radius, so the track lines up with them.
+        let scrubber = Rect::new(PAD - 22, y, W - 2 * (PAD - 22), SCRUB_H);
+        y += SCRUB_H + SECTION_GAP;
         let text_header = Rect::new(PAD, y, W - 2 * PAD, HEADER_H);
         y += HEADER_H;
         let size = row(y);
@@ -185,6 +193,7 @@ impl Layout {
         Layout {
             top,
             contents,
+            scrubber,
             headers: [(t().text, text_header), (t().layout, layout_header)],
             labels: [
                 (t().size, size),
@@ -217,6 +226,11 @@ pub fn controls(ctx: &Ctx) -> Vec<(Control, Rect)> {
     out.extend(segments(l.margin, MARGINS.len()).into_iter().enumerate().map(|(i, r)| (Control::Margin(i), r)));
     out.extend(segments(l.align, ALIGNS.len()).into_iter().enumerate().map(|(i, r)| (Control::Align(i), r)));
     out
+}
+
+/// Where the position scrubber goes in the sheet.
+pub fn scrubber(ctx: &Ctx) -> Rect {
+    Layout::new(families(ctx)).scrubber
 }
 
 /// Whether a tap at height `y` lands on the menu's chrome (top bar or sheet).

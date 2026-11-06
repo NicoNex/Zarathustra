@@ -99,8 +99,8 @@ impl PdfView {
     /// Handles a completed touch from `(x0, y0)` to `(x, _)`.
     pub fn tap(&mut self, (x0, y0): (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
         if let Some(view) = &mut self.toc {
-            return match view.tap(&self.contents, (x0, y0), x) {
-                toc::Tap::None => Action::None,
+            return match view.tap(&self.contents, 0, (x0, y0), x) {
+                toc::Tap::None | toc::Tap::Bookmark(_) | toc::Tap::Remove(_) => Action::None,
                 toc::Tap::Redraw => Action::Redraw { turn: None },
                 toc::Tap::Back => {
                     self.toc = None;
@@ -160,7 +160,7 @@ impl PdfView {
     }
 
     pub fn show_contents(&mut self) {
-        self.toc = Some(Toc::new(self.current_entry()));
+        self.toc = Some(Toc::contents(self.current_entry()));
     }
 
     /// Renders the page shown into the cache unless it is there. The turns call it, so MuPDF
@@ -183,7 +183,7 @@ impl PdfView {
 
     pub fn render(&mut self, c: &mut Canvas, ctx: &mut Ctx) {
         if let Some(view) = &self.toc {
-            return view.render(c, ctx, &self.contents);
+            return view.render(c, ctx, &self.contents, &[]);
         }
         c.fill(c.bounds(), 255);
         let (w, h) = (W - 2 * GUTTER, H - MARGIN_TOP - MARGIN_BOTTOM);
