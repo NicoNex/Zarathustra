@@ -1,9 +1,6 @@
 #!/bin/sh
-# Downloads free StarDict dictionaries into dev-dicts/ (gitignored), and optionally copies them
-# to the Kindle's /mnt/us/dictionaries.
-#   scripts/fetch-dicts.sh                       # download + unpack into dev-dicts/
-#   KINDLE_HOST=192.168.1.113 scripts/fetch-dicts.sh push   # also copy to the device (SSH)
-#   scripts/fetch-dicts.sh push                  # also copy to a USB-mounted Kindle
+# Downloads free StarDict dictionaries into dev-dicts/ (gitignored); `make install-ssh` or
+# `make install-usb` copies them to the Kindle's /mnt/us/dictionaries.
 #
 # Sources and licenses (dictionary content is Wiktionary: CC BY-SA 4.0 / GFDL; attribute
 # "Wiktionary contributors"):
@@ -35,17 +32,3 @@ else
 	mkdir -p "$OUT/en-en" && tar -xzf "$OUT/_dl/en-en.tar.gz" -C "$OUT/en-en"
 fi
 du -sh "$OUT"/*/ | grep -v _dl
-
-[ "$1" = push ] || exit 0
-bundle() { tar -cf - --exclude=_dl -C "$OUT" .; }
-if [ -n "$KINDLE_HOST" ]; then
-	bundle | ssh -p "${KINDLE_PORT:-2222}" -o BatchMode=yes "root@$KINDLE_HOST" \
-		'mkdir -p /mnt/us/dictionaries && tar -xf - -C /mnt/us/dictionaries'
-else
-	KINDLE="${KINDLE:-/run/media/$USER/Kindle}"
-	[ -d "$KINDLE" ] || { echo "Kindle not mounted at $KINDLE (or set KINDLE_HOST)" >&2; exit 1; }
-	mkdir -p "$KINDLE/dictionaries"
-	bundle | tar -xf - -C "$KINDLE/dictionaries" --no-same-owner --no-same-permissions -m
-	sync
-fi
-echo "Dictionaries copied to /mnt/us/dictionaries."

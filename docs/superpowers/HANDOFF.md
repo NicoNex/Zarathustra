@@ -4,7 +4,7 @@ Read CLAUDE.md first (workflow, build/deploy, reviews at milestones, agents in w
 
 ## State (all on master)
 
-Usable app on the Kindle: `KINDLE_HOST=192.168.1.113 scripts/deploy.sh` (stops a running instance), then KUAL → Zarathustra → Open Zarathustra, or over SSH `/mnt/us/extensions/zarathustra/run.sh zarathustra` (log: `/mnt/us/zarathustra/zarathustra.log`). Desktop render: `cargo run --release -p zarathustra --bin zarathustra -- [BOOK] --pgm DIR` (home.pgm, page0-2.pgm, menu.pgm, footnote*.pgm).
+Usable app on the Kindle: `make install-ssh` (stops a running instance; `make install-usb` over USB), then KUAL → Zarathustra → Open Zarathustra, or over SSH `/mnt/us/extensions/zarathustra/run.sh zarathustra` (log: `/mnt/us/zarathustra/zarathustra.log`). Desktop render: `cargo run --release -p zarathustra --bin zarathustra -- [BOOK] --pgm DIR` (home.pgm, page0-2.pgm, menu.pgm, footnote*.pgm).
 
 Footnotes (`zarathustra-engine/src/note.rs`, `zarathustra/src/footnote.rs`): tap a note reference (epub:type/role noteref, or an unmarked marker link like `12`/`*`/`[3]`, often in `<sup>`) → the note in a card over the page, laid out by the engine; long notes page inside the card (dots), tap outside or × closes. Not yet tested on the device.
 
@@ -28,7 +28,7 @@ Review rule: next review+simplify from 81677a4 when `git diff --shortstat 81677a
 
 ## 2026-11-06 evening: state
 
-Renamed Omero → Zarathustra (crates, binaries, KUAL, /mnt/us/zarathustra; deploy.sh migrates /mnt/us/omero once). `make install [KINDLE_HOST=ip | KINDLE_HOST=]` (empty = USB). Books: only /mnt/us/library/ is shown (deploy creates it empty; documents/ ignored by request).
+Renamed Omero → Zarathustra (crates, binaries, KUAL, /mnt/us/zarathustra; the one-off /mnt/us/omero migration is gone). `make install-ssh [KINDLE_HOST=ip]` or `make install-usb`. Books: only /mnt/us/library/ is shown (deploy creates it empty; documents/ ignored by request).
 Done and deployed (not yet tried by the user on the device): compact typography sheet (size + weight row, font ‹ › row, icon row), synthetic text weight (engine `font::WEIGHTS`), floating book menu beside the cover, home kept in memory while reading + `Home::refresh` (30 s on the home, on return, after delete/transfer), library search, settings screen (language, full-refresh interval), keyboard accents on long press + comma/period, power button menu (suspend/exit/restart/power off), Wi-Fi transfer (`transfer.rs`: QR + URL, PUT uploads into library/, iptables port opened on the device while open; untested on the device: Wi-Fi with the framework stopped, firewall).
 Open: collections (design proposed, not agreed), landscape/Kobo (W/H are consts), opening speed measured only on the device.
 

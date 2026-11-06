@@ -20,7 +20,7 @@ Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 
 
 - Device build: `cargo build --release --target armv7-unknown-linux-musleabihf` (static musl, linked with `rust-lld`). C deps use the AUR `arm-linux-musleabihf-cross-bin` toolchain via `.cargo/config.toml`.
 - Emulator: `cargo run -p zarathustra --features emulator --bin zarathustra-probe`.
-- Deploy over SSH (KOReader's SSH server, port 2222, key auth): `KINDLE_HOST=192.168.1.116 scripts/deploy.sh [binary-to-run]`. Over USB: same script without `KINDLE_HOST`.
+- Deploy over SSH (KOReader's SSH server, port 2222, key auth): `make install-ssh [KINDLE_HOST=…]`; `make run-ssh BIN=zarathustra-probe` installs and runs a binary. Over USB: `make install-usb`.
 - Screenshot of the device: `KINDLE_HOST=… scripts/screenshot.sh out.png`.
 - Local-only test assets (gitignored): `dev-fonts/` (Bookerly, Baskerville from the device), `dev-books/` (user's EPUBs). Tests skip silently when they are missing.
 
