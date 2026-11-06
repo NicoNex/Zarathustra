@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use mupdf::{Colorspace, Device, Document, Matrix, MetadataName, Outline, Pixmap, Rect};
+use mupdf::{Colorspace, Device, DisplayList, Document, Matrix, MetadataName, Outline, Pixmap, Rect};
 
 use crate::image::GrayImage;
 
@@ -91,7 +91,9 @@ impl Pdf {
     pub fn render(&self, n: usize, max_w: u32, max_h: u32, crop: bool) -> Result<GrayImage, PdfError> {
         let page = self.doc.load_page(i32::try_from(n).unwrap_or(i32::MAX))?;
         let bounds = page.bounds()?;
-        let area = if crop { content_box(&page, bounds)? } else { bounds };
+        // Interpreted once: cropping rasterizes the page twice (preview, then the page).
+        let list = page.to_display_list(false)?;
+        let area = if crop { content_box(&list, bounds)? } else { bounds };
         let (aw, ah) = (area.x1 - area.x0, area.y1 - area.y0);
         if aw <= 0.0 || ah <= 0.0 || max_w == 0 || max_h == 0 {
             return Err(PdfError::InvalidArgument(format!("page {n} has no area")));
@@ -99,27 +101,32 @@ impl Pdf {
         let scale = (max_w as f32 / aw).min(max_h as f32 / ah);
         let w = ((aw * scale).round() as u32).clamp(1, max_w);
         let h = ((ah * scale).round() as u32).clamp(1, max_h);
-        draw(&page, &area, scale, w, h)
+        draw(&list, &area, scale, w, h)
     }
 }
 
-/// Renders the `area` of `page` (page space) at `scale` into a white `w`×`h` gray image.
-fn draw(page: &mupdf::Page, area: &Rect, scale: f32, w: u32, h: u32) -> Result<GrayImage, PdfError> {
+/// Renders the `area` of a page's `list` (page space) at `scale` into a white `w`×`h` gray image.
+fn draw(list: &DisplayList, area: &Rect, scale: f32, w: u32, h: u32) -> Result<GrayImage, PdfError> {
     let (wi, hi) = (i32::try_from(w).unwrap_or(i32::MAX), i32::try_from(h).unwrap_or(i32::MAX));
     let mut pix = Pixmap::new_with_w_h(&Colorspace::device_gray(), wi, hi, false)?;
     pix.clear_with(255)?;
     {
         let dev = Device::from_pixmap(&pix)?;
         let ctm = Matrix::new(scale, 0.0, 0.0, scale, -area.x0 * scale, -area.y0 * scale);
-        page.run(&dev, &ctm)?;
+        list.run(&dev, &ctm, Rect::INF)?;
         // The device closes on drop, before the samples are read.
     }
     let stride = usize::try_from(pix.stride()).unwrap_or(w as usize);
     let samples = pix.samples();
-    let mut pixels = Vec::with_capacity(w as usize * h as usize);
-    for row in samples.chunks(stride).take(h as usize) {
-        pixels.extend_from_slice(&row[..(w as usize).min(row.len())]);
-    }
+    let pixels = if stride == w as usize {
+        samples.get(..w as usize * h as usize).unwrap_or(samples).to_vec()
+    } else {
+        let mut pixels = Vec::with_capacity(w as usize * h as usize);
+        for row in samples.chunks(stride).take(h as usize) {
+            pixels.extend_from_slice(&row[..(w as usize).min(row.len())]);
+        }
+        pixels
+    };
     Ok(GrayImage { width: w, height: h, pixels })
 }
 
@@ -127,11 +134,11 @@ fn draw(page: &mupdf::Page, area: &Rect, scale: f32, w: u32, h: u32) -> Result<G
 /// page per axis. The whole page when it is blank.
 // ponytail: per page, so the zoom may change between pages of uneven fill; a whole-book (or
 // odd/even) box from a few sampled pages would steady it.
-fn content_box(page: &mupdf::Page, bounds: Rect) -> Result<Rect, PdfError> {
+fn content_box(list: &DisplayList, bounds: Rect) -> Result<Rect, PdfError> {
     let (pw, ph) = (bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
     let scale = CROP_PREVIEW / pw.max(ph).max(1.0);
     let (w, h) = (((pw * scale).ceil() as u32).max(1), ((ph * scale).ceil() as u32).max(1));
-    let img = draw(page, &bounds, scale, w, h)?;
+    let img = draw(list, &bounds, scale, w, h)?;
     let Some((x0, y0, x1, y1)) = ink_box(&img) else { return Ok(bounds) };
     // Slack each side: the preview's antialiasing rounds off edges, and ink flush with the
     // screen edge looks clipped.

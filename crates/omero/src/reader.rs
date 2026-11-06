@@ -79,6 +79,14 @@ impl Position {
             offset: it.next().and_then(|o| o.parse().ok()).unwrap_or(0),
         })
     }
+
+    /// Writes the position to `file` (what [`Position::load`] reads), logging a failure.
+    pub fn save(&self, file: &Path) {
+        let Position { chapter, block, progress, offset } = self;
+        if let Err(e) = crate::write_atomic(file, format!("{chapter} {block} {progress:.4} {offset}\n")) {
+            eprintln!("position: {e}");
+        }
+    }
 }
 
 impl Reader {
@@ -126,7 +134,9 @@ impl Reader {
     pub fn goto(&mut self, data: &AnnotationData, ctx: &mut Ctx) {
         let Some(i) = self.book.spine.iter().position(|&s| u32::try_from(s) == Ok(data.start.spine)) else { return };
         let (chapter, page) = (self.chapter_index, self.page);
-        match self.load(i, ctx) {
+        // `open` laid out the saved chapter: often the highlight's own.
+        let loaded = i == chapter && !self.chapter.pages.is_empty();
+        match if loaded { Ok(()) } else { self.load(i, ctx) } {
             Ok(()) if !self.chapter.pages.is_empty() => {}
             Ok(()) => return self.restore(chapter, page, ctx),
             Err(e) => {
@@ -250,10 +260,13 @@ impl Reader {
 
     pub fn save(&self) {
         let TextPos { block, offset } = self.start();
-        let line = format!("{} {block} {:.4} {offset}\n", self.chapter_index, self.progress());
-        if let Err(e) = crate::write_atomic(&self.state_file, line) {
-            eprintln!("position: {e}");
+        Position {
+            chapter: self.chapter_index,
+            block: block as usize,
+            progress: self.progress(),
+            offset: offset as usize,
         }
+        .save(&self.state_file);
     }
 
     /// A swipe up from the bottom edge opens the menu (typography sheet), as the quick panel

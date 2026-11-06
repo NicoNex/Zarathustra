@@ -328,12 +328,14 @@ impl Store {
     /// Adds `seconds` of reading and `pages` turned to `book` on local day `day` (days since
     /// 1970-01-01).
     pub fn add_reading(&self, book: BookId, day: i64, seconds: u32, pages: u32) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO reading_stats(book_id, day, seconds, pages, words) VALUES (?1, ?2, ?3, ?4, 0)
-             ON CONFLICT(book_id, day) DO UPDATE SET seconds = seconds + excluded.seconds,
-               pages = pages + excluded.pages",
-            params![book.0, day, seconds, pages],
-        )?;
+        // Cached: it runs on every page turn.
+        self.conn
+            .prepare_cached(
+                "INSERT INTO reading_stats(book_id, day, seconds, pages, words) VALUES (?1, ?2, ?3, ?4, 0)
+                 ON CONFLICT(book_id, day) DO UPDATE SET seconds = seconds + excluded.seconds,
+                   pages = pages + excluded.pages",
+            )?
+            .execute(params![book.0, day, seconds, pages])?;
         Ok(())
     }
 

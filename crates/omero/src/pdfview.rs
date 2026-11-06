@@ -80,10 +80,7 @@ impl PdfView {
 
     /// Saved as the reader's position format, the page index in place of the chapter.
     fn save(&self) {
-        let line = format!("{} 0 {:.4} 0\n", self.page, self.progress());
-        if let Err(e) = crate::write_atomic(&self.state_file, line) {
-            eprintln!("position: {e}");
-        }
+        Position { chapter: self.page, block: 0, progress: self.progress(), offset: 0 }.save(&self.state_file);
     }
 
     /// One page forward or back; false at either end.
@@ -95,6 +92,7 @@ impl PdfView {
         };
         self.page = next;
         self.save();
+        self.raster();
         true
     }
 
@@ -112,6 +110,7 @@ impl PdfView {
                     if let Some(e) = self.contents.get(i) {
                         self.page = e.chapter.min(self.pages() - 1);
                         self.save();
+                        self.raster();
                     }
                     self.toc = None;
                     self.menu = false;
@@ -164,23 +163,31 @@ impl PdfView {
         self.toc = Some(Toc::new(self.current_entry()));
     }
 
+    /// Renders the page shown into the cache unless it is there. The turns call it, so MuPDF
+    /// runs while the previous screen update finishes, not after the app waited for it.
+    fn raster(&mut self) {
+        if self.rendered.as_ref().is_some_and(|(n, _)| *n == self.page) {
+            return;
+        }
+        let t = std::time::Instant::now();
+        let (w, h) = (W - 2 * GUTTER, H - MARGIN_TOP - MARGIN_BOTTOM);
+        match self.pdf.render(self.page, w as u32, h as u32, true) {
+            Ok(img) => self.rendered = Some((self.page, img)),
+            Err(e) => {
+                eprintln!("page {}: {e}", self.page);
+                self.rendered = None;
+            }
+        }
+        eprintln!("page {} rendered in {:?}", self.page, t.elapsed());
+    }
+
     pub fn render(&mut self, c: &mut Canvas, ctx: &mut Ctx) {
         if let Some(view) = &self.toc {
             return view.render(c, ctx, &self.contents);
         }
         c.fill(c.bounds(), 255);
         let (w, h) = (W - 2 * GUTTER, H - MARGIN_TOP - MARGIN_BOTTOM);
-        if self.rendered.as_ref().is_none_or(|(n, _)| *n != self.page) {
-            let t = std::time::Instant::now();
-            match self.pdf.render(self.page, w as u32, h as u32, true) {
-                Ok(img) => self.rendered = Some((self.page, img)),
-                Err(e) => {
-                    eprintln!("page {}: {e}", self.page);
-                    self.rendered = None;
-                }
-            }
-            eprintln!("page {} rendered in {:?}", self.page, t.elapsed());
-        }
+        self.raster();
         if let Some((_, img)) = &self.rendered {
             let x = GUTTER + (w - img.width as i32) / 2;
             let y = MARGIN_TOP + (h - img.height as i32) / 2;

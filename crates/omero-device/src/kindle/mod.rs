@@ -174,7 +174,10 @@ impl Device for Kindle {
             // and then, as the framework would.
             if self.idle_reset.is_none_or(|t| t.elapsed() >= IDLE_RESET_EVERY) {
                 self.idle_reset = Some(Instant::now());
-                power::set_prop("touchScreenSaverTimeout", 1).map_err(|e| eprintln!("powerd idle reset: {e}")).ok();
+                // On a thread: `lipc-set-prop` takes tens of ms, and this is the touch path.
+                std::thread::spawn(|| {
+                    power::set_prop("touchScreenSaverTimeout", 1).map_err(|e| eprintln!("powerd idle reset: {e}")).ok()
+                });
             }
         }
         Ok(())

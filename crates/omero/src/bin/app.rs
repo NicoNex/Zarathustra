@@ -326,8 +326,11 @@ fn main() -> Result<()> {
                     true => Action::Redraw { turn: None },
                     false => r.tap(start, t.x, &mut ctx),
                 },
-                Screen::Home(h) if held => h.long_press(start, &ctx),
-                Screen::Home(h) => h.tap(start, (t.x, t.y), &ctx),
+                // A slow tap away from a book (chips, page turns) is still a tap.
+                Screen::Home(h) => match held.then(|| h.long_press(start, &ctx)) {
+                    Some(Action::None) | None => h.tap(start, (t.x, t.y), &ctx),
+                    Some(a) => a,
+                },
                 Screen::Pdf(p) => p.tap(start, t.x, &mut ctx),
             };
             // Screen changes flash (clean slate); page turns animate and flash now and then.

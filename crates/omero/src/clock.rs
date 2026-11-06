@@ -67,6 +67,11 @@ fn tzif_offset(data: &[u8], utc: i64) -> Option<i64> {
     Some(i32::from_be_bytes(body.get(info..info + 4)?.try_into().ok()?) as i64)
 }
 
+/// Day of the week, Monday first (0), for a day count since 1970-01-01 (a Thursday).
+pub fn weekday(days: i64) -> usize {
+    (days + 3).rem_euclid(7) as usize
+}
+
 /// "Giovedì 5 novembre" / "Thursday 5 November" for a day count since 1970-01-01.
 pub fn date_text(lang: Lang, days: i64) -> String {
     let names = strings(lang);
@@ -78,7 +83,7 @@ pub fn date_text(lang: Lang, days: i64) -> String {
     let mp = (5 * doy + 2) / 153;
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 2 } else { mp - 10 } as usize;
-    format!("{} {day} {}", names.weekdays[(days + 3).rem_euclid(7) as usize], names.months[month])
+    format!("{} {day} {}", names.weekdays[weekday(days)], names.months[month])
 }
 
 /// "07:05" for minutes since midnight.

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use omero_device::{Canvas, Rect};
 use omero_engine::font::{Face, Rasterizer};
-use omero_store::{BookId, Reading, Store};
+use omero_store::{Reading, Store};
 
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, TOPBAR_H};
@@ -20,14 +20,10 @@ const FIGURE_H: i32 = 150;
 /// the database can't be read.
 pub fn days(state_dir: &Path, book: Option<&Path>) -> Vec<Reading> {
     let found = Store::open(&state_dir.join("omero.db")).and_then(|s| {
-        let id: Option<BookId> = match book {
-            Some(path) => match s.book_by_path(path)? {
-                Some(id) => Some(id),
-                None => return Ok(Vec::new()),
-            },
-            None => None,
-        };
-        s.reading_days(id)
+        match book.map(|p| s.book_by_path(p)).transpose()? {
+            Some(None) => Ok(Vec::new()), // never opened: no reading
+            id => s.reading_days(id.flatten()),
+        }
     });
     found.map_err(|e| eprintln!("stats: {e}")).unwrap_or_default()
 }
@@ -46,8 +42,13 @@ pub struct Summary {
     pub last_day: Option<i64>,
 }
 
+/// Seconds read on day `d`.
+fn seconds_on(days: &[Reading], d: i64) -> i64 {
+    days.iter().find(|r| r.day == d).map_or(0, |r| r.seconds)
+}
+
 pub fn summary(days: &[Reading], today: i64) -> Summary {
-    let on = |d: i64| days.iter().find(|r| r.day == d).map_or(0, |r| r.seconds);
+    let on = |d: i64| seconds_on(days, d);
     let mut streak = 0;
     let mut d = if on(today) > 0 { today } else { today - 1 };
     while on(d) > 0 {
@@ -131,9 +132,7 @@ impl StatsScreen {
         let top = wide.bottom() + 70;
         caption.draw(c, raster, s.last_days, PAD as f32, top);
         let chart = Rect::new(PAD, top + 40, W - 2 * PAD, 520);
-        let secs: Vec<i64> = (today - CHART_DAYS + 1..=today)
-            .map(|d| self.days.iter().find(|r| r.day == d).map_or(0, |r| r.seconds))
-            .collect();
+        let secs: Vec<i64> = (today - CHART_DAYS + 1..=today).map(|d| seconds_on(&self.days, d)).collect();
         let max = secs.iter().copied().max().unwrap_or(0).max(15 * 60);
         let slot = chart.w / CHART_DAYS as i32;
         let base = chart.bottom() - 50;
@@ -147,9 +146,13 @@ impl StatsScreen {
                 rounded_rect(c, bar, 6, if i + 1 == secs.len() { INK } else { INK_SOFT });
             }
             let day = today - CHART_DAYS + 1 + i as i64;
-            // 1970-01-01 was a Thursday: Monday-first index.
-            let wd = (day + 3).rem_euclid(7) as usize;
-            day_label.draw_centred(c, raster, s.weekday_initials[wd], (x + slot / 2) as f32, base + 40);
+            day_label.draw_centred(
+                c,
+                raster,
+                s.weekday_initials[crate::clock::weekday(day)],
+                (x + slot / 2) as f32,
+                base + 40,
+            );
         }
         // The top of the scale, so the bars read as time.
         caption.draw(c, raster, &duration(max), chart.x as f32, chart.y + 20);
