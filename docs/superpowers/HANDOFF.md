@@ -24,7 +24,7 @@ Merged (not yet on the device): review fixes (2de82c5 reviewed), library sort, b
 Power-button branch merged (2026-11-06). Book menu (`bookmenu.rs`, long press on a book): open, contents, bookmarks, search (open the book with that reader overlay via `Action::OpenOn`), about, highlights, mark read/unread, delete (second tap confirms). Device offline at last try: `scripts/fetch-dicts.sh push`, deploy, let the user test everything.
 
 Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
-Review rule: next review+simplify from 3509519 when `git diff --shortstat 3509519..HEAD -- crates` passes ~2000 added lines.
+Review rule: next review+simplify from 14c975b when `git diff --shortstat 14c975b..HEAD -- crates` passes ~2000 added lines.
 
 ## 2026-11-06 evening: state
 
@@ -43,3 +43,12 @@ Open: collections (design proposed, not agreed), landscape/Kobo (W/H are consts)
 ## Device facts
 
 PW5, FW 5.17.1, MTK hwtcon, fb 8bpp rotate=3 handled by driver, touch `/dev/input/event1` no transform, SSH root@192.168.1.113:2222 (DHCP: the address moves; was .116 — scan port 2222 if unreachable, same ED25519 key SHA256:W/z7vTC…) (KOReader dropbear, key auth). Books: `/mnt/us/documents/<Author>/*.azw3` (calibre layout), future `/mnt/us/library`. Fonts: `/usr/java/lib/fonts` (+ `/mnt/us/fonts`). State: `/mnt/us/zarathustra/state` (positions, settings.txt, typography.txt, home_view.txt, library cache). Local test assets (gitignored): `dev-fonts/`, `dev-books/` (+ `dev-books/azw3/`).
+
+## State at 2026-11-06 (end of session)
+
+- Verified on device: Wi-Fi (status, list, toggle; creating a new profile still unverified), USB plug detection (prompt appears).
+- **USB open bug**: on plug the Amazon UI's own USB mode takes over before the prompt can be tapped. Likely powerd/volumd starting drive mode by itself, or run.sh's lab126_gui restart racing. Next: check whether volumd enters drive mode without the framework (driveModeState, userstoreDeferUnmountRequest to hold it), or do the switch ourselves (unmount /mnt/base-us, point g_mass_storage's lun at /dev/loop/0's backing).
+- Light after wake: re-applied for 4 s after wake (`kindle/mod.rs` keep_light); needs a device check.
+- KUAL: "Wi-Fi probe" (dumps wifid incl. passwords — delete its output after reading), "System probe" (read-only inventory, output on the device at zarathustra/system-probe.txt).
+- De-Amazon plan: phase A (clean the Amazon system: USB, battery, clock, boot to Zarathustra with a safety file, services off; OTA may already be blocked by the jailbreak — check), phase B (Alpine with the Amazon kernel and nothing else Amazon: our own Wi-Fi bring-up and power management).
+- Never commit device data (SSIDs, passwords, MACs, IPs).
