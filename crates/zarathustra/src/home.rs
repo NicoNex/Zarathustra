@@ -800,16 +800,35 @@ impl Home {
     }
 }
 
-/// The settings button: a cog (a ring with eight teeth) in a ring.
+/// The settings button: a cog (eight square teeth round a ring, a hole in the middle) in a
+/// ring, sampled 4×4 per pixel so its curves come out smooth in gray.
 fn gear_button(c: &mut Canvas) {
     rounded_outline(c, GEAR, GEAR.h / 2, 2, LINE, PAPER);
-    let (cx, cy) = (GEAR.x + GEAR.w / 2, GEAR.y + GEAR.h / 2);
-    for n in 0..8 {
-        let a = n as f32 * std::f32::consts::FRAC_PI_4;
-        let (x, y) = (cx + (a.cos() * 13.0).round() as i32, cy + (a.sin() * 13.0).round() as i32);
-        rounded_rect(c, Rect::new(x - 5, y - 5, 10, 10), 2, INK);
+    let (cx, cy) = ((GEAR.x + GEAR.w / 2) as f32, (GEAR.y + GEAR.h / 2) as f32);
+    let (body, tip, hole, teeth) = (12.5f32, 18.0f32, 5.5f32, 8.0f32);
+    let inside = |x: f32, y: f32| {
+        let (r, a) = (x.hypot(y), y.atan2(x));
+        // Distance from the nearest tooth's centre line, along the arc at the tip.
+        let sector = std::f32::consts::TAU / teeth;
+        let off = (a.rem_euclid(sector) - sector / 2.0).abs() * tip;
+        let rim = if off < 4.0 { tip } else { body };
+        r <= rim && r >= hole
+    };
+    let span = tip.ceil() as i32 + 1;
+    for py in -span..=span {
+        for px in -span..=span {
+            let hits = (0..16)
+                .filter(|k| {
+                    let (sx, sy) = (px as f32 + (k % 4) as f32 / 4.0 + 0.125, py as f32 + (k / 4) as f32 / 4.0 + 0.125);
+                    inside(sx - 0.5, sy - 0.5)
+                })
+                .count() as i32;
+            if hits > 0 {
+                let ink = PAPER as i32 - (PAPER as i32 - INK as i32) * hits / 16;
+                c.fill(Rect::new(cx as i32 + px, cy as i32 + py, 1, 1), ink as u8);
+            }
+        }
     }
-    rounded_outline(c, Rect::new(cx - 12, cy - 12, 24, 24), 12, 6, INK, PAPER);
 }
 
 /// The statistics button: three rising bars in a ring.
