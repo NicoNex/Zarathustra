@@ -1,5 +1,14 @@
 # Handoff — 2026-11-08
 
+## 2026-11-08 (later): DB prefs, plugin system, SSH plugin — NOT yet on the device
+
+- Preferences (settings, typography, home view, pace) live in the `prefs` table (schema v2) and reading positions in `positions` (v3, keyed by book path); old `.txt`/`.pos` files are imported on first read and removed. Boot-time switches stay out of the DB (no sqlite3 on the device): the boot runs `zarathustra --start-services [--recovery]` instead.
+- Plugins (spec `docs/superpowers/specs/2026-11-08-plugins-design.md`): `plugin.rs` (manifest, runtime copy on /var/local, values in prefs, detached services with pid files), `plugin_page.rs` (page from the settings), `dist/plugins/ssh` (first plugin). Services marked active start when the app opens.
+- SSH binaries: `scripts/build-ssh.sh` (Dropbear 2026.94 + OpenSSH 10.6p2 sftp-server, pinned hashes, signatures checked). The auto-mode classifier blocks running it: the user runs `! scripts/build-ssh.sh`. **sftp-server not built yet** (the user built only Dropbear before it was added); `make stage` warns and ships the plugin without binaries otherwise.
+- Next: user runs build-ssh.sh, `make install-usb`, tries the SSH plugin (copy a public key into zarathustra/plugins/ssh/authorized_keys over USB, activate, `ssh -p 22 root@<ip>`), then actions in home/book/selection menus, review + simplify since a2be908.
+- Bug open: after "eject" on the computer, Amazon's white USB screen stays until the cable is pulled (volumd keeps drive mode). Fixed: light and redraw on unplug (`PowerEvent::Usb(false)`). Investigate the eject case over SSH once the plugin works.
+- Home quote rotates every 15 min (`home::QUOTE_EVERY`).
+
 ## Highlights across pages: DONE 2026-11-08, not yet tried on the device
 
 - While selecting, holding the finger 600 ms below the last line or above the first line turns the page (same chapter only; `highlight::EDGE_DWELL`, `Reader::edge_turn`); the selection stretches to that page's last/first word and keeps following the finger.
