@@ -9,16 +9,8 @@ USER_DIR=${ZARATHUSTRA_USER_DIR:-/mnt/us/zarathustra/plugins/ssh}
 HOST_KEY="$DATA/host_key_ed25519"
 KEYS="$DATA/authorized_keys"
 
-# Dropbear refuses keys in a folder others can write to, which the userstore (vfat) can't
-# prevent: they live here, on the rootfs.
+# The keys are kept here, on the rootfs (the userstore is vfat: no permissions at all).
 mkdir -p "$DATA" && chmod 700 "$DATA" || exit 1
-# Dropbear also checks every folder above the keys up to /: none may be writable by others
-# (folders made with umask 0 are).
-d=$(dirname "$DATA")
-while [ "$d" != / ] && [ "$d" != /var ]; do
-	chmod go-w "$d"
-	d=$(dirname "$d")
-done
 [ -f "$HOST_KEY" ] || "$DIR/dropbearmulti" dropbearkey -t ed25519 -f "$HOST_KEY" >/dev/null || exit 1
 touch "$KEYS" && chmod 600 "$KEYS"
 # Keys dropped into the plugin's folder over USB join the authorized ones, once: the file is
@@ -31,12 +23,18 @@ if [ -f "$USER_DIR/authorized_keys" ]; then
 	mv "$USER_DIR/authorized_keys" "$USER_DIR/authorized_keys.added"
 fi
 
+# Dropbear reads them from a copy: it refuses a keys file under any folder not owned by
+# root, and /var/local belongs to Amazon's framework user. /var is root's (a tmpfs, so the
+# copy is made again at every start).
+KEY_DIR=/var/zarathustra-ssh
+mkdir -p "$KEY_DIR" && chmod 755 "$KEY_DIR" && cp "$KEYS" "$KEY_DIR/authorized_keys" && chmod 600 "$KEY_DIR/authorized_keys" || exit 1
+
 # Kindle firmware drops incoming TCP: let the port through while the server runs.
 firewall() { command -v iptables >/dev/null && iptables "$1" INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null; }
 firewall -I
 # Stopping signals the whole process group (Dropbear too); stay to close the port.
 trap ':' TERM INT
-"$DIR/dropbearmulti" dropbear -F -E -s -D "$DATA" -r "$HOST_KEY" -p "$PORT" &
+"$DIR/dropbearmulti" dropbear -F -E -s -D "$KEY_DIR" -r "$HOST_KEY" -p "$PORT" &
 PID=$!
 wait "$PID"
 status=$?

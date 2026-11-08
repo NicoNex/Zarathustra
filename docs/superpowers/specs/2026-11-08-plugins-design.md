@@ -152,9 +152,10 @@ Zarathustra never downloads plugins by itself.
   10.6p2, without OpenSSL), built static by `scripts/build-ssh.sh`, copied in by `make stage`.
 - `run`: creates the ed25519 host key in `data/ssh/` if missing, merges keys from
   `{user_dir}/authorized_keys` (dropped over USB) into `data/ssh/authorized_keys` (mode 600: the
-  userstore can't hold permissions, and Dropbear refuses keys files writable by others), opens
-  the port in iptables, runs `dropbear -F -E -s -D data/ssh -r <host key> -p <port>`, and closes
-  the port when it ends.
+  userstore can't hold permissions), copies them to `/var/zarathustra-ssh/` (Dropbear refuses a
+  keys file under a folder not owned by root, and `/var/local` belongs to Amazon's `framework`
+  user), opens the port in iptables, runs `dropbear -F -E -s -D /var/zarathustra-ssh -r <host
+  key> -p <port>`, and closes the port when it ends.
 - Public-key login only (passwords and PAM compiled out), ed25519 only, modern ciphers and key
   exchanges (including post-quantum `mlkem768x25519-sha256`).
 - `status`: address (Wi-Fi IP:port), host key fingerprint, number of authorized keys.

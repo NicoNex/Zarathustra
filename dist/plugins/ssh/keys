@@ -13,6 +13,8 @@ list)
 remove)
 	case "${2:-}" in '' | *[!0-9]*) exit 2 ;; esac
 	sed -i "${2}d" "$KEYS"
+	# The running server's copy (see run): a removed key stops working at once.
+	[ -d /var/zarathustra-ssh ] && cp "$KEYS" /var/zarathustra-ssh/authorized_keys
 	;;
 *) exit 2 ;;
 esac
