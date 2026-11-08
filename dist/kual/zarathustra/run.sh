@@ -53,6 +53,12 @@ while :; do
 	"$BIN" "$@" >>"$LOG" 2>&1
 	status=$?
 	echo "exit status $status" >>"$LOG"
+	# An update (make update / install-ssh): the new binary is in place; run it again right
+	# away, without bringing the Amazon UI back in between.
+	if [ -e /tmp/zarathustra-update ]; then
+		rm -f /tmp/zarathustra-update
+		continue
+	fi
 	[ "$status" = "$USB_EXIT" ] && [ -n "$UDC_STATE" ] || break
 	# USB: the Amazon UI hands the storage to the computer; once the cable is out (and the
 	# storage is back), stop it again and start over.

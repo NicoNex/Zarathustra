@@ -1,6 +1,7 @@
 # Zarathustra on a Kindle.
 #   make install-ssh                  build, install the app and the dictionaries over SSH
 #   make install-ssh KINDLE_HOST=…    another address (DHCP moves it)
+#   make update                       app only; the running app restarts into it (fast)
 #   make install-usb                  the same onto a USB-mounted Kindle
 #   make run-ssh BIN=zarathustra-probe   install over SSH, then run a binary and show its log
 #   make dicts                        download the dictionaries into dev-dicts/
@@ -16,7 +17,7 @@ SSH := ssh -p $(KINDLE_PORT) -o BatchMode=yes root@$(KINDLE_HOST)
 # VFAT keeps no owners, permissions or mtimes.
 UNTAR_USB := tar -xf - --no-same-owner --no-same-permissions -m
 
-.PHONY: install install-ssh install-usb run-ssh build stage dicts
+.PHONY: install install-ssh install-usb update run-ssh build stage dicts
 install: install-ssh
 
 build:
@@ -43,12 +44,22 @@ dev-dicts:
 dicts:
 	scripts/fetch-dicts.sh
 
+# A running Zarathustra is told to restart into the new binary: run.sh sees the flag and runs
+# it again without bringing the Amazon UI back (seconds instead of a full round trip).
+RESTART := pidof zarathustra >/dev/null && touch /tmp/zarathustra-update && killall zarathustra; true
+
 install-ssh: stage dev-dicts
-	@# A running instance would keep the old binary and fight the new one for the screen.
-	$(SSH) 'killall zarathustra 2>/dev/null; true'
 	tar -cf - -C $(STAGE) zarathustra extensions library | $(SSH) 'tar -xf - -C /mnt/us'
 	tar -cf - --exclude=_dl -C dev-dicts . | $(SSH) 'mkdir -p /mnt/us/dictionaries && tar -xf - -C /mnt/us/dictionaries'
-	@echo "Installed on $(KINDLE_HOST). KUAL → Zarathustra."
+	$(SSH) '$(RESTART)'
+	@echo "Installed on $(KINDLE_HOST). Restarted if it was running, else KUAL → Zarathustra."
+
+# The quick loop while developing: app, KUAL extension and plugins only (no dictionaries), then
+# the running app restarts into it.
+update: stage
+	tar -cf - -C $(STAGE) zarathustra extensions | $(SSH) 'tar -xf - -C /mnt/us'
+	$(SSH) '$(RESTART)'
+	@echo "Updated on $(KINDLE_HOST)."
 
 install-usb: stage dev-dicts
 	@test -d "$(KINDLE)" || { echo "Kindle not mounted at $(KINDLE) (set KINDLE=…)" >&2; exit 1; }
