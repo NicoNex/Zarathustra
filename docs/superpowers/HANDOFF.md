@@ -1,13 +1,13 @@
 # Handoff — 2026-11-08
 
-## 2026-11-08 (later): DB prefs, plugin system, SSH plugin — NOT yet on the device
+## 2026-11-08 (evening): state — SSH plugin works on the device
 
-- Preferences (settings, typography, home view, pace) live in the `prefs` table (schema v2) and reading positions in `positions` (v3, keyed by book path); old `.txt`/`.pos` files are imported on first read and removed. Boot-time switches stay out of the DB (no sqlite3 on the device): the boot runs `zarathustra --start-services [--recovery]` instead.
-- Plugins (spec `docs/superpowers/specs/2026-11-08-plugins-design.md`): `plugin.rs` (manifest, runtime copy on /var/local, values in prefs, detached services with pid files), `plugin_page.rs` (page from the settings), `dist/plugins/ssh` (first plugin). Services marked active start when the app opens.
-- SSH binaries: `scripts/build-ssh.sh` (Dropbear 2026.94 + OpenSSH 10.6p2 sftp-server, pinned hashes, signatures checked). The auto-mode classifier blocks running it: the user runs `! scripts/build-ssh.sh`. **sftp-server not built yet** (the user built only Dropbear before it was added); `make stage` warns and ships the plugin without binaries otherwise.
-- Next: user runs build-ssh.sh, `make install-usb`, tries the SSH plugin (copy a public key into zarathustra/plugins/ssh/authorized_keys over USB, activate, `ssh -p 22 root@<ip>`), then actions in home/book/selection menus, review + simplify since a2be908.
-- Bug open: after "eject" on the computer, Amazon's white USB screen stays until the cable is pulled (volumd keeps drive mode). Fixed: light and redraw on unplug (`PowerEvent::Usb(false)`). Investigate the eject case over SSH once the plugin works.
-- Home quote rotates every 15 min (`home::QUOTE_EVERY`).
+- **Last reviewed: a03e9e3** (code-review + simplify of 9bb77c9..HEAD applied). Next review from there.
+- On the device and verified: prefs + positions in the DB (schema v3), plugin system, SSH plugin (ssh, scp, sftp; keys served from /var/zarathustra-ssh because /var/local belongs to Amazon's `framework` user and Dropbear checks folder owners), `make update` (app restarts into the new build in seconds, Amazon UI stays stopped), restart after a USB install on unplug, back pill with % and ×, drop knobs, no double edge turn, quote every 15 min, light after USB.
+- a03e9e3 itself is NOT on the device yet (Kindle asleep): `make update` when it's awake.
+- Deploy: `make update` / `make install-ssh` find the Kindle with `scripts/find-kindle.sh` (DHCP moves it: .31/.32/.33 in one afternoon); port 22 = our SSH plugin. `scripts/build-ssh.sh` must be run by the user (`! scripts/build-ssh.sh`): the auto-mode classifier blocks building downloaded code.
+- Next: (1) startup 5.5–8.7 s ("home ready"), already slow before today, grows with the 95-book library: profile it on the device; (2) selection smoothness: read `selection: N frames, wait … + draw …` lines in /tmp/zarathustra.log after a few selections and decide; (3) the white Amazon USB screen after "eject" (stays until the cable is pulled); (4) boot hook for `--start-services` (de-Amazon phase A), then show the "start at power-on" row (`plugin_page::BOOT_HOOK`); (5) positions keyed by path, not book identity (v4 migration if moved books matter); (6) plugin actions in home/book/selection menus.
+- Flaky hyphenation test still open (see below).
 
 ## Highlights across pages: DONE 2026-11-08, not yet tried on the device
 
