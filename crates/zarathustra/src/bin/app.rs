@@ -676,6 +676,14 @@ fn main() -> Result<()> {
                 Phase::Down => {
                     down = Some((t.x, t.y));
                     press = Press { at: Some(Instant::now()), ..Press::default() };
+                    // On a knob of the selection: dragging moves that end, no long press needed.
+                    if let Screen::Reader(r) = &mut screen {
+                        if let Some(rect) = r.grab((t.x, t.y)) {
+                            press = Press { at: None, fired: true, selecting: true };
+                            selection = Some(selection.map_or(rect, |s| s.union(&rect)));
+                            continue;
+                        }
+                    }
                     // A search keyboard key under the finger inverts at once, black and white.
                     let pressed = match &mut screen {
                         Screen::Reader(r) => r.press((t.x, t.y)),

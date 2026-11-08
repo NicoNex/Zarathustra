@@ -40,6 +40,9 @@ const POPUP_GAP: i32 = 28;
 pub const EDGE_DWELL: Duration = Duration::from_millis(600);
 /// Side of the bottom-right square that turns the page forward while selecting.
 const EDGE_CORNER: i32 = 200;
+/// Radius of the knobs under the selection's ends, and how near a touch must land to grab one.
+const HANDLE_R: i32 = 14;
+const GRAB: i32 = 70;
 
 /// A position in a laid-out chapter: block index and byte offset in the block's text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -125,6 +128,21 @@ pub fn word_at(text: &str, pos: usize) -> Range<usize> {
     } else {
         start..end
     }
+}
+
+/// Closing punctuation right after a word, taken along when a selection ends there: a missed
+/// full stop is the usual reason to select again.
+fn closes(c: char) -> bool {
+    matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '…' | '»' | '›' | '”' | '’' | '"' | '\'' | ')' | ']')
+}
+
+/// `word` with the closing punctuation right after it.
+fn with_punct(blocks: &[Block], word: Range<TextPos>) -> Range<TextPos> {
+    let text = blocks.get(word.end.block as usize).map_or("", |b| b.text.as_str());
+    let at = (word.end.offset as usize).min(text.len());
+    let tail = text.get(at..).unwrap_or("");
+    let n: usize = tail.chars().take_while(|&c| closes(c)).map(char::len_utf8).sum();
+    word.start..TextPos::new(word.end.block as usize, at + n)
 }
 
 fn word_range(blocks: &[Block], p: TextPos) -> Range<TextPos> {
@@ -417,7 +435,7 @@ impl Highlights {
             return Outcome::Redraw(Rect::default());
         };
         let before = sel.range.clone();
-        sel.extend(word_range(&chapter.blocks, pos));
+        sel.extend(with_punct(&chapter.blocks, word_range(&chapter.blocks, pos)));
         if sel.range == before {
             return Outcome::Redraw(Rect::default());
         }
@@ -453,9 +471,41 @@ impl Highlights {
         let mut lines = p.lines.iter();
         let pos = if forward { lines.rev().find_map(glyph) } else { lines.find_map(glyph) };
         if let Some(pos) = pos {
-            sel.extend(word_range(&chapter.blocks, pos));
+            sel.extend(with_punct(&chapter.blocks, word_range(&chapter.blocks, pos)));
         }
         Some(next)
+    }
+
+    /// The selection's ends on page `page`, on screen: the knob under its start and its end
+    /// (`true`), for the ends that are on this page.
+    fn handles(&self, chapter: &Chapter, page: usize, origin: (i32, i32)) -> Vec<((i32, i32), bool)> {
+        let (Some(p), Some(sel)) = (chapter.pages.get(page), self.selection.as_ref()) else { return Vec::new() };
+        let bands = screen_bands(p, &chapter.blocks, &sel.range, origin);
+        let starts_here = page_start(p, &chapter.blocks).is_none_or(|s| sel.range.start >= s);
+        let ends_here =
+            chapter.pages.get(page + 1).and_then(|n| page_start(n, &chapter.blocks)).is_none_or(|e| sel.range.end <= e);
+        let start = bands.first().filter(|_| starts_here).map(|r| ((r.x, r.bottom()), false));
+        let end = bands.last().filter(|_| ends_here).map(|r| ((r.right(), r.bottom()), true));
+        start.into_iter().chain(end).collect()
+    }
+
+    /// A finger down on a knob of the selection (its actions showing): that end follows the
+    /// finger from now on, the other stays. Returns the area to refresh.
+    pub fn grab(&mut self, chapter: &Chapter, page: usize, origin: (i32, i32), (x, y): (i32, i32)) -> Outcome {
+        if self.popup.as_ref().is_none_or(|p| p.target.is_some()) {
+            return Outcome::Ignored;
+        }
+        let near = |&&((hx, hy), _): &&((i32, i32), bool)| (hx - x).pow(2) + (hy - y).pow(2) <= GRAB * GRAB;
+        let handles = self.handles(chapter, page, origin);
+        let Some(&(_, end)) = handles.iter().find(near) else { return Outcome::Ignored };
+        let (Some(p), Some(sel)) = (chapter.pages.get(page), self.selection.as_mut()) else {
+            return Outcome::Ignored;
+        };
+        // The end that stays becomes the anchor; `extend` then moves the other.
+        sel.anchor = if end { sel.range.start..sel.range.start } else { sel.range.end..sel.range.end };
+        let range = sel.range.clone();
+        let damage = self.popup.take().map_or(Rect::default(), |popup| popup.rect);
+        Outcome::Redraw(damage.union(&self.bounds(p, &chapter.blocks, &range, origin)))
     }
 
     /// The finger lifted after selecting: shows the action bar.
@@ -572,7 +622,13 @@ impl Highlights {
 
     /// Screen rectangle covering `range` on page `p` (selection bar included).
     fn bounds(&self, p: &Page, blocks: &[Block], range: &Range<TextPos>, origin: (i32, i32)) -> Rect {
-        screen_bands(p, blocks, range, origin).iter().fold(Rect::default(), |u, r| u.union(r))
+        let r = screen_bands(p, blocks, range, origin).iter().fold(Rect::default(), |u, r| u.union(r));
+        // The knobs hang off the ends.
+        if r.is_empty() {
+            r
+        } else {
+            Rect::new(r.x - HANDLE_R, r.y, r.w + 2 * HANDLE_R, r.h + 2 * HANDLE_R)
+        }
     }
 
     /// Draws saved highlights and the selection; call before the page's glyphs.
@@ -592,8 +648,14 @@ impl Highlights {
     }
 
     /// Draws the popup; call after the page.
-    pub fn render_over(&self, c: &mut Canvas, ctx: &mut Ctx) {
+    pub fn render_over(&self, c: &mut Canvas, ctx: &mut Ctx, chapter: &Chapter, page: usize, origin: (i32, i32)) {
         let Some(popup) = &self.popup else { return };
+        if popup.target.is_none() {
+            for ((x, y), _) in self.handles(chapter, page, origin) {
+                let d = 2 * HANDLE_R;
+                rounded_rect(c, Rect::new(x - HANDLE_R, y - HANDLE_R / 2, d, d), HANDLE_R, INK);
+            }
+        }
         rounded_rect(c, popup.rect, 20, INK);
         let Ctx { fonts, raster, .. } = ctx;
         let Some(face) = crate::sans(fonts, true) else { return };
@@ -900,5 +962,37 @@ mod tests {
         let range = &h.resolved[0].1;
         assert!(!range_bands(&chapter.pages[0], &chapter.blocks, range).is_empty());
         assert!(!range_bands(&chapter.pages[1], &chapter.blocks, range).is_empty());
+    }
+
+    #[test]
+    fn selections_take_closing_punctuation_and_their_ends_can_be_grabbed() {
+        let (dom, blocks) = chapter(CHAPTER);
+        let chapter = Chapter { pages: vec![page(&blocks)], dom, blocks };
+        let mut h = Highlights {
+            store: None,
+            saved: Vec::new(),
+            resolved: Vec::new(),
+            spine: 0,
+            selection: None,
+            edge: None,
+            popup: None,
+            chapter_title: None,
+        };
+        let at = |r: &Range<TextPos>| (10 * r.start.offset as i32 + 15, 40 * (r.start.block as i32 + 1) - 10);
+        let (via, smarrita) = (pos_of(&chapter.blocks, "via"), pos_of(&chapter.blocks, "smarrita"));
+        h.long_press(&chapter, 0, (0, 0), at(&via));
+        h.drag(&chapter, 0, (0, 0), at(&smarrita));
+        // Ending on "smarrita" takes the full stop after it.
+        assert_eq!(h.selection.as_ref().expect("sel").range, pos_of(&chapter.blocks, "via era smarrita."));
+        h.release(&chapter, 0, (0, 0));
+        // Away from the knobs: nothing grabbed.
+        assert_eq!(h.grab(&chapter, 0, (0, 0), (0, 0)), Outcome::Ignored);
+        // The start knob: the end stays, the start follows the finger.
+        let knobs = h.handles(&chapter, 0, (0, 0));
+        let (start, _) = *knobs.iter().find(|(_, end)| !end).expect("start knob");
+        assert!(matches!(h.grab(&chapter, 0, (0, 0), start), Outcome::Redraw(_)));
+        assert!(h.popup.is_none());
+        h.drag(&chapter, 0, (0, 0), at(&pos_of(&chapter.blocks, "diritta")));
+        assert_eq!(h.selection.as_ref().expect("sel").range, pos_of(&chapter.blocks, "diritta via era smarrita."));
     }
 }

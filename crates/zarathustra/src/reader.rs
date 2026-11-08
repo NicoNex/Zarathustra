@@ -767,6 +767,15 @@ impl Reader {
         outcome_rect(self.hl.drag(&self.chapter, self.page, self.origin(), at))
     }
 
+    /// A finger down on a knob of the selection: that end follows the finger. Returns the area
+    /// to refresh, `None` when no knob is there.
+    pub fn grab(&mut self, at: (i32, i32)) -> Option<Rect> {
+        if self.menu || self.toc.is_some() || self.search_shown() || self.note.is_some() || self.card.is_some() {
+            return None;
+        }
+        outcome_rect(self.hl.grab(&self.chapter, self.page, self.origin(), at))
+    }
+
     /// While selecting with the finger held at a page edge: how long until the page turns.
     pub fn edge_wait(&self) -> Option<std::time::Duration> {
         self.hl.edge_wait()
@@ -846,7 +855,7 @@ impl Reader {
         if let Some(m) = self.back.get() {
             nav::draw_pill(c, ctx, m.page);
         }
-        self.hl.render_over(c, ctx);
+        self.hl.render_over(c, ctx, &self.chapter, self.page, self.origin());
         if let Some(popup) = &self.note {
             popup.render(c, ctx, self.typo.weight);
         }
