@@ -767,6 +767,22 @@ impl Reader {
         outcome_rect(self.hl.drag(&self.chapter, self.page, self.origin(), at))
     }
 
+    /// While selecting with the finger held at a page edge: how long until the page turns.
+    pub fn edge_wait(&self) -> Option<std::time::Duration> {
+        self.hl.edge_wait()
+    }
+
+    /// The finger held at a page edge long enough while selecting: turns the page within the
+    /// chapter, the selection carrying on there. True when the page turned.
+    pub fn edge_turn(&mut self) -> bool {
+        let Some(next) = self.hl.edge_turn(&self.chapter, self.page) else { return false };
+        self.page = next;
+        self.found = None;
+        self.back.turned();
+        self.save();
+        true
+    }
+
     /// Screen rectangle of a button of the highlight popup, when one is open.
     pub fn popup_button(&self, b: crate::highlight::Button) -> Option<Rect> {
         self.hl.button(b)

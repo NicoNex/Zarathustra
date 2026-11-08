@@ -8,7 +8,7 @@
 
 use std::ops::Range;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zarathustra_device::{Canvas, Rect};
 use zarathustra_engine::anchor::{cfi_for, reanchor, resolve_cfi, Anchor, TextMap, TextQuote};
@@ -35,6 +35,11 @@ const SELECTION_BAR: i32 = 5;
 const POPUP_H: i32 = 100;
 const BUTTON_W: i32 = 240;
 const POPUP_GAP: i32 = 28;
+/// Hold the finger this long past the text's first or last line (or in the bottom-right
+/// corner) while selecting to turn the page; the selection carries on there.
+pub const EDGE_DWELL: Duration = Duration::from_millis(600);
+/// Side of the bottom-right square that turns the page forward while selecting.
+const EDGE_CORNER: i32 = 200;
 
 /// A position in a laid-out chapter: block index and byte offset in the block's text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -287,6 +292,8 @@ pub struct Highlights {
     resolved: Vec<(usize, Range<TextPos>)>,
     spine: u32,
     selection: Option<Selection>,
+    /// While selecting, the finger at a page edge: since when, and whether it points forward.
+    edge: Option<(Instant, bool)>,
     popup: Option<Popup>,
     /// Table-of-contents title of the page shown, stored with new highlights for lists.
     pub chapter_title: Option<String>,
@@ -321,7 +328,16 @@ impl Highlights {
         let saved =
             store.as_ref().and_then(|(s, id)| s.annotations(*id).map_err(|e| eprintln!("highlights: {e}")).ok());
         let saved = saved.unwrap_or_default().into_iter().filter(|a| is_drawn(a.data.kind)).collect();
-        Highlights { store, saved, resolved: Vec::new(), spine: 0, selection: None, popup: None, chapter_title: None }
+        Highlights {
+            store,
+            saved,
+            resolved: Vec::new(),
+            spine: 0,
+            selection: None,
+            edge: None,
+            popup: None,
+            chapter_title: None,
+        }
     }
 
     /// Finds this chapter's highlights in its new layout; drops any selection.
@@ -362,6 +378,7 @@ impl Highlights {
     /// Clears the selection and popup (page turned, menu opened).
     pub fn dismiss(&mut self) {
         self.selection = None;
+        self.edge = None;
         self.popup = None;
     }
 
@@ -388,9 +405,14 @@ impl Highlights {
 
     /// The finger moved while selecting: extends the selection to the word under it.
     pub fn drag(&mut self, chapter: &Chapter, page: usize, origin: (i32, i32), (x, y): (i32, i32)) -> Outcome {
-        let (Some(p), Some(sel)) = (chapter.pages.get(page), self.selection.as_mut()) else {
+        let Some(p) = chapter.pages.get(page).filter(|_| self.selection.is_some()) else {
             return Outcome::Ignored;
         };
+        let dir = edge_dir(p, origin, (x, y));
+        if self.edge.map(|(_, f)| f) != dir {
+            self.edge = dir.map(|f| (Instant::now(), f));
+        }
+        let Some(sel) = self.selection.as_mut() else { return Outcome::Ignored };
         let Some(pos) = hit(p, &chapter.blocks, (x - origin.0) as f32, (y - origin.1) as f32) else {
             return Outcome::Redraw(Rect::default());
         };
@@ -407,8 +429,38 @@ impl Highlights {
         Outcome::Redraw(damage)
     }
 
+    /// How long until the finger held at a page edge turns the page, while selecting.
+    pub fn edge_wait(&self) -> Option<Duration> {
+        let (since, _) = self.edge.filter(|_| self.selection.is_some())?;
+        Some(EDGE_DWELL.saturating_sub(since.elapsed()))
+    }
+
+    /// The finger held at a page edge long enough: the page to turn to (same chapter only),
+    /// with the selection stretched to that page's last word (forward) or first (back) and
+    /// the dwell restarted, so holding on keeps turning.
+    // ponytail: stops at the chapter's ends (a chapter load drops the selection); carry the
+    // selection across chapters if highlights spanning them are wanted.
+    pub fn edge_turn(&mut self, chapter: &Chapter, page: usize) -> Option<usize> {
+        let (since, forward) = self.edge?;
+        let sel = self.selection.as_mut().filter(|_| since.elapsed() >= EDGE_DWELL)?;
+        self.edge = Some((Instant::now(), forward));
+        let next = if forward { page + 1 } else { page.checked_sub(1)? };
+        let p = chapter.pages.get(next)?;
+        let glyph = |l: &PageLine| {
+            let mut g = l.glyphs.iter().filter(|g| !g.inserted);
+            if forward { g.next_back() } else { g.next() }.map(|g| glyph_pos(&chapter.blocks, l, g.run, g.offset))
+        };
+        let mut lines = p.lines.iter();
+        let pos = if forward { lines.rev().find_map(glyph) } else { lines.find_map(glyph) };
+        if let Some(pos) = pos {
+            sel.extend(word_range(&chapter.blocks, pos));
+        }
+        Some(next)
+    }
+
     /// The finger lifted after selecting: shows the action bar.
     pub fn release(&mut self, chapter: &Chapter, page: usize, origin: (i32, i32)) -> Outcome {
+        self.edge = None;
         let (Some(p), Some(sel)) = (chapter.pages.get(page), self.selection.as_ref()) else {
             return Outcome::Ignored;
         };
@@ -552,6 +604,22 @@ impl Highlights {
             }
             label.centered(c, raster, b.label(), *r);
         }
+    }
+}
+
+/// Whether `(x, y)` on screen is past page `p`'s text: below its last line or in the
+/// bottom-right corner (forward), above its first line (back).
+fn edge_dir(p: &Page, origin: (i32, i32), (x, y): (i32, i32)) -> Option<bool> {
+    let lines = p.lines.iter().filter(|l| !l.glyphs.is_empty());
+    let top = lines.clone().next().map_or(0.0, |l| line_band(l).0);
+    let bottom = lines.clone().next_back().map_or(0.0, |l| line_band(l).1);
+    let y_text = (y - origin.1) as f32;
+    if y_text > bottom + SLOP as f32 || (x >= W - EDGE_CORNER && y >= crate::H - EDGE_CORNER) {
+        Some(true)
+    } else if y_text < top - SLOP as f32 {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -735,6 +803,7 @@ mod tests {
             resolved: Vec::new(),
             spine: 0,
             selection: None,
+            edge: None,
             popup: None,
             chapter_title: None,
         };
@@ -784,5 +853,52 @@ mod tests {
         assert!(h.resolved.is_empty() && h.saved.is_empty());
         let (store, book) = h.store.as_ref().expect("store");
         assert!(store.annotations(*book).expect("list").is_empty());
+    }
+
+    #[test]
+    fn holding_past_the_last_line_turns_the_page_and_the_selection_follows() {
+        let (dom, blocks) = chapter(CHAPTER);
+        // Page 0: the heading and the first paragraph; page 1: the second paragraph.
+        let mut first = page(&blocks);
+        let second = Page { lines: first.lines.split_off(2), images: Vec::new() };
+        let chapter = Chapter { dom, blocks, pages: vec![first, second] };
+        let mut h = Highlights {
+            store: None,
+            saved: Vec::new(),
+            resolved: Vec::new(),
+            spine: 0,
+            selection: None,
+            edge: None,
+            popup: None,
+            chapter_title: None,
+        };
+        let target = pos_of(&chapter.blocks, "cammin");
+        h.long_press(&chapter, 0, (0, 0), (10 * target.start.offset as i32 + 25, 70));
+        // Within the text: no edge. Below the last line: forward, after the dwell.
+        h.drag(&chapter, 0, (0, 0), (100, 70));
+        assert_eq!(h.edge_wait(), None);
+        h.drag(&chapter, 0, (0, 0), (100, 400));
+        assert!(h.edge_wait().is_some());
+        assert_eq!(h.edge_turn(&chapter, 0), None, "dwell not over");
+        h.edge = h.edge.map(|(_, f)| (Instant::now() - EDGE_DWELL, f));
+        assert_eq!(h.edge_turn(&chapter, 0), Some(1));
+        let sel = h.selection.clone().expect("still selecting").range;
+        assert_eq!(sel.start, target.start);
+        assert_eq!(sel.end, TextPos::new(2, chapter.blocks[2].text.len()));
+        // On the new page the free end follows the finger again, back and forth.
+        let diritta = pos_of(&chapter.blocks, "diritta");
+        h.drag(&chapter, 1, (0, 0), (10 * diritta.start.offset as i32 + 25, 110));
+        assert_eq!(h.selection.as_ref().expect("selecting").range, target.start..diritta.end);
+        h.drag(&chapter, 1, (0, 0), (100, 400));
+        h.edge = h.edge.map(|(_, f)| (Instant::now() - EDGE_DWELL, f));
+        // The last page: nowhere further to go.
+        h.edge = h.edge.map(|(_, f)| (Instant::now() - EDGE_DWELL, f));
+        assert_eq!(h.edge_turn(&chapter, 1), None);
+        // Saved as one highlight, drawn on both pages.
+        h.end_selection(&chapter, 1, (0, 0), true);
+        assert_eq!(h.resolved.len(), 1);
+        let range = &h.resolved[0].1;
+        assert!(!range_bands(&chapter.pages[0], &chapter.blocks, range).is_empty());
+        assert!(!range_bands(&chapter.pages[1], &chapter.blocks, range).is_empty());
     }
 }

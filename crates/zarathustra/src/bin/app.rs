@@ -523,7 +523,12 @@ fn main() -> Result<()> {
         };
         // Typed keys or text waiting for the refresh over them to end.
         let due = typing.due();
-        let timeout = if searching { Duration::ZERO } else { long_press.unwrap_or(idle) };
+        // A finger held at a page edge while selecting turns the page after a dwell.
+        let edge = match &screen {
+            Screen::Reader(r) if press.selecting => r.edge_wait(),
+            _ => None,
+        };
+        let timeout = if searching { Duration::ZERO } else { long_press.or(edge).unwrap_or(idle) };
         dev.wait_events(Some(due.map_or(timeout, |d| d.min(timeout))), &mut events)?;
         typing.flush(&mut dev, &mut marker)?;
         let mut power = false;
@@ -882,6 +887,11 @@ fn main() -> Result<()> {
                 ready(&mut dev, &mut typing, &mut marker)?;
                 r.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
+            }
+        }
+        if let (Screen::Reader(r), true) = (&mut screen, press.selecting) {
+            if r.edge_turn() {
+                selection = Some(full);
             }
         }
         if let Some(rect) = selection.filter(|r| !r.is_empty()) {
