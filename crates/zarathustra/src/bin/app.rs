@@ -127,6 +127,22 @@ impl Press {
     }
 }
 
+/// The binary run.sh copies to /tmp and runs (size, modification time); `None` off the device.
+fn installed_binary() -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::metadata("/mnt/us/zarathustra/bin/zarathustra").ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// Exits so that run.sh runs the newly installed binary at once (the flag tells it this is
+/// an update), keeping the Amazon UI stopped. The position and settings are already saved.
+fn restart_into_update() -> ! {
+    eprintln!("a new binary was installed: restarting into it");
+    if let Err(e) = std::fs::write("/tmp/zarathustra-update", b"") {
+        eprintln!("update flag: {e}");
+    }
+    std::process::exit(0)
+}
+
 fn library_dirs() -> Vec<PathBuf> {
     // Only the books the user put in library/; Amazon's documents/ is left alone.
     vec![zarathustra::library_dir()]
@@ -542,6 +558,8 @@ fn main() -> Result<()> {
     let mut typing = Typing::default();
     let mut events = Vec::new();
     let mut asleep = false;
+    // The installed binary as it was at start: a new one copied over USB means restart into it.
+    let installed = installed_binary();
     loop {
         events.clear();
         // Wake every few minutes so automatic warmth follows the clock, or when a finger held
@@ -609,6 +627,9 @@ fn main() -> Result<()> {
                 }
                 // The computer let the storage go: Amazon's USB screen and light are ours again.
                 PowerEvent::Usb(false) if !asleep => {
+                    if installed.is_some() && installed_binary() != installed {
+                        restart_into_update();
+                    }
                     quick.restore_light(&mut dev);
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
