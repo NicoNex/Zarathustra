@@ -1657,6 +1657,7 @@ dependencies = [
  "percent-encoding",
  "qrcode",
  "serde",
+ "thiserror",
  "toml",
  "zarathustra-device",
  "zarathustra-engine",

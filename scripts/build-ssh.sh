@@ -17,7 +17,7 @@ SHA256=e098034a843699200c8c977a991fff73159735bf795d5f72ef672c41a6b1ae81
 OPENSSH=10.6p2
 OPENSSH_SHA256=9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b
 CROSS=arm-linux-musleabihf
-# Where Zarathustra installs the SSH binaries on the device (persistent rootfs, not the
+# The SSH plugin runs from its runtime copy under $PREFIX/plugins/ssh (persistent rootfs, not the
 # userstore: a running server must not keep /mnt/us busy when it goes to a computer over USB).
 PREFIX=/var/local/zarathustra
 
@@ -72,7 +72,7 @@ cat >"$SRC/localoptions.h" <<EOF
 #define RSA_PRIV_FILENAME "$PREFIX/ssh/dropbear_rsa_host_key"
 #define ECDSA_PRIV_FILENAME "$PREFIX/ssh/dropbear_ecdsa_host_key"
 #define ED25519_PRIV_FILENAME "$PREFIX/ssh/dropbear_ed25519_host_key"
-#define SFTPSERVER_PATH "$PREFIX/bin/sftp-server"
+#define SFTPSERVER_PATH "$PREFIX/plugins/ssh/sftp-server"
 #define DEFAULT_PATH "/usr/bin:/bin:/usr/sbin:/sbin"
 #define DEFAULT_ROOT_PATH "/usr/sbin:/usr/bin:/sbin:/bin"
 EOF

@@ -30,6 +30,13 @@ stage: build
 	cp $(addprefix $(BIN_DIR)/,$(BINS)) $(STAGE)/zarathustra/bin/
 	cp -r dist/kual/zarathustra $(STAGE)/extensions/
 	cp assets/hyphenation/*.bincode $(STAGE)/zarathustra/hyph/
+	@# Plugins, with the SSH binaries from scripts/build-ssh.sh when they are built.
+	cp -r dist/plugins $(STAGE)/zarathustra/
+	@if [ -f target/ssh/dropbearmulti ] && [ -f target/ssh/sftp-server ]; then \
+		cp target/ssh/dropbearmulti target/ssh/sftp-server $(STAGE)/zarathustra/plugins/ssh/; \
+	else \
+		echo "warning: SSH binaries not built (scripts/build-ssh.sh): the SSH plugin won't run" >&2; \
+	fi
 
 dev-dicts:
 	scripts/fetch-dicts.sh

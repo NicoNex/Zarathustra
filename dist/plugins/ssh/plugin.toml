@@ -1,0 +1,30 @@
+# Remote shell and file transfer, public keys only. Labels are shown as written (no
+# translations yet).
+display_name = "SSH"
+description = "Accesso remoto e trasferimento file, solo con chiavi"
+plugin_version = "1.0.0"
+format_version = 1
+
+[service]
+executable = "run"
+start_at_boot = true
+# The way back in when Zarathustra itself is broken.
+start_in_recovery = true
+
+[status]
+executable = "status"
+
+[[setting]]
+id = "port"
+kind = "number"
+label = "Porta"
+default_value = 22
+minimum = 1
+maximum = 65535
+step = 1
+
+[[setting]]
+id = "authorized_keys"
+kind = "list"
+label = "Chiavi autorizzate"
+list_executable = "keys"

@@ -1,0 +1,18 @@
+#!/bin/sh
+# The authorized keys: "keys list" prints "<line number><TAB><type comment …key end>",
+# "keys remove <line number>" deletes that line.
+KEYS=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}/authorized_keys
+case "${1:-}" in
+list)
+	[ -f "$KEYS" ] || exit 0
+	awk '/^[^#]/ && NF >= 2 {
+		comment = ""; for (i = 3; i <= NF; i++) comment = comment " " $i
+		printf "%d\t%s%s …%s\n", NR, $1, comment, substr($2, length($2) - 7)
+	}' "$KEYS"
+	;;
+remove)
+	case "${2:-}" in '' | *[!0-9]*) exit 2 ;; esac
+	sed -i "${2}d" "$KEYS"
+	;;
+*) exit 2 ;;
+esac

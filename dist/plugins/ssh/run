@@ -1,0 +1,39 @@
+#!/bin/sh
+# SSH service: Dropbear in the foreground, public keys only. Works with no settings at all
+# (the recovery boot may run it bare): port 22, the device's folders.
+set -u
+DIR=$(cd "$(dirname "$0")" && pwd)
+PORT=${ZARATHUSTRA_SETTING_PORT:-22}
+DATA=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}
+USER_DIR=${ZARATHUSTRA_USER_DIR:-/mnt/us/zarathustra/plugins/ssh}
+HOST_KEY="$DATA/host_key_ed25519"
+KEYS="$DATA/authorized_keys"
+
+# Dropbear refuses keys in a folder others can write to, which the userstore (vfat) can't
+# prevent: they live here, on the rootfs.
+mkdir -p "$DATA" && chmod 700 "$DATA" || exit 1
+[ -f "$HOST_KEY" ] || "$DIR/dropbearmulti" dropbearkey -t ed25519 -f "$HOST_KEY" >/dev/null || exit 1
+touch "$KEYS" && chmod 600 "$KEYS"
+# Keys dropped into the plugin's folder over USB join the authorized ones, once: the file is
+# renamed, so a key removed from the list doesn't come back.
+if [ -f "$USER_DIR/authorized_keys" ]; then
+	while IFS= read -r line || [ -n "$line" ]; do
+		case "$line" in '' | '#'*) continue ;; esac
+		grep -qxF "$line" "$KEYS" || printf '%s\n' "$line" >>"$KEYS"
+	done <"$USER_DIR/authorized_keys"
+	mv "$USER_DIR/authorized_keys" "$USER_DIR/authorized_keys.added"
+fi
+
+# Kindle firmware drops incoming TCP: let the port through while the server runs.
+firewall() { command -v iptables >/dev/null && iptables "$1" INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null; }
+firewall -I
+# Stopping signals the whole process group (Dropbear too); stay to close the port.
+trap ':' TERM INT
+"$DIR/dropbearmulti" dropbear -F -E -s -D "$DATA" -r "$HOST_KEY" -p "$PORT" &
+PID=$!
+wait "$PID"
+status=$?
+# A signal ends the first wait early: wait for Dropbear itself.
+kill -0 "$PID" 2>/dev/null && wait "$PID"
+firewall -D
+exit "$status"

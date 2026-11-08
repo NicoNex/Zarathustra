@@ -16,6 +16,27 @@ use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use serde::Deserialize;
 
+/// Why a plugin, or one of its runs, failed: shown on its page.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginError {
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("plugin.toml: {0}")]
+    Manifest(#[from] toml::de::Error),
+    #[error("needs a newer Zarathustra (format {0})")]
+    NewerFormat(u32),
+    #[error("{executable}: {source}")]
+    Spawn { executable: String, source: std::io::Error },
+    #[error("{executable}: no answer in {} s", RUN_TIMEOUT.as_secs())]
+    Timeout { executable: String },
+    #[error("{executable}: {status}")]
+    Failed { executable: String, status: std::process::ExitStatus },
+    #[error("{0} is not a list setting")]
+    NotAList(String),
+}
+
+pub type Result<T, E = PluginError> = std::result::Result<T, E>;
+
 /// The newest `format_version` this build understands.
 pub const FORMAT_VERSION: u32 = 1;
 /// How long a status, list or action run may take.
@@ -165,7 +186,8 @@ impl Dirs {
 #[derive(Debug, Clone)]
 pub struct Plugin {
     pub id: String,
-    pub manifest: Result<Manifest, String>,
+    /// The manifest, or why it can't be used (shown in its place).
+    pub manifest: std::result::Result<Manifest, String>,
     dirs: Dirs,
 }
 
@@ -181,7 +203,7 @@ pub fn discover(dirs: &Dirs) -> Vec<Plugin> {
                 eprintln!("plugin {id:?}: the folder name must be lowercase letters, digits and '-'");
                 return None;
             }
-            let manifest = load_manifest(&e.path().join("plugin.toml"));
+            let manifest = load_manifest(&e.path().join("plugin.toml")).map_err(|e| e.to_string());
             if let Err(e) = &manifest {
                 eprintln!("plugin {id}: {e}");
             }
@@ -192,11 +214,10 @@ pub fn discover(dirs: &Dirs) -> Vec<Plugin> {
     plugins
 }
 
-fn load_manifest(path: &Path) -> Result<Manifest, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let manifest: Manifest = toml::from_str(&text).map_err(|e| e.to_string())?;
+fn load_manifest(path: &Path) -> Result<Manifest> {
+    let manifest: Manifest = toml::from_str(&std::fs::read_to_string(path)?)?;
     if manifest.format_version > FORMAT_VERSION {
-        return Err(format!("needs a newer Zarathustra (format {})", manifest.format_version));
+        return Err(PluginError::NewerFormat(manifest.format_version));
     }
     Ok(manifest)
 }
@@ -333,19 +354,20 @@ impl Plugin {
     }
 
     /// Runs `run` to completion within [`RUN_TIMEOUT`]; its stdout, or why it failed.
-    fn capture(&self, state_dir: &Path, run: &Run, args: &[&str], extra: &[(&str, &str)]) -> Result<String, String> {
-        self.prepare().map_err(|e| e.to_string())?;
+    fn capture(&self, state_dir: &Path, run: &Run, args: &[&str], extra: &[(&str, &str)]) -> Result<String> {
+        self.prepare()?;
         let mut cmd = self.command(run, &self.values(state_dir), extra);
         cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-        let mut child = cmd.spawn().map_err(|e| format!("{}: {e}", run.executable))?;
+        let executable = || run.executable.clone();
+        let mut child = cmd.spawn().map_err(|source| PluginError::Spawn { executable: executable(), source })?;
         let deadline = Instant::now() + RUN_TIMEOUT;
         let status = loop {
-            match child.try_wait().map_err(|e| e.to_string())? {
+            match child.try_wait()? {
                 Some(status) => break status,
                 None if Instant::now() >= deadline => {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("{}: no answer in {} s", run.executable, RUN_TIMEOUT.as_secs()));
+                    return Err(PluginError::Timeout { executable: executable() });
                 }
                 None => std::thread::sleep(Duration::from_millis(20)),
             }
@@ -354,16 +376,16 @@ impl Plugin {
         // stalls into the timeout; read it on a thread if a plugin ever prints that much.
         let mut out = String::new();
         if let Some(mut pipe) = child.stdout.take() {
-            pipe.read_to_string(&mut out).map_err(|e| e.to_string())?;
+            pipe.read_to_string(&mut out)?;
         }
         if !status.success() {
-            return Err(format!("{}: {status}", run.executable));
+            return Err(PluginError::Failed { executable: executable(), status });
         }
         Ok(out)
     }
 
     /// The status lines, `Label=value`.
-    pub fn status(&self, state_dir: &Path) -> Result<Vec<(String, String)>, String> {
+    pub fn status(&self, state_dir: &Path) -> Result<Vec<(String, String)>> {
         let Some(run) = self.manifest.as_ref().ok().and_then(|m| m.status.clone()) else { return Ok(Vec::new()) };
         let out = self.capture(state_dir, &run, &[], &[])?;
         Ok(out.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().into(), v.trim().into())).collect())
@@ -378,14 +400,14 @@ impl Plugin {
     }
 
     /// A list setting's items: id, text.
-    pub fn list(&self, state_dir: &Path, setting: &str) -> Result<Vec<(String, String)>, String> {
-        let run = self.list_run(setting).ok_or("not a list")?;
+    pub fn list(&self, state_dir: &Path, setting: &str) -> Result<Vec<(String, String)>> {
+        let run = self.list_run(setting).ok_or_else(|| PluginError::NotAList(setting.into()))?;
         let out = self.capture(state_dir, &run, &["list"], &[])?;
         Ok(out.lines().filter_map(|l| l.split_once('\t')).map(|(id, text)| (id.into(), text.into())).collect())
     }
 
-    pub fn remove(&self, state_dir: &Path, setting: &str, id: &str) -> Result<(), String> {
-        let run = self.list_run(setting).ok_or("not a list")?;
+    pub fn remove(&self, state_dir: &Path, setting: &str, id: &str) -> Result<()> {
+        let run = self.list_run(setting).ok_or_else(|| PluginError::NotAList(setting.into()))?;
         self.capture(state_dir, &run, &["remove", id], &[]).map(drop)
     }
 
@@ -395,7 +417,7 @@ impl Plugin {
         let extra = [("book", book), ("selection", selection)];
         match self.capture(state_dir, &a.run, &[], &extra) {
             Ok(out) => out.lines().next().unwrap_or_default().to_string(),
-            Err(e) => e,
+            Err(e) => e.to_string(),
         }
     }
 
@@ -424,19 +446,20 @@ impl Plugin {
 
     /// Starts the service (if not running) in its own process group, its output in
     /// `service.log`.
-    pub fn start(&self, state_dir: &Path) -> Result<(), String> {
+    pub fn start(&self, state_dir: &Path) -> Result<()> {
         use std::os::unix::process::CommandExt;
         let Some(service) = self.service() else { return Ok(()) };
         if self.is_running() {
             return Ok(());
         }
-        self.prepare().map_err(|e| e.to_string())?;
-        let log = std::fs::File::create(self.data_dir().join("service.log")).map_err(|e| e.to_string())?;
-        let err = log.try_clone().map_err(|e| e.to_string())?;
+        self.prepare()?;
+        let log = std::fs::File::create(self.data_dir().join("service.log"))?;
+        let err = log.try_clone()?;
         let mut cmd = self.command(&service.run, &self.values(state_dir), &[]);
         cmd.stdin(Stdio::null()).stdout(log).stderr(err).process_group(0);
-        let child = cmd.spawn().map_err(|e| format!("{}: {e}", service.run.executable))?;
-        std::fs::write(self.pid_file(), format!("{}\n", child.id())).map_err(|e| e.to_string())?;
+        let executable = service.run.executable.clone();
+        let child = cmd.spawn().map_err(|source| PluginError::Spawn { executable, source })?;
+        std::fs::write(self.pid_file(), format!("{}\n", child.id()))?;
         // Not waited on: the service outlives the app (its zombie, if it exits first, is
         // reaped when the app does).
         drop(child);
@@ -459,7 +482,7 @@ impl Plugin {
     }
 
     /// Restarts a running service (its settings changed).
-    pub fn restart(&self, state_dir: &Path) -> Result<(), String> {
+    pub fn restart(&self, state_dir: &Path) -> Result<()> {
         if !self.is_running() {
             return Ok(());
         }
@@ -603,7 +626,7 @@ list_executable = "items"
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join("plugin.toml"), MANIFEST.replace("format_version = 1", "format_version = 9"))
             .expect("w");
-        assert!(load_manifest(&dir.join("plugin.toml")).is_err_and(|e| e.contains("newer")));
+        assert!(matches!(load_manifest(&dir.join("plugin.toml")), Err(PluginError::NewerFormat(9))));
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -624,7 +647,7 @@ list_executable = "items"
         );
         p.remove(&state, "items", "b").expect("remove");
         assert_eq!(std::fs::read_to_string(p.data_dir().join("removed")).expect("removed").trim(), "b");
-        assert!(p.list(&state, "port").is_err(), "not a list");
+        assert!(matches!(p.list(&state, "port"), Err(PluginError::NotAList(_))));
         std::fs::remove_dir_all(root).ok();
     }
 

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Status lines for the plugin's page: Label=value.
+DIR=$(cd "$(dirname "$0")" && pwd)
+PORT=${ZARATHUSTRA_SETTING_PORT:-22}
+DATA=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}
+IP=$(ip -4 addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
+if [ -n "$IP" ]; then echo "Indirizzo=root@$IP -p $PORT"; else echo "Indirizzo=senza Wi-Fi"; fi
+if [ -f "$DATA/host_key_ed25519" ]; then
+	FP=$("$DIR/dropbearmulti" dropbearkey -y -f "$DATA/host_key_ed25519" 2>/dev/null | sed -n 's/^Fingerprint: //p')
+	echo "Chiave del Kindle=${FP:-?}"
+else
+	echo "Chiave del Kindle=creata al primo avvio"
+fi
+N=$(grep -c '^[^#]' "$DATA/authorized_keys" 2>/dev/null || true)
+echo "Chiavi autorizzate=${N:-0}"
