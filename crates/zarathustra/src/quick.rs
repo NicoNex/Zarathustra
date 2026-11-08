@@ -563,6 +563,11 @@ impl QuickPanel {
         }
     }
 
+    /// Sets the light to the saved levels again: something else (Amazon's USB screen) changed it.
+    pub fn restore_light(&mut self, dev: &mut dyn Device) {
+        self.apply(dev);
+    }
+
     fn apply(&mut self, dev: &mut dyn Device) {
         self.applied = Some(Instant::now());
         let light = Light { brightness: self.settings.brightness, warmth: self.has_warmth.then_some(self.warmth) };

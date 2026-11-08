@@ -140,14 +140,24 @@ pub struct Home {
     pub wifi: bool,
     /// Reading totals for the band (today, last 7 days, streak).
     reading: stats::Summary,
-    /// A highlight for the band: its words and its book's title (one a day, from the recent).
+    /// A highlight for the band: its words and its book's title (a new one every
+    /// [`QUOTE_EVERY`], from the recent).
     quote: Option<(String, String)>,
+    /// The quote slot `quote` was picked for.
+    quote_slot: i64,
 }
 
 /// The band under the continue-reading card.
 const BAND_H: i32 = 190;
 /// Longest highlight the first page quotes, in characters: two lines of the band.
 const QUOTE_MAX: usize = 130;
+/// How long one highlight stays quoted before the next.
+const QUOTE_EVERY: i64 = 15 * 60;
+
+/// Which quote is due now: the index of the current [`QUOTE_EVERY`] slot.
+fn quote_slot() -> i64 {
+    crate::reader::now_secs().div_euclid(QUOTE_EVERY)
+}
 
 /// The first page's band, under the row of books.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,11 +172,12 @@ pub enum Band {
 fn band_data(ctx: &Ctx, current: Option<(&Path, &str)>) -> (stats::Summary, Option<(String, String)>) {
     let today = crate::clock::local_now().0;
     let reading = stats::summary(&stats::days(&ctx.state_dir, None), today);
+    let slot = quote_slot();
     // Whole sentences that fit the band's two lines (about 65 characters each): a quote cut
     // short reads badly. None of them: the band shows the reading figures instead.
     let fits = |q: &String| q.split_whitespace().count() >= 6 && q.chars().count() <= QUOTE_MAX;
     let pick = |quotes: Vec<(String, String)>| {
-        (!quotes.is_empty()).then(|| quotes[today.rem_euclid(quotes.len() as i64) as usize].clone())
+        (!quotes.is_empty()).then(|| quotes[slot.rem_euclid(quotes.len() as i64) as usize].clone())
     };
     let quote = zarathustra_store::Store::open(&ctx.state_dir.join("zarathustra.db")).ok().and_then(|s| {
         let own = current.and_then(|(path, title)| {
@@ -321,6 +332,7 @@ impl Home {
             wifi: false,
             reading,
             quote,
+            quote_slot: quote_slot(),
         };
         home.set_filter(Filter::All);
         home
@@ -778,6 +790,18 @@ impl Home {
     fn reload_band(&mut self, ctx: &Ctx) {
         let card = self.current.as_ref().map(|&(i, _)| &self.books[i].book);
         (self.reading, self.quote) = band_data(ctx, card.map(|b| (b.path.as_path(), b.title.as_str())));
+        self.quote_slot = quote_slot();
+    }
+
+    /// The next quote is due (every [`QUOTE_EVERY`]): picks it; true when the band changed and
+    /// the home needs a redraw.
+    pub fn rotate_quote(&mut self, ctx: &Ctx) -> bool {
+        if self.quote_slot == quote_slot() || self.band != Band::Quote {
+            return false;
+        }
+        let before = self.quote.clone();
+        self.reload_band(ctx);
+        self.quote != before
     }
 
     /// Back from reading `path`: its progress (and so the card, filters and order) as saved,

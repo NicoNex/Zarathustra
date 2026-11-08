@@ -581,6 +581,11 @@ fn main() -> Result<()> {
                     }
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
+                // The computer let the storage go: Amazon's USB screen and light are ours again.
+                PowerEvent::Usb(false) if !asleep => {
+                    quick.restore_light(&mut dev);
+                    screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
+                }
                 PowerEvent::Suspend { .. } | PowerEvent::Resumed | PowerEvent::Usb(_) => continue,
             }
             marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
@@ -593,7 +598,8 @@ fn main() -> Result<()> {
         let rescan = periodic && Instant::now() >= rescan_at;
         if let (true, false, Screen::Home(h)) = (rescan && !quick.is_open(), asleep, &mut screen) {
             rescan_at = Instant::now() + Duration::from_secs(30);
-            if h.refresh(&ctx) {
+            // `|` not `||`: a quote due is picked even when the library changed too.
+            if h.refresh(&ctx) | h.rotate_quote(&ctx) {
                 ready(&mut dev, &mut typing, &mut marker)?;
                 h.render(&mut dev.canvas(), &mut ctx);
                 marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
