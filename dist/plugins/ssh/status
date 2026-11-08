@@ -14,6 +14,6 @@ fi
 N=$(grep -c '^[^#]' "$DATA/authorized_keys" 2>/dev/null || true)
 echo "Chiavi autorizzate=${N:-0}"
 # Dropbear's last log line: why a login was refused, without needing a way in.
-LAST=$(tail -n 1 "$DATA/service.log" 2>/dev/null | sed 's/^\[[0-9]*\] //')
+LAST=$(grep -v -e 'Not backgrounding' -e 'Exit before auth' -e 'Child connection' "$DATA/service.log" 2>/dev/null | tail -n 1 | sed 's/^\[[0-9]*\] //')
 [ -n "$LAST" ] && echo "Ultimo evento=$LAST"
 exit 0

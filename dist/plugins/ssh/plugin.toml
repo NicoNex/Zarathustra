@@ -27,3 +27,7 @@ kind = "list"
 label = "Chiavi autorizzate"
 list_executable = "keys"
 empty_label = "Nessuna chiave. Copia la tua chiave pubblica in un file authorized_keys nella cartella zarathustra/plugins/ssh del Kindle (via USB), poi riattiva il servizio."
+
+[[action]]
+menu_label = "Salva diagnostica"
+executable = "diagnose"
