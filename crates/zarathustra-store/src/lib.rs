@@ -24,7 +24,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Schema migrations; entry `i` takes the database from `user_version` `i` to `i + 1`.
-const MIGRATIONS: &[&str] = &[include_str!("v1.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("v1.sql"), include_str!("v2.sql")];
 const LATEST: u32 = MIGRATIONS.len() as u32;
 
 /// Stable identity of a book across moves, renames and re-downloads: its EPUB
@@ -160,6 +160,21 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
         migrate(&mut conn)?;
         Ok(Store { conn })
+    }
+
+    /// The preference group `name` as saved, `None` when it never was.
+    pub fn pref(&self, name: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM prefs WHERE name = ?1", [name], |r| r.get(0)).optional()?)
+    }
+
+    /// Saves preference group `name`.
+    pub fn set_pref(&self, name: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO prefs(name, value, updated_at) VALUES (?1, ?2, unixepoch())
+             ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (name, value),
+        )?;
+        Ok(())
     }
 
     /// Inserts the book identified by `key` (see [`book_key`]) or refreshes its path and

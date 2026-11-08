@@ -191,9 +191,10 @@ impl QuickPanel {
     /// Loads the settings and applies their light levels. On the first run (no settings file)
     /// it adopts the device's current levels instead.
     pub fn new(state_dir: &Path, dev: &mut dyn Device) -> QuickPanel {
-        let mut settings = Settings::load(state_dir);
+        let saved = Settings::load_saved(state_dir);
+        let mut settings = saved.unwrap_or_default();
         let current = dev.light();
-        if let (false, Some(l)) = (Settings::path(state_dir).exists(), current) {
+        if let (None, Some(l)) = (saved, current) {
             settings.brightness = l.brightness;
             settings.warmth = l.warmth.unwrap_or(0);
         }
@@ -571,9 +572,7 @@ impl QuickPanel {
     }
 
     fn save(&self) {
-        if let Err(e) = self.settings.save(&self.state_dir) {
-            eprintln!("quick settings: save: {e}");
-        }
+        self.settings.save(&self.state_dir);
     }
 
     /// Draws the whole panel over whatever is on the canvas.

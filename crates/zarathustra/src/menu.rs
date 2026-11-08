@@ -60,13 +60,9 @@ impl Default for Typography {
 }
 
 impl Typography {
-    fn path(state_dir: &Path) -> std::path::PathBuf {
-        state_dir.join("typography.txt")
-    }
-
     pub fn load(state_dir: &Path) -> Typography {
         let mut t = Typography::default();
-        let Ok(text) = std::fs::read_to_string(Self::path(state_dir)) else { return t };
+        let Some(text) = crate::load_pref(state_dir, "typography") else { return t };
         for (k, v) in text.lines().filter_map(|l| l.split_once('=')) {
             let index = |n: usize| v.trim().parse::<usize>().ok().filter(|&i| i < n);
             match k.trim() {
@@ -90,9 +86,7 @@ impl Typography {
             "size={}\nfamily={family}\nspacing={}\nmargin={}\nalign={}\nweight={}\n",
             self.size, self.spacing, self.margin, self.align, self.weight
         );
-        if let Err(e) = crate::write_atomic(&Self::path(state_dir), text) {
-            eprintln!("typography: {e}");
-        }
+        crate::save_pref(state_dir, "typography", &text);
     }
 
     pub fn font_size(&self) -> f32 {
@@ -416,11 +410,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("zarathustra-typo-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let t = Typography { size: 5, family: None, spacing: 2, margin: 0, align: 2, weight: 3 };
+        // An older build's file (imported), clamped.
+        std::fs::write(dir.join("typography.txt"), "size=99\nfamily=Baskerville\n").expect("write");
+        let loaded = Typography::load(&dir);
+        assert_eq!((loaded.size, loaded.family.as_deref()), (3, Some("baskerville")));
         t.save(&dir);
         assert_eq!(Typography::load(&dir), t);
-        std::fs::write(dir.join("typography.txt"), "size=99\nfamily=Baskerville\n").expect("write");
-        let t = Typography::load(&dir);
-        assert_eq!((t.size, t.family.as_deref()), (3, Some("baskerville")));
         std::fs::remove_dir_all(dir).ok();
 
         let ctx = Ctx::new();

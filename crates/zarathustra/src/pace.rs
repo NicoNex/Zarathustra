@@ -22,20 +22,19 @@ pub struct Pace {
     samples: u32,
     /// When the current page was turned to.
     since: Option<Instant>,
-    path: PathBuf,
+    state_dir: PathBuf,
 }
 
 impl Pace {
     pub fn load(state_dir: &Path) -> Pace {
-        let path = state_dir.join("pace.txt");
-        let saved = std::fs::read_to_string(&path).ok().and_then(|s| {
+        let saved = crate::load_pref(state_dir, "pace").and_then(|s| {
             let mut it = s.split_whitespace();
             let secs: f32 = it.next()?.parse().ok()?;
             let samples: u32 = it.next()?.parse().ok()?;
             (secs.is_finite() && secs > 0.0).then_some((secs, samples))
         });
         let (secs_per_page, samples) = saved.unwrap_or((DEFAULT_SECS, 0));
-        Pace { secs_per_page, samples, since: None, path }
+        Pace { secs_per_page, samples, since: None, state_dir: state_dir.to_path_buf() }
     }
 
     /// Starts timing the page shown now (after opening a book or turning back).
@@ -54,7 +53,7 @@ impl Pace {
         // A plain mean over the first samples, so the default doesn't linger; then an EWMA.
         let alpha = (1.0 / self.samples as f32).max(ALPHA);
         self.secs_per_page += alpha * (d.as_secs_f32() - self.secs_per_page);
-        crate::write_atomic(&self.path, format!("{:.2} {}\n", self.secs_per_page, self.samples)).ok();
+        crate::save_pref(&self.state_dir, "pace", &format!("{:.2} {}\n", self.secs_per_page, self.samples));
         Some(d)
     }
 

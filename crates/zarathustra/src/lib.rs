@@ -154,6 +154,44 @@ impl Ctx {
     }
 }
 
+/// Preference group `name` (settings, typography…) from the database. A `<name>.txt` left by
+/// an older build is imported once, then removed. Without a database (unwritable state dir)
+/// the text file is the fallback. `None` when never saved.
+pub fn load_pref(state_dir: &Path, name: &str) -> Option<String> {
+    let file = state_dir.join(format!("{name}.txt"));
+    let Some(store) = open_store(state_dir) else { return std::fs::read_to_string(file).ok() };
+    match store.pref(name) {
+        Ok(Some(value)) => return Some(value),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("prefs {name}: {e}");
+            return None;
+        }
+    }
+    let text = std::fs::read_to_string(&file).ok()?;
+    match store.set_pref(name, &text) {
+        Ok(()) => drop(std::fs::remove_file(&file)),
+        Err(e) => eprintln!("prefs {name}: {e}"),
+    }
+    Some(text)
+}
+
+/// Saves preference group `name`: in the database, or its text file without one.
+pub fn save_pref(state_dir: &Path, name: &str, value: &str) {
+    let saved = match open_store(state_dir) {
+        Some(store) => store.set_pref(name, value).map_err(|e| e.to_string()),
+        None => write_atomic(&state_dir.join(format!("{name}.txt")), value).map_err(|e| e.to_string()),
+    };
+    if let Err(e) = saved {
+        eprintln!("prefs {name}: {e}");
+    }
+}
+
+fn open_store(state_dir: &Path) -> Option<zarathustra_store::Store> {
+    let store = zarathustra_store::Store::open(&state_dir.join("zarathustra.db"));
+    store.map_err(|e| eprintln!("database: {e}")).ok()
+}
+
 /// Replaces `path` with `data` so a crash or power loss leaves the old or the new file, never
 /// a truncated one: write a temp file, flush it to disk, rename it over.
 pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {

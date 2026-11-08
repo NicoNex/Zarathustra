@@ -124,7 +124,8 @@ pub struct Home {
     /// Indices of `books` shown under the current filter.
     shown: Vec<usize>,
     page: usize,
-    view_file: PathBuf,
+    /// Where the view (grid/list, sort) is saved.
+    state_dir: PathBuf,
     /// A book's highlights over the library: index into `books`, the list.
     overlay: Option<Overlay>,
     /// Searching the library: the text typed (titles and authors containing it are shown).
@@ -283,9 +284,8 @@ impl Home {
         let card_book = current.as_ref().map(|&(i, _)| (books[i].book.path.as_path(), books[i].book.title.as_str()));
         let (reading, quote) = band_data(ctx, card_book);
         let band = if crate::settings::Settings::load(&ctx.state_dir).home_quotes { Band::Quote } else { Band::Stats };
-        let view_file = ctx.state_dir.join("home_view.txt");
         // "grid|list [title|author|recent]"
-        let view = std::fs::read_to_string(&view_file).unwrap_or_default();
+        let view = crate::load_pref(&ctx.state_dir, "home_view").unwrap_or_default();
         let mut words = view.split_whitespace();
         let grid = words.next() != Some("list");
         let sort = match words.next() {
@@ -302,7 +302,7 @@ impl Home {
             author_rank,
             shown: Vec::new(),
             page: 0,
-            view_file,
+            state_dir: ctx.state_dir.clone(),
             overlay: None,
             query: None,
             keyboard: None,
@@ -613,9 +613,7 @@ impl Home {
             Sort::Recent => "recent",
         };
         let view = format!("{} {sort}\n", if self.grid { "grid" } else { "list" });
-        if let Err(e) = crate::write_atomic(&self.view_file, view) {
-            eprintln!("home view: {e}");
-        }
+        crate::save_pref(&self.state_dir, "home_view", &view);
     }
 
     /// The sort chip at the right end of the filter row: "↕ Titolo".

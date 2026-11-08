@@ -1,7 +1,6 @@
-//! User settings that outlive a session, stored as `key=value` lines in the state dir.
+//! User settings that outlive a session, stored as `key=value` lines in the database.
 
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::i18n::Lang;
 
@@ -46,18 +45,18 @@ impl Default for Settings {
 }
 
 impl Settings {
-    pub fn path(state_dir: &Path) -> PathBuf {
-        state_dir.join("settings.txt")
+    /// The saved settings, defaults for missing or invalid keys; `None` when never saved.
+    pub fn load_saved(state_dir: &Path) -> Option<Settings> {
+        crate::load_pref(state_dir, "settings").map(|s| Self::parse(&s))
     }
 
-    /// The saved settings; defaults for a missing file and for missing or invalid keys.
+    /// The saved settings, or the defaults.
     pub fn load(state_dir: &Path) -> Settings {
-        std::fs::read_to_string(Self::path(state_dir)).map(|s| Self::parse(&s)).unwrap_or_default()
+        Self::load_saved(state_dir).unwrap_or_default()
     }
 
-    /// Writes to a temporary file first so a crash never leaves half a file.
-    pub fn save(&self, state_dir: &Path) -> io::Result<()> {
-        crate::write_atomic(&Self::path(state_dir), self.to_text())
+    pub fn save(&self, state_dir: &Path) {
+        crate::save_pref(state_dir, "settings", &self.to_text());
     }
 
     pub fn parse(text: &str) -> Settings {
@@ -119,7 +118,7 @@ impl Settings {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
+    fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("zarathustra-settings-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -141,7 +140,7 @@ mod tests {
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let dir = scratch("round-trip");
-        s.save(&dir).unwrap();
+        s.save(&dir);
         assert_eq!(Settings::load(&dir), s);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -149,7 +148,12 @@ mod tests {
     #[test]
     fn missing_or_invalid_values_fall_back_to_defaults() {
         let dir = scratch("missing");
-        assert_eq!(Settings::load(&dir), Settings::default());
+        assert_eq!(Settings::load_saved(&dir), None);
+        // A settings.txt from an older build is taken into the database, once.
+        std::fs::write(dir.join("settings.txt"), "clock=false\n").unwrap();
+        assert!(!Settings::load(&dir).clock);
+        assert!(!dir.join("settings.txt").exists());
+        assert!(!Settings::load(&dir).clock);
         std::fs::remove_dir_all(dir).ok();
         let s = Settings::parse("clock=maybe\nbrightness=250\nwarmth = 20\njunk\nfuture_key=1\n");
         assert_eq!(s, Settings { warmth: 20, ..Settings::default() });
