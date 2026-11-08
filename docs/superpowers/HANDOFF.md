@@ -1,11 +1,15 @@
-# Handoff — 2026-11-05
+# Handoff — 2026-11-08
 
-## FIRST THING NEXT SESSION: highlight across pages (user's priority)
+## Highlights across pages: DONE 2026-11-08, not yet tried on the device
 
-While selecting, dragging into the bottom-right corner (or past the last line) turns the page and the selection continues on the next one; the saved highlight spans both pages. Needs a selection anchored in the text (chapter/block/offset, not page-local), a page turn during the drag (a short dwell at the edge, Fast waveform), and highlight drawing that clips the range to each page.
+- While selecting, holding the finger 600 ms below the last line, in the bottom-right corner or above the first line turns the page (same chapter only; `highlight::EDGE_DWELL`, `Reader::edge_turn`); the selection stretches to that page's last/first word and keeps following the finger.
+- A selection ending on a word takes the closing punctuation after it (`highlight::with_punct`).
+- With the actions showing, two knobs mark the ends; a finger down on one moves that end (`Highlights::grab`, wired on `Phase::Down` in app.rs).
+- Deploy (device was offline 2026-11-08: not at .113, no port 2222 on the LAN) and let the user try all three.
+
+**Flaky test, not yet found**: `layout::hyphen::tests::hyphenates_from_data_files_with_tag_fallbacks` failed 5 times in a row in `cargo test --workspace` right after rebuilds (`breaks("en", "hyphenation")` returned `[]`), then never again (80+ runs, alone and full, also with `ulimit -n 64`). Not caused by the highlight changes (engine untouched). User parked it for now; resume by catching it with an `eprintln!` of the `Standard::from_path` error in `Hyphenators::load`.
 
 Then: verify the Wi-Fi join with '#'/'!' passwords (wpa_cli fallback), the USB screen, the Kobo groundwork (see below).
-
 
 Read CLAUDE.md first (workflow, build/deploy, reviews at milestones, agents in worktrees for independent modules). Talk to the user in Italian.
 
