@@ -31,7 +31,8 @@ mkdir -p "$KEY_DIR" && chmod 755 "$KEY_DIR" && cp "$KEYS" "$KEY_DIR/authorized_k
 
 # Kindle firmware drops incoming TCP: let the port through while the server runs.
 firewall() { command -v iptables >/dev/null && iptables "$1" INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null; }
-firewall -I
+# Once: a run killed before closing it (SIGKILL) left the rule in place.
+firewall -C || firewall -I
 # Stopping signals the whole process group (Dropbear too); stay to close the port.
 trap ':' TERM INT
 "$DIR/dropbearmulti" dropbear -F -E -s -D "$KEY_DIR" -r "$HOST_KEY" -p "$PORT" &

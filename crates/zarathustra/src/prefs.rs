@@ -10,7 +10,7 @@ use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::plugin::{discover, Dirs, Plugin};
 use crate::plugin_page::PluginPage;
 use crate::settings::Settings;
-use crate::ui::{segmented, segments, Label, INK, INK_SOFT, LINE, PAPER};
+use crate::ui::{segments, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Action, Ctx, H, W};
 
 /// A row: its name, then the choices under it.
@@ -115,10 +115,7 @@ impl Prefs {
             let (name, choices, on) = self.row(i);
             let r = control(i);
             label.draw(c, raster, name, PAD as f32, r.y - 26);
-            for (k, seg) in segmented(c, r, choices.len(), Some(on)).into_iter().enumerate() {
-                let ink = if k == on { PAPER } else { INK };
-                Label { face: sans, size: 28.0, ink }.centered(c, raster, &choices[k], seg);
-            }
+            crate::ui::segmented_labels(c, raster, sans, 28.0, r, &choices, Some(on));
             c.fill(Rect::new(PAD, r.bottom() + 40, W - 2 * PAD, 2), LINE);
         }
         if !self.plugins.is_empty() {

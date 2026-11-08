@@ -118,6 +118,22 @@ pub fn segmented(c: &mut Canvas, r: Rect, n: usize, on: Option<usize>) -> Vec<Re
     segs
 }
 
+/// A segmented control with a label in each segment, the chosen one (`on`) inverted.
+pub fn segmented_labels<S: AsRef<str>>(
+    c: &mut Canvas,
+    raster: &mut Rasterizer,
+    face: &Face,
+    size: f32,
+    r: Rect,
+    labels: &[S],
+    on: Option<usize>,
+) {
+    for (k, seg) in segmented(c, r, labels.len(), on).into_iter().enumerate() {
+        let ink = if Some(k) == on { PAPER } else { INK };
+        Label { face, size, ink }.centered(c, raster, labels[k].as_ref(), seg);
+    }
+}
+
 /// `r` split into `n` equal columns (the last takes the rounding remainder).
 pub fn segments(r: Rect, n: usize) -> Vec<Rect> {
     let n = n.max(1) as i32;

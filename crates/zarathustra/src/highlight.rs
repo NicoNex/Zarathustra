@@ -38,9 +38,8 @@ const BUTTON_W: i32 = 240;
 const POPUP_GAP: i32 = 2 * HANDLE_R + 16;
 /// Hold the finger this long past the text's first or last line while selecting to turn the page; the selection carries on there.
 pub const EDGE_DWELL: Duration = Duration::from_millis(600);
-/// Holding on after a turn turns again only after this long, counted from when the new page
-/// went to the screen: e-ink takes a few hundred ms to show it, and a shorter repeat read as
-/// two turns in a row.
+/// Holding on after a turn turns again only after this long: drawing the new page and e-ink
+/// showing it take a few hundred ms of it, and a shorter repeat read as two turns in a row.
 pub const EDGE_REPEAT: Duration = Duration::from_millis(1200);
 /// Radius of the knobs under the selection's ends, and how near a touch must land to grab one.
 const HANDLE_R: i32 = 22;
@@ -470,14 +469,6 @@ impl Highlights {
             sel.extend(with_punct(&chapter.blocks, pos));
         }
         Some(next)
-    }
-
-    /// The page an edge turn led to went to the screen: a further turn waits [`EDGE_REPEAT`]
-    /// from now.
-    pub fn edge_shown(&mut self) {
-        if let Some(edge) = self.selection.as_mut().and_then(|s| s.edge.as_mut()) {
-            edge.0 = Instant::now() + EDGE_REPEAT;
-        }
     }
 
     /// The selection's ends on page `page`, on screen: the knob under its start and its end
@@ -954,8 +945,7 @@ mod tests {
         assert_eq!(h.edge_turn(&chapter, 0), None, "dwell not over");
         expire(&mut h);
         assert_eq!(h.edge_turn(&chapter, 0), Some(1));
-        // Holding on: the next turn waits the longer repeat, from when the page is shown.
-        h.edge_shown();
+        // Holding on: the next turn waits the longer repeat.
         assert!(h.edge_wait().is_some_and(|w| w > EDGE_DWELL));
         assert_eq!(h.edge_turn(&chapter, 1), None);
         let sel = h.selection.clone().expect("still selecting").range;

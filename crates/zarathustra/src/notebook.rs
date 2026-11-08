@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use zarathustra_device::{Canvas, Rect};
-use zarathustra_store::{Annotation, Kind, Store};
+use zarathustra_store::{Annotation, Kind};
 
 use crate::i18n::{lang, t};
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
@@ -60,10 +60,12 @@ pub struct Notebook {
 /// Highlights, underlines and notes of the book at `path`, in reading order. Empty when the
 /// book was never opened in the reader (it registers it) or the database can't be read.
 pub fn load(state_dir: &Path, path: &Path) -> Vec<Annotation> {
-    let found = Store::open(&state_dir.join("zarathustra.db")).and_then(|s| match s.book_by_path(path)? {
-        Some(id) => s.annotations(id),
-        None => Ok(Vec::new()),
-    });
+    let Some(s) = crate::open_store(state_dir) else { return Vec::new() };
+    let found = match s.book_by_path(path) {
+        Ok(Some(id)) => s.annotations(id),
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(e),
+    };
     let all = found.map_err(|e| eprintln!("notebook: {e}")).unwrap_or_default();
     all.into_iter().filter(|a| a.data.kind != Kind::Bookmark).collect()
 }

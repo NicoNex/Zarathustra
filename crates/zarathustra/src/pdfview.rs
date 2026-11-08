@@ -37,7 +37,7 @@ pub struct PdfView {
     // MuPDF time on heavy (scanned) pages.
     rendered: Option<(usize, GrayImage)>,
     /// Where the page read is saved, and the book's key there.
-    store: Option<zarathustra_store::Store>,
+    store: Option<std::rc::Rc<zarathustra_store::Store>>,
     path: PathBuf,
     pub clock: bool,
 }

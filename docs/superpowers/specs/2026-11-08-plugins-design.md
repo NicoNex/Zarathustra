@@ -81,10 +81,10 @@ Zarathustra and nothing of it runs.
 `[status]` (optional): `executable` + `arguments`, printing `Label=value` lines shown at the top
 of the plugin's page; run each time the page opens and after every change on it. 2 s timeout.
 
-`[[action]]` (any number): `menu_label`, `executable`, `arguments`, `shown_in`
-(`plugin` | `home` | `book` | `selection`). The first `stdout` line of the run is shown as a
-toast. Phase 1 shows every action as a button on the plugin's page; the home, book-menu and
-selection placements come next.
+`[[action]]` (any number): `menu_label`, `executable`, `arguments`. The first `stdout` line of
+the run is shown on the plugin's page. Phase 1: actions are buttons on the plugin's page only;
+`shown_in` (`home` | `book` | `selection`) and the `{book}`/`{selection}` placeholders and
+variables come with those menus.
 
 `[[setting]]` (any number, in page order): `id`, `kind`, `label`, plus by kind:
 
@@ -126,7 +126,8 @@ in `data/<id>/service.log` and its pid in `data/<id>/service.pid`, so it survive
 exiting or crashing. "Running" = the pid file names a live process whose command line is the
 service's executable. Stop = SIGTERM, then SIGKILL after 3 s.
 
-Boot: `zarathustra --start-services` starts every service that has `start_at_boot` and the
+Boot (the "Start at power-on" row stays hidden until a boot hook runs this): `zarathustra
+--start-services` starts every service that has `start_at_boot` and the
 user's "start at power-on", then exits; `--recovery` (safety file present, or Zarathustra
 crashed at the last start) also starts every `start_in_recovery` service. If the binary itself
 cannot run, the boot script falls back to running the recovery services' executables directly,

@@ -107,7 +107,7 @@ impl Position {
     pub fn load(store: &Store, state_dir: &Path, book: &Path) -> Option<Position> {
         let key = book.to_string_lossy();
         match store.position(&key) {
-            Ok(Some(value)) => return Position::parse(&value),
+            Ok(Some((value, _))) => return Position::parse(&value),
             Ok(None) => {}
             Err(e) => {
                 eprintln!("position: {e}");
@@ -467,9 +467,7 @@ impl Reader {
             }
             if self.back.get().is_some() && nav::pill_close().contains(x0, y0) {
                 self.back.clear();
-                let r = nav::pill();
-                // With the paper halo around it.
-                return Action::Region(Rect::new(r.x - 8, r.y - 8, r.w + 16, r.h + 16));
+                return Action::Region(nav::pill_halo());
             }
             if self.back.get().is_some() && nav::pill().contains(x0, y0) {
                 self.go_back(ctx);
@@ -839,11 +837,6 @@ impl Reader {
         self.page = next;
         self.turned();
         true
-    }
-
-    /// The page an edge turn led to went to the screen.
-    pub fn edge_shown(&mut self) {
-        self.hl.edge_shown();
     }
 
     /// Screen rectangle of a button of the highlight popup, when one is open.

@@ -541,13 +541,14 @@ fn main() -> Result<()> {
     }
 
     let mut dev = zarathustra_device::Night::new(zarathustra_device::open_default()?);
-    // The plugins' services the user made active (already running ones are left alone).
-    zarathustra::plugin::start_services(&zarathustra::plugin::Dirs::new(&ctx.state_dir), &ctx.state_dir, false, false);
     let mut quick = QuickPanel::new(&ctx.state_dir, &mut dev);
     zarathustra_device::set_night(quick.settings().night);
     let full = Rect::new(0, 0, W, H);
     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
     let mut marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
+    // The plugins' services the user made active (running ones are left alone), once the first
+    // screen is up: a service's first start copies its files.
+    zarathustra::plugin::start_services(&zarathustra::plugin::Dirs::new(&ctx.state_dir), &ctx.state_dir, false, false);
     // When the home next looks for new books, and the radio state is next read: their own
     // cadences, whatever else wakes the loop (a Wi-Fi operation polls every 300 ms).
     let (mut rescan_at, mut wifi_read) = (Instant::now(), Instant::now());
@@ -630,7 +631,7 @@ fn main() -> Result<()> {
                     if installed.is_some() && installed_binary() != installed {
                         restart_into_update();
                     }
-                    quick.restore_light(&mut dev);
+                    quick.apply(&mut dev);
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
                 PowerEvent::Suspend { .. } | PowerEvent::Resumed | PowerEvent::Usb(_) => continue,
@@ -977,10 +978,9 @@ fn main() -> Result<()> {
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
-        let mut edge_turned = false;
         if let Screen::Reader(r) = &mut screen {
             if press.selecting && r.edge_turn() {
-                (press.turned, edge_turned) = (true, true);
+                press.turned = true;
                 selection = Some(full);
             }
         }
@@ -992,9 +992,6 @@ fn main() -> Result<()> {
             // Black-and-white while the finger moves; the gray settles on release.
             marker = dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
             press.frames.add(t1 - t0, t1.elapsed());
-            if let (true, Screen::Reader(r)) = (edge_turned, &mut screen) {
-                r.edge_shown();
-            }
         }
         if let Some(rect) = quick.poll() {
             panel = Some(panel.map_or((rect, Waveform::Text), |(r, _)| (r.union(&rect), Waveform::Text)));

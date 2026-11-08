@@ -179,7 +179,7 @@ fn band_data(ctx: &Ctx, current: Option<(&Path, &str)>) -> (stats::Summary, Opti
     let pick = |quotes: Vec<(String, String)>| {
         (!quotes.is_empty()).then(|| quotes[slot.rem_euclid(quotes.len() as i64) as usize].clone())
     };
-    let quote = zarathustra_store::Store::open(&ctx.state_dir.join("zarathustra.db")).ok().and_then(|s| {
+    let quote = ctx.store().and_then(|s| {
         let own = current.and_then(|(path, title)| {
             let marks = s.book_by_path(path).ok()??;
             let quotes = (s.annotations(marks).ok()?.into_iter())
@@ -210,8 +210,7 @@ fn library(dirs: &[PathBuf], ctx: &Ctx) -> Library {
 
 /// Reading progress of the book at `path` and when it was saved; `None` if never opened.
 fn progress(ctx: &Ctx, path: &Path) -> Option<(f32, SystemTime)> {
-    let value = ctx.store()?.positions().ok()?.remove(path.to_string_lossy().as_ref())?;
-    saved_progress(&value)
+    saved_progress(&ctx.store()?.position(&path.to_string_lossy()).ok()??)
 }
 
 /// Progress and save time of a saved position (value, Unix seconds).
@@ -796,7 +795,9 @@ impl Home {
     /// The next quote is due (every [`QUOTE_EVERY`]): picks it; true when the band changed and
     /// the home needs a redraw.
     pub fn rotate_quote(&mut self, ctx: &Ctx) -> bool {
-        if self.quote_slot == quote_slot() || self.band != Band::Quote {
+        // Not under a screen opened over the home (settings, a book's menu) or while searching.
+        if self.quote_slot == quote_slot() || self.band != Band::Quote || self.overlay.is_some() || self.query.is_some()
+        {
             return false;
         }
         let before = self.quote.clone();

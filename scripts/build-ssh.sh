@@ -68,10 +68,6 @@ cat >"$SRC/localoptions.h" <<EOF
 /* No X11 or agent forwarding on an e-reader. */
 #define DROPBEAR_X11FWD 0
 #define DROPBEAR_SVR_AGENTFWD 0
-#define DSS_PRIV_FILENAME "$PREFIX/ssh/dropbear_dss_host_key"
-#define RSA_PRIV_FILENAME "$PREFIX/ssh/dropbear_rsa_host_key"
-#define ECDSA_PRIV_FILENAME "$PREFIX/ssh/dropbear_ecdsa_host_key"
-#define ED25519_PRIV_FILENAME "$PREFIX/ssh/dropbear_ed25519_host_key"
 #define SFTPSERVER_PATH "$PREFIX/plugins/ssh/sftp-server"
 #define DEFAULT_PATH "/usr/bin:/bin:/usr/sbin:/sbin"
 #define DEFAULT_ROOT_PATH "/usr/sbin:/usr/bin:/sbin:/bin"

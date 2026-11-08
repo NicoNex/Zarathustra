@@ -8,14 +8,15 @@
 # SSH through Zarathustra's own SSH plugin (port 22). The address is found on the network when
 # first needed (DHCP moves it; scripts/find-kindle.sh caches it), unless given.
 KINDLE_PORT ?= 22
-KINDLE_HOST ?= $(eval KINDLE_HOST := $$(shell KINDLE_PORT=$(KINDLE_PORT) scripts/find-kindle.sh))$(KINDLE_HOST)
+KINDLE_HOST ?= $(eval KINDLE_HOST := $$(or $$(shell KINDLE_PORT=$(KINDLE_PORT) scripts/find-kindle.sh),$$(error no Kindle found on the network: wake it, or set KINDLE_HOST=...)))$(KINDLE_HOST)
 KINDLE ?= /run/media/$(USER)/Kindle
 
 TARGET := armv7-unknown-linux-musleabihf
 BIN_DIR := target/$(TARGET)/release
 BINS := zarathustra zarathustra-probe zarathustra-textprobe zarathustra-powerprobe
 STAGE := target/kindle-stage
-SSH := ssh -p $(KINDLE_PORT) -o BatchMode=yes root@$(KINDLE_HOST)
+# Recursive (=): KINDLE_HOST is looked up only by the targets that use SSH.
+SSH = ssh -p $(KINDLE_PORT) -o BatchMode=yes root@$(KINDLE_HOST)
 # VFAT keeps no owners, permissions or mtimes.
 UNTAR_USB := tar -xf - --no-same-owner --no-same-permissions -m
 
@@ -49,19 +50,20 @@ dicts:
 # A running Zarathustra is told to restart into the new binary: run.sh sees the flag and runs
 # it again without bringing the Amazon UI back (seconds instead of a full round trip).
 RESTART := pidof zarathustra >/dev/null && touch /tmp/zarathustra-update && killall zarathustra; true
+COPY_APP = tar -cf - -C $(STAGE) zarathustra extensions library | $(SSH) 'tar -xf - -C /mnt/us'
+
+# The quick loop while developing: app, KUAL extension and plugins (no dictionaries), then the
+# running app restarts into it.
+update: stage
+	$(COPY_APP)
+	$(SSH) '$(RESTART)'
+	@echo "Updated on $(KINDLE_HOST)."
 
 install-ssh: stage dev-dicts
-	tar -cf - -C $(STAGE) zarathustra extensions library | $(SSH) 'tar -xf - -C /mnt/us'
+	$(COPY_APP)
 	tar -cf - --exclude=_dl -C dev-dicts . | $(SSH) 'mkdir -p /mnt/us/dictionaries && tar -xf - -C /mnt/us/dictionaries'
 	$(SSH) '$(RESTART)'
 	@echo "Installed on $(KINDLE_HOST). Restarted if it was running, else KUAL → Zarathustra."
-
-# The quick loop while developing: app, KUAL extension and plugins only (no dictionaries), then
-# the running app restarts into it.
-update: stage
-	tar -cf - -C $(STAGE) zarathustra extensions | $(SSH) 'tar -xf - -C /mnt/us'
-	$(SSH) '$(RESTART)'
-	@echo "Updated on $(KINDLE_HOST)."
 
 install-usb: stage dev-dicts
 	@test -d "$(KINDLE)" || { echo "Kindle not mounted at $(KINDLE) (set KINDLE=…)" >&2; exit 1; }
@@ -72,5 +74,8 @@ install-usb: stage dev-dicts
 	@echo "Installed on $(KINDLE). Eject, then KUAL → Zarathustra."
 
 BIN ?= zarathustra
-run-ssh: install-ssh
-	$(SSH) '/mnt/us/extensions/zarathustra/run.sh $(BIN); cat /mnt/us/zarathustra/$(BIN).log'
+run-ssh: stage
+	$(COPY_APP)
+	@# Another binary takes the screen: the app quits for real first (no update flag), or two
+	@# would drive the screen and touch at once.
+	$(SSH) 'killall zarathustra 2>/dev/null; sleep 3; /mnt/us/extensions/zarathustra/run.sh $(BIN); cat /mnt/us/zarathustra/$(BIN).log'

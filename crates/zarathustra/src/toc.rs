@@ -10,7 +10,7 @@ use zarathustra_store::Annotation;
 
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
-use crate::ui::{button, rounded_rect, segmented, Label, INK, INK_SOFT, PAPER};
+use crate::ui::{button, rounded_rect, Label, INK, INK_SOFT, PAPER};
 use crate::{Ctx, H, W};
 
 /// The tabs: contents | bookmarks.
@@ -218,10 +218,7 @@ impl Toc {
         if self.tabs {
             let on = usize::from(self.tab == Tab::Bookmarks);
             let names = [t().contents, t().bookmarks];
-            for (i, (name, r)) in names.into_iter().zip(segmented(c, TABS, 2, Some(on))).enumerate() {
-                Label { face: sans_bold, size: 30.0, ink: if i == on { PAPER } else { INK } }
-                    .centered(c, raster, name, r);
-            }
+            crate::ui::segmented_labels(c, raster, sans_bold, 30.0, TABS, &names, Some(on));
         }
 
         let (top, per) = (self.top(), self.per_screen());

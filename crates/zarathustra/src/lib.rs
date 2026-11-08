@@ -29,7 +29,10 @@ pub mod typing;
 pub mod ui;
 pub mod wifi;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use zarathustra_engine::font::{Face, Rasterizer};
 use zarathustra_engine::fonts::FontLibrary;
@@ -108,18 +111,24 @@ impl Ctx {
     }
 
     /// The database in the state dir, `None` (logged) when it can't be opened.
-    pub fn store(&self) -> Option<zarathustra_store::Store> {
+    pub fn store(&self) -> Option<Rc<zarathustra_store::Store>> {
         open_store(&self.state_dir)
     }
 
     /// Books moved to another folder (documents/ → library/) keep their place: a saved
     /// position that belongs to none of `books` goes to the book of the same file name that
     /// has none. Positions an older build kept in files are taken in first.
-    // shortcut: a moved book whose position is still in an old build's file loses it (the
+    // ponytail: a moved book whose position is still in an old build's file loses it (the
     // file name hashes the old path); fine once a device has run this build.
     pub fn adopt_orphan_positions(&self, store: &zarathustra_store::Store, books: &[&Path]) {
-        for book in books {
-            reader::Position::load(store, &self.state_dir, book);
+        // One look at the state dir: once the old files are taken in, nothing more to do.
+        let legacy = std::fs::read_dir(&self.state_dir)
+            .map(|d| d.flatten().any(|e| e.path().extension().is_some_and(|x| x == "pos")))
+            .unwrap_or(false);
+        if legacy {
+            for book in books {
+                reader::Position::load(store, &self.state_dir, book);
+            }
         }
         let Ok(saved) = store.positions() else { return };
         let key = |p: &Path| p.to_string_lossy().into_owned();
@@ -195,9 +204,27 @@ pub fn save_pref(state_dir: &Path, name: &str, value: &str) {
     }
 }
 
-pub(crate) fn open_store(state_dir: &Path) -> Option<zarathustra_store::Store> {
-    let store = zarathustra_store::Store::open(&state_dir.join("zarathustra.db"));
-    store.map_err(|e| eprintln!("database: {e}")).ok()
+/// The database file in `state_dir`.
+pub(crate) fn db_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("zarathustra.db")
+}
+
+thread_local! {
+    /// Open databases by state dir: opening one runs pragmas and the migration check, too
+    /// slow on the device's flash to repeat for every preference read or page turn.
+    static STORES: RefCell<HashMap<PathBuf, Rc<zarathustra_store::Store>>> = RefCell::new(HashMap::new());
+}
+
+/// The database in `state_dir`, opened once per thread; `None` (logged, retried next time)
+/// when it can't be opened.
+pub(crate) fn open_store(state_dir: &Path) -> Option<Rc<zarathustra_store::Store>> {
+    let path = db_path(state_dir);
+    if let Some(store) = STORES.with_borrow(|s| s.get(&path).cloned()) {
+        return Some(store);
+    }
+    let store = Rc::new(zarathustra_store::Store::open(&path).map_err(|e| eprintln!("database: {e}")).ok()?);
+    STORES.with_borrow_mut(|s| s.insert(path, store.clone()));
+    Some(store)
 }
 
 /// Replaces `path` with `data` so a crash or power loss leaves the old or the new file, never

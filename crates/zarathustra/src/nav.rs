@@ -306,6 +306,12 @@ pub fn pill() -> Rect {
     Rect::new((W - PILL_W) / 2, H - MARGIN_BOTTOM + 24, PILL_W, PILL_H)
 }
 
+/// The pill with its paper halo: what drawing or removing it repaints.
+pub fn pill_halo() -> Rect {
+    let r = pill();
+    Rect::new(r.x - 8, r.y - 8, r.w + 16, r.h + 16)
+}
+
 /// The pill's ×, which dismisses it.
 pub fn pill_close() -> Rect {
     let r = pill();
@@ -315,7 +321,7 @@ pub fn pill_close() -> Rect {
 pub fn draw_pill(c: &mut Canvas, ctx: &mut Ctx, progress: f32) {
     let r = pill();
     // A paper halo keeps it apart from the progress bar under it.
-    rounded_rect(c, Rect::new(r.x - 8, r.y - 8, r.w + 16, r.h + 16), r.h / 2 + 8, PAPER);
+    rounded_rect(c, pill_halo(), r.h / 2 + 8, PAPER);
     rounded_rect(c, r, r.h / 2, INK);
     let close = pill_close();
     c.fill(Rect::new(close.x, r.y + 18, 2, r.h - 36), 120);

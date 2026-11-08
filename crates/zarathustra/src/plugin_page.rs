@@ -10,7 +10,7 @@ use zarathustra_device::{Canvas, Rect};
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::plugin::{Kind, Plugin, ACTIVE, AT_BOOT};
-use crate::ui::{button, segmented, segments, Label, INK, INK_SOFT, LINE, PAPER};
+use crate::ui::{button, segmented_labels, segments, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
 const STATUS_H: i32 = 58;
@@ -20,6 +20,8 @@ const CONTROL_W: i32 = 520;
 const ITEM_H: i32 = 96;
 const REMOVE_W: i32 = 220;
 const BACK_W: i32 = 420;
+/// The boot runs `zarathustra --start-services` (not yet: see the "start at power-on" row).
+const BOOT_HOOK: bool = false;
 
 /// What a part of the page is, and what a tap on it does.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +58,8 @@ pub struct PluginPage {
 
 impl PluginPage {
     pub fn open(plugin: Plugin, ctx: &Ctx) -> PluginPage {
+        // Its runtime copy, refreshed once here rather than before every run on the page.
+        let prepared = plugin.prepare();
         let mut page = PluginPage {
             plugin,
             state_dir: ctx.state_dir.clone(),
@@ -66,6 +70,9 @@ impl PluginPage {
             message: None,
         };
         page.reload();
+        if let Err(e) = prepared {
+            page.message = Some(e.to_string());
+        }
         page
     }
 
@@ -110,7 +117,10 @@ impl PluginPage {
         if let Some(service) = &m.service {
             let choices = [s.service_off.to_string(), s.service_on.to_string()];
             rows.push((Row::Switch(ACTIVE.into(), s.service.into(), choices), ROW_H));
-            if service.start_at_boot {
+            // ponytail: "start at power-on" (AT_BOOT) is stored and honoured by
+            // `zarathustra --start-services`, but nothing runs that at boot yet; the row shows
+            // once the boot hook (de-Amazon phase A) exists.
+            if service.start_at_boot && BOOT_HOOK {
                 let choices = [s.off.to_string(), s.on.to_string()];
                 rows.push((Row::Switch(AT_BOOT.into(), s.at_power_on.into(), choices), ROW_H));
             }
@@ -218,7 +228,7 @@ impl PluginPage {
                 }
             }
             Row::Action(i) => {
-                self.message = Some(self.plugin.run_action(&self.state_dir, i, "", "")).filter(|m| !m.is_empty());
+                self.message = Some(self.plugin.run_action(&self.state_dir, i)).filter(|m| !m.is_empty());
                 self.reload();
             }
             _ => {}
@@ -267,12 +277,6 @@ impl PluginPage {
         let name = Label { face: serif, size: 36.0, ink: INK };
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let value = Label { face: sans, size: 30.0, ink: INK };
-        let in_control = |c: &mut Canvas, raster: &mut _, r: Rect, n: usize, on: Option<usize>, labels: &[String]| {
-            for (k, seg) in segmented(c, r, n, on).into_iter().enumerate() {
-                let ink = if Some(k) == on { PAPER } else { INK };
-                Label { face: sans, size: 28.0, ink }.centered(c, raster, &labels[k], seg);
-            }
-        };
         let m = self.plugin.manifest.as_ref().ok();
         for (row, r) in self.laid_out() {
             let mid = r.y + r.h / 2 + 12;
@@ -291,7 +295,7 @@ impl PluginPage {
                 Row::Switch(id, label, choices) => {
                     name.draw(c, raster, &name.fit(&label, (r.w - CONTROL_W - 30) as f32), r.x as f32, mid);
                     let on = usize::from(self.flag(&id));
-                    in_control(c, raster, Self::control(r), 2, Some(on), &choices);
+                    segmented_labels(c, raster, sans, 28.0, Self::control(r), &choices, Some(on));
                 }
                 Row::Choice(i) | Row::Number(i) | Row::Text(i) => {
                     let Some(setting) = m.and_then(|m| m.setting.get(i)) else { continue };
@@ -300,7 +304,7 @@ impl PluginPage {
                     match &setting.kind {
                         Kind::Choice { options, .. } => {
                             let on = options.iter().position(|o| *o == current);
-                            in_control(c, raster, Self::control(r), options.len(), on, options);
+                            segmented_labels(c, raster, sans, 28.0, Self::control(r), options, on);
                         }
                         Kind::Number { .. } => {
                             let labels = ["−".to_string(), current, "+".to_string()];
@@ -374,7 +378,7 @@ mod tests {
         let rows: Vec<Row> = page.laid_out().into_iter().map(|(r, _)| r).collect();
         assert!(rows.iter().any(|r| matches!(r, Row::Status(k, _) if k == "Indirizzo")), "{rows:?}");
         assert!(rows.iter().any(|r| matches!(r, Row::Switch(id, ..) if id == ACTIVE)));
-        assert!(rows.iter().any(|r| matches!(r, Row::Switch(id, ..) if id == AT_BOOT)));
+        assert_eq!(rows.iter().any(|r| matches!(r, Row::Switch(id, ..) if id == AT_BOOT)), BOOT_HOOK);
         // No keys yet: the hint on how to add one.
         assert!(rows.iter().any(|r| matches!(r, Row::Note(n) if n.contains("authorized_keys"))));
         let choice = |r: &Row| matches!(r, Row::Choice(_));
@@ -385,8 +389,9 @@ mod tests {
         });
         assert_eq!(page.values.get("port").map(String::as_str), Some("2222"));
         let right = |r: Rect| PluginPage::control(r).right() - 20;
-        tap_row(&mut page, |r| matches!(r, Row::Switch(id, ..) if id == AT_BOOT), right);
-        assert!(page.flag(AT_BOOT));
+        tap_row(&mut page, |r| matches!(r, Row::Switch(id, ..) if id == ACTIVE), right);
+        assert!(page.flag(ACTIVE));
+        page.plugin.stop();
         assert!(!page.tap((60, 60)), "back");
         std::fs::remove_dir_all(root).ok();
     }

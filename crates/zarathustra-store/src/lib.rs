@@ -177,9 +177,12 @@ impl Store {
         Ok(())
     }
 
-    /// The reading position saved for the book at `path`.
-    pub fn position(&self, path: &str) -> Result<Option<String>> {
-        Ok(self.conn.query_row("SELECT value FROM positions WHERE path = ?1", [path], |r| r.get(0)).optional()?)
+    /// The reading position saved for the book at `path`, and when (Unix seconds).
+    pub fn position(&self, path: &str) -> Result<Option<(String, i64)>> {
+        let row = self.conn.query_row("SELECT value, updated_at FROM positions WHERE path = ?1", [path], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        });
+        Ok(row.optional()?)
     }
 
     /// Every saved position: path → (value, when saved, Unix seconds).

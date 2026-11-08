@@ -79,23 +79,14 @@ pub struct Service {
     pub start_in_recovery: bool,
 }
 
+/// A button on the plugin's page.
+// ponytail: only on the plugin's page; `shown_in` (home, book menu, selection) and the book
+// and selection placeholders come with those menus.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Action {
     pub menu_label: String,
     #[serde(flatten)]
     pub run: Run,
-    #[serde(default)]
-    pub shown_in: ShownIn,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ShownIn {
-    #[default]
-    Plugin,
-    Home,
-    Book,
-    Selection,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -166,7 +157,7 @@ pub struct Dirs {
 
 impl Dirs {
     pub fn new(state_dir: &Path) -> Dirs {
-        let database = state_dir.join("zarathustra.db");
+        let database = crate::db_path(state_dir);
         if crate::on_device() {
             Dirs {
                 installed: PathBuf::from("/mnt/us/zarathustra/plugins"),
@@ -322,9 +313,8 @@ impl Plugin {
         copy_tree(&self.user_dir(), &self.plugin_dir())
     }
 
-    /// The command for `run`, its arguments expanded and the environment set; `extra` adds
-    /// placeholders and variables (an action's book and selection).
-    fn command(&self, run: &Run, values: &HashMap<String, String>, extra: &[(&str, &str)]) -> Command {
+    /// The command for `run`, its arguments expanded and the environment set.
+    fn command(&self, run: &Run, values: &HashMap<String, String>) -> Command {
         let mut vars: HashMap<String, String> = HashMap::new();
         for (k, v) in values {
             vars.insert(format!("setting.{k}"), v.clone());
@@ -338,9 +328,6 @@ impl Plugin {
         for (k, p) in &dirs {
             vars.insert((*k).into(), p.to_string_lossy().into_owned());
         }
-        for (k, v) in extra {
-            vars.insert((*k).into(), (*v).into());
-        }
         let mut cmd = Command::new(self.plugin_dir().join(&run.executable));
         cmd.args(run.arguments.iter().map(|a| expand(a, &vars)));
         cmd.current_dir(self.plugin_dir());
@@ -350,16 +337,13 @@ impl Plugin {
         for (k, v) in values {
             cmd.env(setting_var(k), v);
         }
-        for (k, v) in extra {
-            cmd.env(format!("ZARATHUSTRA_{}", k.to_ascii_uppercase()), v);
-        }
         cmd
     }
 
-    /// Runs `run` to completion within [`RUN_TIMEOUT`]; its stdout, or why it failed.
-    fn capture(&self, state_dir: &Path, run: &Run, args: &[&str], extra: &[(&str, &str)]) -> Result<String> {
-        self.prepare()?;
-        let mut cmd = self.command(run, &self.values(state_dir), extra);
+    /// Runs `run` to completion within [`RUN_TIMEOUT`]; its stdout, or why it failed. The
+    /// runtime copy must be [prepared](Self::prepare).
+    fn capture(&self, state_dir: &Path, run: &Run, args: &[&str]) -> Result<String> {
+        let mut cmd = self.command(run, &self.values(state_dir));
         cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
         let executable = || run.executable.clone();
         let mut child = cmd.spawn().map_err(|source| PluginError::Spawn { executable: executable(), source })?;
@@ -390,7 +374,7 @@ impl Plugin {
     /// The status lines, `Label=value`.
     pub fn status(&self, state_dir: &Path) -> Result<Vec<(String, String)>> {
         let Some(run) = self.manifest.as_ref().ok().and_then(|m| m.status.clone()) else { return Ok(Vec::new()) };
-        let out = self.capture(state_dir, &run, &[], &[])?;
+        let out = self.capture(state_dir, &run, &[])?;
         Ok(out.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.trim().into(), v.trim().into())).collect())
     }
 
@@ -407,20 +391,19 @@ impl Plugin {
     /// A list setting's items: id, text.
     pub fn list(&self, state_dir: &Path, setting: &str) -> Result<Vec<(String, String)>> {
         let run = self.list_run(setting).ok_or_else(|| PluginError::NotAList(setting.into()))?;
-        let out = self.capture(state_dir, &run, &["list"], &[])?;
+        let out = self.capture(state_dir, &run, &["list"])?;
         Ok(out.lines().filter_map(|l| l.split_once('\t')).map(|(id, text)| (id.into(), text.into())).collect())
     }
 
     pub fn remove(&self, state_dir: &Path, setting: &str, id: &str) -> Result<()> {
         let run = self.list_run(setting).ok_or_else(|| PluginError::NotAList(setting.into()))?;
-        self.capture(state_dir, &run, &["remove", id], &[]).map(drop)
+        self.capture(state_dir, &run, &["remove", id]).map(drop)
     }
 
     /// Runs action `i`; the first line it printed (or the error), for a toast.
-    pub fn run_action(&self, state_dir: &Path, i: usize, book: &str, selection: &str) -> String {
+    pub fn run_action(&self, state_dir: &Path, i: usize) -> String {
         let Some(a) = self.manifest.as_ref().ok().and_then(|m| m.action.get(i).cloned()) else { return String::new() };
-        let extra = [("book", book), ("selection", selection)];
-        match self.capture(state_dir, &a.run, &[], &extra) {
+        match self.capture(state_dir, &a.run, &[]) {
             Ok(out) => out.lines().next().unwrap_or_default().to_string(),
             Err(e) => e.to_string(),
         }
@@ -460,7 +443,7 @@ impl Plugin {
         self.prepare()?;
         let log = std::fs::File::create(self.data_dir().join("service.log"))?;
         let err = log.try_clone()?;
-        let mut cmd = self.command(&service.run, &self.values(state_dir), &[]);
+        let mut cmd = self.command(&service.run, &self.values(state_dir));
         cmd.stdin(Stdio::null()).stdout(log).stderr(err).process_group(0);
         let executable = service.run.executable.clone();
         let child = cmd.spawn().map_err(|source| PluginError::Spawn { executable, source })?;
@@ -572,7 +555,6 @@ arguments = ["--port={setting.port}", "{unknown}"]
 [[action]]
 menu_label = "Say"
 executable = "say"
-arguments = ["{book}"]
 
 [[setting]]
 id = "port"
@@ -601,7 +583,7 @@ list_executable = "items"
         std::fs::create_dir_all(&installed).expect("dirs");
         std::fs::write(installed.join("plugin.toml"), MANIFEST).expect("manifest");
         script(&installed, "status", r#"echo "Args=$*"; echo "Port=$ZARATHUSTRA_SETTING_PORT""#);
-        script(&installed, "say", r#"echo "book $1"; echo second"#);
+        script(&installed, "say", r#"echo book; echo second"#);
         script(
             &installed,
             "items",
@@ -635,7 +617,6 @@ list_executable = "items"
     fn manifests_parse_and_newer_formats_are_refused() {
         let m: Manifest = toml::from_str(MANIFEST).expect("parses");
         assert_eq!(m.setting[0].kind, Kind::Number { minimum: 1, maximum: 65535, step: 1, default_value: 22 });
-        assert_eq!(m.action[0].shown_in, ShownIn::Plugin);
         assert!(m.service.as_ref().is_some_and(|s| s.start_in_recovery));
         let dir = std::env::temp_dir().join(format!("zarathustra-manifest-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("dir");
@@ -652,10 +633,11 @@ list_executable = "items"
         assert_eq!(p.values(&state).get("port").map(String::as_str), Some("22"));
         p.set_value(&state, "port", "2222");
         p.set_value(&state, "ignored", "x");
+        p.prepare().expect("prepare");
         let status = p.status(&state).expect("status");
         assert_eq!(status, [("Args".into(), "--port=2222 {unknown}".into()), ("Port".into(), "2222".into())]);
         assert!(p.plugin_dir().join("status").exists(), "copied to the runtime folder");
-        assert_eq!(p.run_action(&state, 0, "/b.epub", ""), "book /b.epub");
+        assert_eq!(p.run_action(&state, 0), "book");
         assert_eq!(
             p.list(&state, "items").expect("list"),
             [("a".into(), "First".into()), ("b".into(), "Second".into())]

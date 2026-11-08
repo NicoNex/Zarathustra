@@ -5,7 +5,7 @@ use std::path::Path;
 
 use zarathustra_device::{Canvas, Rect};
 use zarathustra_engine::font::{Face, Rasterizer};
-use zarathustra_store::{Reading, Store};
+use zarathustra_store::Reading;
 
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, TOPBAR_H};
@@ -19,12 +19,12 @@ const FIGURE_H: i32 = 150;
 /// Per-day reading of one book (`book`) or all of them (`None`), oldest first. Empty when
 /// the database can't be read.
 pub fn days(state_dir: &Path, book: Option<&Path>) -> Vec<Reading> {
-    let found = Store::open(&state_dir.join("zarathustra.db")).and_then(|s| {
-        match book.map(|p| s.book_by_path(p)).transpose()? {
-            Some(None) => Ok(Vec::new()), // never opened: no reading
-            id => s.reading_days(id.flatten()),
-        }
-    });
+    let Some(s) = crate::open_store(state_dir) else { return Vec::new() };
+    let found = match book.map(|p| s.book_by_path(p)).transpose() {
+        Ok(Some(None)) => Ok(Vec::new()), // never opened: no reading
+        Ok(id) => s.reading_days(id.flatten()),
+        Err(e) => Err(e),
+    };
     found.map_err(|e| eprintln!("stats: {e}")).unwrap_or_default()
 }
 
