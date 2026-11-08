@@ -1,12 +1,14 @@
 # Zarathustra on a Kindle.
 #   make install-ssh                  build, install the app and the dictionaries over SSH
-#   make install-ssh KINDLE_HOST=…    another address (DHCP moves it)
+#   make install-ssh KINDLE_HOST=…    a given address (else found on the network)
 #   make update                       app only; the running app restarts into it (fast)
 #   make install-usb                  the same onto a USB-mounted Kindle
 #   make run-ssh BIN=zarathustra-probe   install over SSH, then run a binary and show its log
 #   make dicts                        download the dictionaries into dev-dicts/
-KINDLE_HOST ?= 192.168.1.113
-KINDLE_PORT ?= 2222
+# SSH through Zarathustra's own SSH plugin (port 22). The address is found on the network when
+# first needed (DHCP moves it; scripts/find-kindle.sh caches it), unless given.
+KINDLE_PORT ?= 22
+KINDLE_HOST ?= $(eval KINDLE_HOST := $$(shell KINDLE_PORT=$(KINDLE_PORT) scripts/find-kindle.sh))$(KINDLE_HOST)
 KINDLE ?= /run/media/$(USER)/Kindle
 
 TARGET := armv7-unknown-linux-musleabihf
