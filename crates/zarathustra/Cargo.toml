@@ -18,6 +18,9 @@ zarathustra-store = { path = "../zarathustra-store" }
 anyhow = "1"
 qrcode = { version = "0.14.1", default-features = false }
 percent-encoding = "2.3.2"
+toml = { version = "1.2.1", default-features = false, features = ["std", "parse", "serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [[bin]]
 name = "zarathustra-textprobe"

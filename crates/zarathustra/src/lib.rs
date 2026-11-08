@@ -14,6 +14,7 @@ pub mod nav;
 pub mod notebook;
 pub mod pace;
 pub mod pdfview;
+pub mod plugin;
 pub mod prefs;
 pub mod quick;
 pub mod reader;
