@@ -75,6 +75,32 @@ struct Press {
     selecting: bool,
     /// The selection turned the page: drawn black and white, the whole page settles on the lift.
     turned: bool,
+    /// How the selection's frames went, logged on the lift.
+    frames: Frames,
+}
+
+/// Selection frames: how many, time spent waiting for the previous refresh, time drawing and
+/// queuing the refresh.
+#[derive(Default)]
+struct Frames {
+    count: u32,
+    wait: Duration,
+    draw: Duration,
+}
+
+impl Frames {
+    fn add(&mut self, wait: Duration, draw: Duration) {
+        self.count += 1;
+        self.wait += wait;
+        self.draw += draw;
+    }
+
+    fn log(&self) {
+        if self.count > 1 {
+            let n = self.count;
+            eprintln!("selection: {n} frames, wait {:?} + draw {:?} per frame", self.wait / n, self.draw / n);
+        }
+    }
 }
 
 impl Press {
@@ -756,6 +782,7 @@ fn main() -> Result<()> {
             }
             let Some(start) = down.take() else { continue };
             let lifted = std::mem::take(&mut press);
+            lifted.frames.log();
             if lifted.fired {
                 // The end of a long press: show the actions for the selection, if any.
                 if let Screen::Reader(r) = &mut screen {
@@ -929,17 +956,24 @@ fn main() -> Result<()> {
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
+        let mut edge_turned = false;
         if let Screen::Reader(r) = &mut screen {
             if press.selecting && r.edge_turn() {
-                press.turned = true;
+                (press.turned, edge_turned) = (true, true);
                 selection = Some(full);
             }
         }
         if let Some(rect) = selection.filter(|r| !r.is_empty()) {
+            let t0 = Instant::now();
             ready(&mut dev, &mut typing, &mut marker)?;
+            let t1 = Instant::now();
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             // Black-and-white while the finger moves; the gray settles on release.
             marker = dev.refresh(&Refresh { rect, waveform: Waveform::Fast, flash: false, swipe: None })?;
+            press.frames.add(t1 - t0, t1.elapsed());
+            if let (true, Screen::Reader(r)) = (edge_turned, &mut screen) {
+                r.edge_shown();
+            }
         }
         if let Some(rect) = quick.poll() {
             panel = Some(panel.map_or((rect, Waveform::Text), |(r, _)| (r.union(&rect), Waveform::Text)));

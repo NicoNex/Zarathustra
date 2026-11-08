@@ -34,11 +34,16 @@ const HIGHLIGHT_GRAY: u8 = 215;
 const SELECTION_BAR: i32 = 5;
 const POPUP_H: i32 = 100;
 const BUTTON_W: i32 = 240;
-const POPUP_GAP: i32 = 28;
+/// Clear of the selection knobs, which stick out 2 × HANDLE_R above and below the text.
+const POPUP_GAP: i32 = 2 * HANDLE_R + 16;
 /// Hold the finger this long past the text's first or last line while selecting to turn the page; the selection carries on there.
 pub const EDGE_DWELL: Duration = Duration::from_millis(600);
+/// Holding on after a turn turns again only after this long, counted from when the new page
+/// went to the screen: e-ink takes a few hundred ms to show it, and a shorter repeat read as
+/// two turns in a row.
+pub const EDGE_REPEAT: Duration = Duration::from_millis(1200);
 /// Radius of the knobs under the selection's ends, and how near a touch must land to grab one.
-const HANDLE_R: i32 = 14;
+const HANDLE_R: i32 = 22;
 const GRAB: i32 = 70;
 
 /// A position in a laid-out chapter: block index and byte offset in the block's text.
@@ -155,7 +160,7 @@ fn word_range(blocks: &[Block], p: TextPos) -> Range<TextPos> {
 pub struct Selection {
     anchor: Range<TextPos>,
     pub range: Range<TextPos>,
-    /// The finger past the page's text: since when, and whether it points forward.
+    /// The finger past the page's text: when the page turns, and whether forward.
     edge: Option<(Instant, bool)>,
 }
 
@@ -417,7 +422,7 @@ impl Highlights {
         };
         let dir = edge_dir(p, origin, y);
         if sel.edge.map(|(_, f)| f) != dir {
-            sel.edge = dir.map(|f| (Instant::now(), f));
+            sel.edge = dir.map(|f| (Instant::now() + EDGE_DWELL, f));
         }
         let Some(pos) = hit(p, &chapter.blocks, (x - origin.0) as f32, (y - origin.1) as f32) else {
             return Outcome::Redraw(Rect::default());
@@ -437,8 +442,8 @@ impl Highlights {
 
     /// How long until the finger held at a page edge turns the page, while selecting.
     pub fn edge_wait(&self) -> Option<Duration> {
-        let (since, _) = self.selection.as_ref()?.edge?;
-        Some(EDGE_DWELL.saturating_sub(since.elapsed()))
+        let (due, _) = self.selection.as_ref()?.edge?;
+        Some(due.saturating_duration_since(Instant::now()))
     }
 
     /// The finger held at a page edge long enough: the page to turn to (same chapter only),
@@ -448,14 +453,14 @@ impl Highlights {
     // selection across chapters if highlights spanning them are wanted.
     pub fn edge_turn(&mut self, chapter: &Chapter, page: usize) -> Option<usize> {
         let sel = self.selection.as_mut()?;
-        let (_, forward) = sel.edge.filter(|(since, _)| since.elapsed() >= EDGE_DWELL)?;
+        let (_, forward) = sel.edge.filter(|(due, _)| *due <= Instant::now())?;
         let next = if forward { page.checked_add(1) } else { page.checked_sub(1) };
         let Some((next, p)) = next.and_then(|n| Some((n, chapter.pages.get(n)?))) else {
             // Nowhere to go: stop timing until the finger moves out and back.
             sel.edge = None;
             return None;
         };
-        sel.edge = Some((Instant::now(), forward));
+        sel.edge = Some((Instant::now() + EDGE_REPEAT, forward));
         let last = |l: &PageLine| {
             let g = l.glyphs.iter().rfind(|g| !g.inserted)?;
             Some(glyph_pos(&chapter.blocks, l, g.run, g.offset))
@@ -467,6 +472,14 @@ impl Highlights {
         Some(next)
     }
 
+    /// The page an edge turn led to went to the screen: a further turn waits [`EDGE_REPEAT`]
+    /// from now.
+    pub fn edge_shown(&mut self) {
+        if let Some(edge) = self.selection.as_mut().and_then(|s| s.edge.as_mut()) {
+            edge.0 = Instant::now() + EDGE_REPEAT;
+        }
+    }
+
     /// The selection's ends on page `page`, on screen: the knob under its start and its end
     /// (`true`), for the ends that are on this page.
     fn handles(&self, chapter: &Chapter, page: usize, origin: (i32, i32)) -> Vec<((i32, i32), bool)> {
@@ -475,7 +488,7 @@ impl Highlights {
         let starts_here = page_start(p, &chapter.blocks).is_none_or(|s| sel.range.start >= s);
         let ends_here =
             chapter.pages.get(page + 1).and_then(|n| page_start(n, &chapter.blocks)).is_none_or(|e| sel.range.end <= e);
-        let start = bands.first().filter(|_| starts_here).map(|r| ((r.x, r.bottom()), false));
+        let start = bands.first().filter(|_| starts_here).map(|r| ((r.x, r.y), false));
         let end = bands.last().filter(|_| ends_here).map(|r| ((r.right(), r.bottom()), true));
         start.into_iter().chain(end).collect()
     }
@@ -488,7 +501,11 @@ impl Highlights {
             return Outcome::Ignored;
         }
         let handles = self.handles(chapter, page, origin);
-        let near = handles.iter().find(|((hx, hy), _)| (hx - x).pow(2) + (hy - y).pow(2) <= GRAB * GRAB);
+        // Measured from the drop's round part, which hangs off the tip.
+        let near = handles.iter().find(|((hx, hy), end)| {
+            let d = if *end { HANDLE_R } else { -HANDLE_R };
+            (hx + d - x).pow(2) + (hy + d - y).pow(2) <= GRAB * GRAB
+        });
         let Some(&(_, end)) = near else { return Outcome::Ignored };
         let (Some(p), Some(sel)) = (chapter.pages.get(page), self.selection.as_mut()) else {
             return Outcome::Ignored;
@@ -625,7 +642,7 @@ impl Highlights {
         if r.is_empty() {
             r
         } else {
-            Rect::new(r.x - HANDLE_R, r.y, r.w + 2 * HANDLE_R, r.h + 2 * HANDLE_R)
+            Rect::new(r.x - 2 * HANDLE_R, r.y - 2 * HANDLE_R, r.w + 4 * HANDLE_R, r.h + 4 * HANDLE_R)
         }
     }
 
@@ -649,9 +666,8 @@ impl Highlights {
     pub fn render_over(&self, c: &mut Canvas, ctx: &mut Ctx, chapter: &Chapter, page: usize, origin: (i32, i32)) {
         let Some(popup) = &self.popup else { return };
         if popup.target.is_none() {
-            for ((x, y), _) in self.handles(chapter, page, origin) {
-                let d = 2 * HANDLE_R;
-                rounded_rect(c, Rect::new(x - HANDLE_R, y - HANDLE_R / 2, d, d), HANDLE_R, INK);
+            for ((x, y), end) in self.handles(chapter, page, origin) {
+                crate::ui::drop_knob(c, (x, y), HANDLE_R, end, INK);
             }
         }
         rounded_rect(c, popup.rect, 20, INK);
@@ -739,7 +755,7 @@ mod tests {
     /// Backdates the edge dwell, as if the finger had held still past it.
     fn expire(h: &mut Highlights) {
         let sel = h.selection.as_mut().unwrap();
-        sel.edge = sel.edge.map(|(_, f)| (Instant::now() - EDGE_DWELL, f));
+        sel.edge = sel.edge.map(|(_, f)| (Instant::now(), f));
     }
 
     fn pos_of(blocks: &[Block], needle: &str) -> Range<TextPos> {
@@ -938,6 +954,10 @@ mod tests {
         assert_eq!(h.edge_turn(&chapter, 0), None, "dwell not over");
         expire(&mut h);
         assert_eq!(h.edge_turn(&chapter, 0), Some(1));
+        // Holding on: the next turn waits the longer repeat, from when the page is shown.
+        h.edge_shown();
+        assert!(h.edge_wait().is_some_and(|w| w > EDGE_DWELL));
+        assert_eq!(h.edge_turn(&chapter, 1), None);
         let sel = h.selection.clone().expect("still selecting").range;
         assert_eq!(sel.start, target.start);
         assert_eq!(sel.end, TextPos::new(2, chapter.blocks[2].text.len()));

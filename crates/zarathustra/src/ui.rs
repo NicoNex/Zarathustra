@@ -277,6 +277,33 @@ fn advance(shaped: &[ShapedGlyph]) -> f32 {
     shaped.iter().map(|g| g.x_advance).sum()
 }
 
+/// A selection knob shaped like a drop: a disc of radius `r` beside `tip` (a corner of the
+/// selected text), the corner towards the tip squared off into a point. The selection's end
+/// (`end`) hangs below and to the right of its tip, its start above and to the left, so neither
+/// covers the text. Edges are antialiased (4×4 samples a pixel) for smooth e-ink grays.
+pub fn drop_knob(c: &mut Canvas, tip: (i32, i32), r: i32, end: bool, color: u8) {
+    let sign = if end { 1.0 } else { -1.0 };
+    let (rf, tx, ty) = (r as f32, tip.0 as f32, tip.1 as f32);
+    let (cx, cy) = (tx + sign * rf, ty + sign * rf);
+    let between = |v: f32, a: f32, b: f32| v >= a.min(b) && v <= a.max(b);
+    // The disc, or the square between the tip and the disc's centre (the point).
+    let inside =
+        |x: f32, y: f32| (x - cx).powi(2) + (y - cy).powi(2) <= rf * rf || (between(x, tx, cx) && between(y, ty, cy));
+    let (x0, y0) = if end { tip } else { (tip.0 - 2 * r, tip.1 - 2 * r) };
+    for py in y0.max(0)..(y0 + 2 * r).min(c.height) {
+        for px in x0.max(0)..(x0 + 2 * r).min(c.width) {
+            let hits = (0..16)
+                .filter(|i| inside(px as f32 + (i % 4) as f32 / 4.0 + 0.125, py as f32 + (i / 4) as f32 / 4.0 + 0.125))
+                .count() as u32;
+            if hits > 0 {
+                let at = py as usize * c.stride + px as usize;
+                let old = u32::from(c.pixels[at]);
+                c.pixels[at] = ((old * (16 - hits) + u32::from(color) * hits) / 16) as u8;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

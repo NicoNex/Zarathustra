@@ -835,6 +835,11 @@ impl Reader {
         true
     }
 
+    /// The page an edge turn led to went to the screen.
+    pub fn edge_shown(&mut self) {
+        self.hl.edge_shown();
+    }
+
     /// Screen rectangle of a button of the highlight popup, when one is open.
     pub fn popup_button(&self, b: crate::highlight::Button) -> Option<Rect> {
         self.hl.button(b)
