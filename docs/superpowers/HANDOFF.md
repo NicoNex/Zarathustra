@@ -2,10 +2,10 @@
 
 ## Highlights across pages: DONE 2026-11-08, not yet tried on the device
 
-- While selecting, holding the finger 600 ms below the last line, in the bottom-right corner or above the first line turns the page (same chapter only; `highlight::EDGE_DWELL`, `Reader::edge_turn`); the selection stretches to that page's last/first word and keeps following the finger.
+- While selecting, holding the finger 600 ms below the last line or above the first line turns the page (same chapter only; `highlight::EDGE_DWELL`, `Reader::edge_turn`); the selection stretches to that page's last/first word and keeps following the finger.
 - A selection ending on a word takes the closing punctuation after it (`highlight::with_punct`).
 - With the actions showing, two knobs mark the ends; a finger down on one moves that end (`Highlights::grab`, wired on `Phase::Down` in app.rs).
-- Deploy (device was offline 2026-11-08: not at .113, no port 2222 on the LAN) and let the user try all three.
+- Reviewed (code-review + simplify, fixes in 9bb77c9; **last reviewed: 9bb77c9**) and installed over USB 2026-11-08; user to try all three.
 
 **Flaky test, not yet found**: `layout::hyphen::tests::hyphenates_from_data_files_with_tag_fallbacks` failed 5 times in a row in `cargo test --workspace` right after rebuilds (`breaks("en", "hyphenation")` returned `[]`), then never again (80+ runs, alone and full, also with `ulimit -n 64`). Not caused by the highlight changes (engine untouched). User parked it for now; resume by catching it with an `eprintln!` of the `Standard::from_path` error in `Hyphenators::load`.
 
