@@ -315,7 +315,7 @@ impl Plugin {
     /// Refreshes the runtime copy (files whose size or time changed) and makes its files
     /// executable. A no-op when plugins run in place.
     pub fn prepare(&self) -> std::io::Result<()> {
-        std::fs::create_dir_all(self.data_dir())?;
+        make_dirs(&self.data_dir())?;
         if self.dirs.runtime.is_none() {
             return Ok(());
         }
@@ -510,11 +510,21 @@ pub fn start_services(dirs: &Dirs, state_dir: &Path, boot: bool, recovery: bool)
     }
 }
 
+/// Creates `dir` and its parents, writable by their owner only (0755, whatever the umask):
+/// Dropbear refuses keys under a folder others can write to, and the Kindle's processes run
+/// with umask 0.
+fn make_dirs(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    std::fs::DirBuilder::new().recursive(true).mode(0o755).create(dir)?;
+    // DirBuilder's mode is still masked by the umask, and folders made before keep theirs.
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))
+}
+
 /// Copies `from` into `to`, recursively, skipping files of the same size and time, and
 /// makes every file executable (the source is vfat, which has no exec bits).
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::create_dir_all(to)?;
+    make_dirs(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let (src, dst) = (entry.path(), to.join(entry.file_name()));

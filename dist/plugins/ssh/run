@@ -12,6 +12,13 @@ KEYS="$DATA/authorized_keys"
 # Dropbear refuses keys in a folder others can write to, which the userstore (vfat) can't
 # prevent: they live here, on the rootfs.
 mkdir -p "$DATA" && chmod 700 "$DATA" || exit 1
+# Dropbear also checks every folder above the keys up to /: none may be writable by others
+# (folders made with umask 0 are).
+d=$(dirname "$DATA")
+while [ "$d" != / ] && [ "$d" != /var ]; do
+	chmod go-w "$d"
+	d=$(dirname "$d")
+done
 [ -f "$HOST_KEY" ] || "$DIR/dropbearmulti" dropbearkey -t ed25519 -f "$HOST_KEY" >/dev/null || exit 1
 touch "$KEYS" && chmod 600 "$KEYS"
 # Keys dropped into the plugin's folder over USB join the authorized ones, once: the file is
