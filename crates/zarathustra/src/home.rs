@@ -742,7 +742,7 @@ impl Home {
                 self.overlay = None;
                 redraw
             }
-            Overlay::Prefs(p) => p.tap(start).unwrap_or_else(|| {
+            Overlay::Prefs(p) => p.tap(start, ctx).unwrap_or_else(|| {
                 self.overlay = None;
                 redraw
             }),
@@ -940,7 +940,7 @@ impl Home {
             self.open_transfer();
             return Action::Redraw { turn: None };
         } else if inside(GEAR) {
-            self.overlay = Some(Overlay::Prefs(Prefs::new(crate::settings::Settings::load(&ctx.state_dir))));
+            self.overlay = Some(Overlay::Prefs(Prefs::new(crate::settings::Settings::load(&ctx.state_dir), ctx)));
             return Action::Redraw { turn: None };
         } else if inside(STATS) {
             let finished = self.books.iter().filter(|b| b.status() == Filter::Finished).count();

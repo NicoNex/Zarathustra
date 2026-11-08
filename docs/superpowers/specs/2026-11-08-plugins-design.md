@@ -94,7 +94,7 @@ selection placements come next.
 | `choice` | one of the options | `options` (strings), `default_value` |
 | `number` | − value + | `minimum`, `maximum`, `step`, `default_value` |
 | `text` | a text field | `default_value` (phase 1: shown, not editable) |
-| `list` | items, each with remove | `list_executable` |
+| `list` | items, each with remove | `list_executable`, `empty_label` (how to add one) |
 
 A `list` executable is called as `list_executable list` (prints `id<TAB>text` per item) and
 `list_executable remove <id>`. 2 s timeout.
@@ -135,9 +135,11 @@ de-Amazon phase A; until then the app starts the active services when it opens.
 
 ## Settings screen
 
-The settings screen lists the installed plugins under its rows; a tap opens the plugin's page:
-the status lines, the service rows, the declared settings, then the action buttons. Back
-returns to the settings.
+The settings screen lists the installed plugins under its rows (name, description, and
+"Active" / "Off" for a service); a tap opens the plugin's page: the status lines, the service
+rows, the declared settings, then the action buttons, and the last action's or error's message.
+Back returns to the settings. Labels are shown as written (no translations yet). Phase 1: no
+scrolling, a page holds what fits the screen.
 
 ## Trust
 

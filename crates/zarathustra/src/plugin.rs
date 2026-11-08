@@ -130,6 +130,9 @@ pub enum Kind {
     },
     List {
         list_executable: String,
+        /// Shown when the list is empty: how to add an item.
+        #[serde(default)]
+        empty_label: Option<String>,
     },
 }
 
@@ -394,7 +397,9 @@ impl Plugin {
     fn list_run(&self, setting: &str) -> Option<Run> {
         let m = self.manifest.as_ref().ok()?;
         match &m.setting.iter().find(|s| s.id == setting)?.kind {
-            Kind::List { list_executable } => Some(Run { executable: list_executable.clone(), arguments: Vec::new() }),
+            Kind::List { list_executable, .. } => {
+                Some(Run { executable: list_executable.clone(), arguments: Vec::new() })
+            }
             _ => None,
         }
     }

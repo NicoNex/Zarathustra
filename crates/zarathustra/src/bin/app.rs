@@ -1,8 +1,11 @@
 //! Zarathustra: home and reader on the device.
 //!
 //!   zarathustra [BOOK] [--no-swipe] [--pgm DIR] [--search WORD]
+//!   zarathustra --start-services [--recovery]
 //!
 //! With `--pgm`, renders the home screen and the first pages of BOOK into DIR instead.
+//! `--start-services` starts the plugins' services meant for power-on (with `--recovery`, the
+//! recovery ones too) and exits: the boot runs it before the UI, independently of it.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -199,13 +202,22 @@ fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::i
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let (mut book, mut swipe, mut pgm, mut query) = (None, true, None, "natura".to_string());
+    let (mut services, mut recovery) = (false, false);
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--start-services" => services = true,
+            "--recovery" => recovery = true,
             "--no-swipe" => swipe = false,
             "--search" => query = args.next().context("--search WORD")?,
             "--pgm" => pgm = Some(PathBuf::from(args.next().context("--pgm DIR")?)),
             path => book = Some(PathBuf::from(path)),
         }
+    }
+    if services {
+        // No fonts, no screen: just the services, fast, at boot.
+        let state_dir = zarathustra::state_dir();
+        zarathustra::plugin::start_services(&zarathustra::plugin::Dirs::new(&state_dir), &state_dir, true, recovery);
+        return Ok(());
     }
     let t = Instant::now();
     let mut ctx = Ctx::new();
@@ -326,6 +338,9 @@ fn main() -> Result<()> {
         shot(&mut home, &mut ctx, Some((W - 72 - 36, 118)), "power.pgm")?;
         home.tap((5, 5), (5, 5), &ctx);
         shot(&mut home, &mut ctx, Some((516 + 78, 118)), "prefs.pgm")?;
+        // The first plugin's page (SSH), then back to the settings and the home.
+        shot(&mut home, &mut ctx, Some((200, 950)), "plugin.pgm")?;
+        home.tap((100, 75), (100, 75), &ctx);
         home.tap((100, 75), (100, 75), &ctx);
         // Send books as it is now (no network: the retry screen), then with a fixed URL.
         shot(&mut home, &mut ctx, Some((490, 118)), "transfer.pgm")?;
@@ -484,6 +499,8 @@ fn main() -> Result<()> {
     }
 
     let mut dev = zarathustra_device::Night::new(zarathustra_device::open_default()?);
+    // The plugins' services the user made active (already running ones are left alone).
+    zarathustra::plugin::start_services(&zarathustra::plugin::Dirs::new(&ctx.state_dir), &ctx.state_dir, false, false);
     let mut quick = QuickPanel::new(&ctx.state_dir, &mut dev);
     zarathustra_device::set_night(quick.settings().night);
     let full = Rect::new(0, 0, W, H);

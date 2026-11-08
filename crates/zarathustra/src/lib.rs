@@ -15,6 +15,7 @@ pub mod notebook;
 pub mod pace;
 pub mod pdfview;
 pub mod plugin;
+pub mod plugin_page;
 pub mod prefs;
 pub mod quick;
 pub mod reader;
@@ -91,12 +92,7 @@ impl Ctx {
         }
         fonts.add_dir(&first_existing(&["dev-fonts"]));
         let ts = Typesetter::new(Hyphenators::new(first_existing(&["/mnt/us/zarathustra/hyph", "assets/hyphenation"])));
-        let state_dir = if on_device() {
-            PathBuf::from("/mnt/us/zarathustra/state")
-        } else {
-            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/zarathustra-state")).to_path_buf()
-        };
-        std::fs::create_dir_all(&state_dir).ok();
+        let state_dir = state_dir();
         i18n::set_lang(settings::Settings::load(&state_dir).lang);
         Ctx { fonts, ts, raster: Rasterizer::new(1.3), state_dir }
     }
@@ -153,6 +149,17 @@ pub(crate) fn legacy_position_file(state_dir: &Path, book: &Path) -> PathBuf {
         .iter()
         .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
     state_dir.join(format!("{stem}-{hash:016x}.pos"))
+}
+
+/// Where positions, preferences and the database live (created if missing).
+pub fn state_dir() -> PathBuf {
+    let dir = if on_device() {
+        PathBuf::from("/mnt/us/zarathustra/state")
+    } else {
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/zarathustra-state")).to_path_buf()
+    };
+    std::fs::create_dir_all(&dir).ok();
+    dir
 }
 
 /// Preference group `name` (settings, typography…) from the database. A `<name>.txt` left by
