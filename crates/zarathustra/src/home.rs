@@ -199,8 +199,14 @@ fn library(dirs: &[PathBuf], ctx: &Ctx) -> Library {
 
 /// Reading progress of the book at `path` and when it was saved; `None` if never opened.
 fn progress(ctx: &Ctx, path: &Path) -> Option<(f32, SystemTime)> {
-    let state = ctx.state_file(path);
-    Position::load(&state).and_then(|p| Some((p.progress, std::fs::metadata(&state).ok()?.modified().ok()?)))
+    let value = ctx.store()?.positions().ok()?.remove(path.to_string_lossy().as_ref())?;
+    saved_progress(&value)
+}
+
+/// Progress and save time of a saved position (value, Unix seconds).
+fn saved_progress((value, at): &(String, i64)) -> Option<(f32, SystemTime)> {
+    let when = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(u64::try_from(*at).ok()?);
+    Position::parse(value).map(|p| (p.progress, when))
 }
 
 /// The book for the "continue reading" card: the last one read, not finished.
@@ -254,7 +260,11 @@ impl Home {
     /// covers) when the file is unchanged, else are decoded.
     fn build(library: Library, dirs: &[PathBuf], ctx: &Ctx, mut covers: HashMap<PathBuf, Covers>) -> Home {
         let paths: Vec<&Path> = library.books.iter().map(|b| b.path.as_path()).collect();
-        ctx.adopt_orphan_positions(&paths);
+        let store = ctx.store();
+        if let Some(store) = &store {
+            ctx.adopt_orphan_positions(store, &paths);
+        }
+        let saved = store.and_then(|s| s.positions().ok()).unwrap_or_default();
         let order = library.sorted(SortBy::Title);
         // Library index → title position, to carry the author order over to `books`.
         let mut title_pos = vec![0u32; order.len()];
@@ -269,7 +279,7 @@ impl Home {
         let books: Vec<Entry> = (order.into_iter())
             .filter_map(|i| slots[i].take())
             .map(|book| {
-                let progress = progress(ctx, &book.path);
+                let progress = saved.get(book.path.to_string_lossy().as_ref()).and_then(saved_progress);
                 let (cover, small) = match covers.remove(&book.path).filter(|c| c.0 == book.modified) {
                     Some((_, cover, small)) => (cover, small),
                     None => {
@@ -795,7 +805,9 @@ impl Home {
             eprintln!("delete {}: {e}", path.display());
             return Action::Redraw { turn: None };
         }
-        let _ = std::fs::remove_file(ctx.state_file(path)); // a never-opened book has none
+        if let Some(Err(e)) = ctx.store().map(|s| s.delete_position(&path.to_string_lossy())) {
+            eprintln!("delete position: {e}");
+        }
         self.refresh(ctx);
         Action::Redraw { turn: None }
     }
@@ -803,14 +815,15 @@ impl Home {
     /// Marks book `i` as read (progress 100%, the position kept) or unread (the saved
     /// position removed: the book starts over).
     fn mark_read(&mut self, i: usize, read: bool, ctx: &Ctx) {
-        let state = ctx.state_file(&self.books[i].book.path);
+        let Some(store) = ctx.store() else { return };
+        let path = &self.books[i].book.path;
         let done = if read {
-            let p = Position::load(&state);
+            let p = Position::load(&store, &ctx.state_dir, path);
             let (chapter, block, offset) = p.map_or((0, 0, 0), |p| (p.chapter, p.block, p.offset));
-            crate::write_atomic(&state, format!("{chapter} {block} 1.0000 {offset}\n"))
+            let p = Position { chapter, block, progress: 1.0, offset };
+            store.set_position(&path.to_string_lossy(), &p.to_text(), crate::reader::now_secs())
         } else {
-            std::fs::remove_file(&state)
-                .or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) })
+            store.delete_position(&path.to_string_lossy())
         };
         if let Err(e) = done {
             return eprintln!("mark read: {e}");
@@ -1220,12 +1233,11 @@ mod tests {
         std::fs::create_dir_all(&state).expect("dirs");
         let mut ctx = Ctx::new();
         ctx.state_dir = state;
+        let store = ctx.store().expect("db");
         for (name, age) in [("a.epub", 3600), ("b.epub", 0)] {
             std::fs::copy(book, books.join(name)).expect("copy");
-            let pos = ctx.state_file(&books.join(name));
-            std::fs::write(&pos, "1 0 0.3000 0\n").expect("write");
-            let when = SystemTime::now() - std::time::Duration::from_secs(age);
-            std::fs::File::options().write(true).open(&pos).and_then(|f| f.set_modified(when)).expect("mtime");
+            let key = books.join(name).to_string_lossy().into_owned();
+            store.set_position(&key, "1 0 0.3000 0", crate::reader::now_secs() - age).expect("set");
         }
         let mut home = Home::scan(std::slice::from_ref(&books), &ctx);
         let on_card = |h: &Home| h.current.as_ref().map(|&(i, _)| h.books[i].book.path.clone());

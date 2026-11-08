@@ -13,7 +13,7 @@ use zarathustra_device::{Canvas, Rect};
 use zarathustra_engine::book::{Book, Chapter};
 use zarathustra_engine::layout::page::Page;
 use zarathustra_engine::style::cascade::Preferences;
-use zarathustra_store::{AnnotationData, Kind};
+use zarathustra_store::{AnnotationData, Kind, Store};
 
 use crate::footnote::{self, Popup};
 use crate::highlight::{page_start, resolve, Highlights, Outcome, TextPos};
@@ -52,7 +52,8 @@ pub struct Reader {
     chapter: Chapter,
     chapter_index: usize,
     pub page: usize,
-    state_file: PathBuf,
+    /// The book's file: the key of its saved position.
+    path: PathBuf,
     /// Decoded images of the pages around the current one (`render` takes `&self`).
     images: std::cell::RefCell<zarathustra_engine::image::ImageCache>,
     /// Show the clock in the header (`Settings::clock`, synced by the app).
@@ -86,8 +87,8 @@ pub struct Position {
 }
 
 impl Position {
-    pub fn load(file: &Path) -> Option<Position> {
-        let s = std::fs::read_to_string(file).ok()?;
+    /// "chapter block progress offset"; positions saved before offsets have none.
+    pub fn parse(s: &str) -> Option<Position> {
         let mut it = s.split_whitespace();
         Some(Position {
             chapter: it.next()?.parse().ok()?,
@@ -97,13 +98,46 @@ impl Position {
         })
     }
 
-    /// Writes the position to `file` (what [`Position::load`] reads), logging a failure.
-    pub fn save(&self, file: &Path) {
+    pub fn to_text(&self) -> String {
         let Position { chapter, block, progress, offset } = self;
-        if let Err(e) = crate::write_atomic(file, format!("{chapter} {block} {progress:.4} {offset}\n")) {
+        format!("{chapter} {block} {progress:.4} {offset}")
+    }
+
+    /// The saved position of `book`; one an older build left in a file is taken in (once).
+    pub fn load(store: &Store, state_dir: &Path, book: &Path) -> Option<Position> {
+        let key = book.to_string_lossy();
+        match store.position(&key) {
+            Ok(Some(value)) => return Position::parse(&value),
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("position: {e}");
+                return None;
+            }
+        }
+        let file = crate::legacy_position_file(state_dir, book);
+        let text = std::fs::read_to_string(&file).ok()?;
+        let at = std::fs::metadata(&file).and_then(|m| m.modified()).map_or_else(|_| now_secs(), unix_secs);
+        match store.set_position(&key, &text, at) {
+            Ok(()) => drop(std::fs::remove_file(&file)),
+            Err(e) => eprintln!("position: {e}"),
+        }
+        Position::parse(&text)
+    }
+
+    /// Saves the position of `book`, logging a failure.
+    pub fn save(&self, store: &Store, book: &Path) {
+        if let Err(e) = store.set_position(&book.to_string_lossy(), &self.to_text(), now_secs()) {
             eprintln!("position: {e}");
         }
     }
+}
+
+pub(crate) fn unix_secs(t: std::time::SystemTime) -> i64 {
+    t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
+pub(crate) fn now_secs() -> i64 {
+    unix_secs(std::time::SystemTime::now())
 }
 
 impl Reader {
@@ -114,8 +148,8 @@ impl Reader {
         }
         let typo = Typography::load(&ctx.state_dir);
         let prefs = preferences(&typo);
-        let state_file = ctx.state_file(path);
-        let saved = Position::load(&state_file);
+        let store = ctx.store();
+        let saved = store.as_ref().and_then(|s| Position::load(s, &ctx.state_dir, path));
         let contents = toc::entries(&book);
         let hl = Highlights::open(path, &book, &ctx.state_dir);
         let marks = Bookmarks::load(hl.store());
@@ -129,7 +163,7 @@ impl Reader {
             toc: None,
             chapter: Chapter::default(),
             page: 0,
-            state_file,
+            path: path.to_path_buf(),
             images: Default::default(),
             // The app syncs it from the settings before every render.
             clock: false,
@@ -356,14 +390,15 @@ impl Reader {
     }
 
     pub fn save(&self) {
+        let Some((store, _)) = self.hl.store() else { return };
         let TextPos { block, offset } = self.start();
-        Position {
+        let position = Position {
             chapter: self.chapter_index,
             block: block as usize,
             progress: self.progress(),
             offset: offset as usize,
-        }
-        .save(&self.state_file);
+        };
+        position.save(store, &self.path);
     }
 
     /// A swipe up from the bottom edge opens the menu (typography sheet), as the quick panel
@@ -953,14 +988,17 @@ mod tests {
 
     #[test]
     fn positions_load_with_and_without_offset() {
-        let dir = std::env::temp_dir().join(format!("zarathustra-pos-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let file = dir.join("book.pos");
-        std::fs::write(&file, "3 7 0.5000\n").expect("write");
-        let p = Position::load(&file).expect("old format");
+        let p = Position::parse("3 7 0.5000\n").expect("old format");
         assert_eq!((p.chapter, p.block, p.offset), (3, 7, 0));
-        std::fs::write(&file, "3 7 0.5000 42\n").expect("write");
-        assert_eq!(Position::load(&file).map(|p| p.offset), Some(42));
+        assert_eq!(Position::parse("3 7 0.5000 42").map(|p| p.offset), Some(42));
+        let store = Store::open_in_memory().expect("db");
+        let dir = std::env::temp_dir().join(format!("zarathustra-pos-load-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let book = Path::new("/mnt/us/library/Libro.epub");
+        assert!(Position::load(&store, &dir, book).is_none());
+        Position { chapter: 2, block: 5, progress: 0.25, offset: 9 }.save(&store, book);
+        let p = Position::load(&store, &dir, book).expect("saved");
+        assert_eq!((p.chapter, p.block, p.offset, p.to_text()), (2, 5, 9, "2 5 0.2500 9".into()));
         std::fs::remove_dir_all(dir).ok();
     }
 }

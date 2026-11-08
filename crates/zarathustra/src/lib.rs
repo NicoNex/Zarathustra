@@ -110,48 +110,48 @@ impl Ctx {
         sans(&self.fonts, bold)
     }
 
-    /// Where a book's reading position is saved: keyed by the full path, so books with the
-    /// same file name in different folders don't share it.
-    pub fn state_file(&self, book: &Path) -> PathBuf {
-        let stem = book.file_stem().map_or_else(|| "book".into(), |s| s.to_string_lossy().into_owned());
-        // FNV-1a: stable across Rust versions, unlike the std hasher.
-        let hash = book
-            .as_os_str()
-            .as_encoded_bytes()
-            .iter()
-            .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
-        self.state_dir.join(format!("{stem}-{hash:016x}.pos"))
+    /// The database in the state dir, `None` (logged) when it can't be opened.
+    pub fn store(&self) -> Option<zarathustra_store::Store> {
+        open_store(&self.state_dir)
     }
 
     /// Books moved to another folder (documents/ → library/) keep their place: a saved
-    /// position that belongs to none of `books` (its book is gone from there) goes to the
-    /// book of the same file name that has none. One read of the state dir.
-    pub fn adopt_orphan_positions(&self, books: &[&Path]) {
-        let Ok(dir) = std::fs::read_dir(&self.state_dir) else { return };
-        let saved: std::collections::HashSet<PathBuf> = dir.flatten().map(|e| e.path()).collect();
-        let owned: std::collections::HashSet<PathBuf> = books.iter().map(|b| self.state_file(b)).collect();
-        let name = |p: &Path| p.file_name().and_then(|n| n.to_str()).map(str::to_owned).unwrap_or_default();
-        let orphans: Vec<String> = (saved.iter())
-            .filter(|p| p.extension().is_some_and(|e| e == "pos") && !owned.contains(*p))
-            .map(|p| name(p))
-            .collect();
+    /// position that belongs to none of `books` goes to the book of the same file name that
+    /// has none. Positions an older build kept in files are taken in first.
+    // shortcut: a moved book whose position is still in an old build's file loses it (the
+    // file name hashes the old path); fine once a device has run this build.
+    pub fn adopt_orphan_positions(&self, store: &zarathustra_store::Store, books: &[&Path]) {
         for book in books {
-            let file = self.state_file(book);
-            if saved.contains(&file) {
-                continue;
-            }
-            let stem = name(&file);
-            // "<stem>-<16 hex>.pos" → "<stem>"
-            let stem = stem.get(..stem.len().saturating_sub(21)).unwrap_or_default();
-            let prefix = format!("{stem}-");
-            let mine: Vec<&String> = (orphans.iter())
-                .filter(|n| **n == format!("{stem}.pos") || (n.starts_with(&prefix) && n.len() == prefix.len() + 20))
-                .collect();
+            reader::Position::load(store, &self.state_dir, book);
+        }
+        let Ok(saved) = store.positions() else { return };
+        let key = |p: &Path| p.to_string_lossy().into_owned();
+        let owned: std::collections::HashSet<String> = books.iter().map(|b| key(b)).collect();
+        let name = |p: &str| Path::new(p).file_name().map(|n| n.to_os_string());
+        let orphans: Vec<&String> = saved.keys().filter(|p| !owned.contains(*p)).collect();
+        for book in books.iter().filter(|b| !saved.contains_key(&key(b))) {
+            let mine: Vec<&&String> =
+                orphans.iter().filter(|o| name(o) == book.file_name().map(|n| n.to_os_string())).collect();
             if let [old] = mine.as_slice() {
-                std::fs::rename(self.state_dir.join(old), &file).ok();
+                if let Err(e) = store.move_position(old, &key(book)) {
+                    eprintln!("positions: {e}");
+                }
             }
         }
     }
+}
+
+/// Where an older build kept a book's reading position: keyed by the full path, so books
+/// with the same file name in different folders didn't share it.
+pub(crate) fn legacy_position_file(state_dir: &Path, book: &Path) -> PathBuf {
+    let stem = book.file_stem().map_or_else(|| "book".into(), |s| s.to_string_lossy().into_owned());
+    // FNV-1a: stable across Rust versions, unlike the std hasher.
+    let hash = book
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
+    state_dir.join(format!("{stem}-{hash:016x}.pos"))
 }
 
 /// Preference group `name` (settings, typography…) from the database. A `<name>.txt` left by
@@ -187,7 +187,7 @@ pub fn save_pref(state_dir: &Path, name: &str, value: &str) {
     }
 }
 
-fn open_store(state_dir: &Path) -> Option<zarathustra_store::Store> {
+pub(crate) fn open_store(state_dir: &Path) -> Option<zarathustra_store::Store> {
     let store = zarathustra_store::Store::open(&state_dir.join("zarathustra.db"));
     store.map_err(|e| eprintln!("database: {e}")).ok()
 }
@@ -254,16 +254,20 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let mut ctx = Ctx::new();
         ctx.state_dir = dir.clone();
+        let store = zarathustra_store::Store::open_in_memory().expect("db");
         let (moved, here) = (Path::new("/mnt/us/library/Libro.epub"), Path::new("/mnt/us/library/a/Libro.epub"));
-        let old = ctx.state_file(Path::new("/mnt/us/documents/Libro.epub"));
-        std::fs::write(&old, "3 0 0.5000 0\n").expect("write");
-        // The other Libro.epub is still in the library: its position is not up for grabs.
-        std::fs::write(ctx.state_file(here), "1 0 0.1000 0\n").expect("write");
-        ctx.adopt_orphan_positions(&[moved, here]);
-        assert!(ctx.state_file(moved).exists() && !old.exists(), "the position moved with the book");
-        assert!(ctx.state_file(here).exists());
-        ctx.adopt_orphan_positions(&[moved, here, Path::new("/mnt/us/library/b/Libro.epub")]);
-        assert!(!ctx.state_file(Path::new("/mnt/us/library/b/Libro.epub")).exists(), "owned ones stay put");
+        store.set_position("/mnt/us/documents/Libro.epub", "3 0 0.5000 0", 1).expect("set");
+        // The other Libro.epub is still in the library, its position in an older build's file:
+        // taken in, and not up for grabs.
+        std::fs::write(legacy_position_file(&dir, here), "1 0 0.1000 0\n").expect("write");
+        ctx.adopt_orphan_positions(&store, &[moved, here]);
+        let saved = store.positions().expect("positions");
+        assert_eq!(saved.get(moved.to_str().expect("utf-8")).map(|v| v.0.as_str()), Some("3 0 0.5000 0"));
+        assert_eq!(saved.get(here.to_str().expect("utf-8")).map(|v| v.0.as_str()), Some("1 0 0.1000 0\n"));
+        assert!(!legacy_position_file(&dir, here).exists(), "the old file is gone");
+        assert_eq!(saved.len(), 2);
+        ctx.adopt_orphan_positions(&store, &[moved, here, Path::new("/mnt/us/library/b/Libro.epub")]);
+        assert_eq!(store.positions().expect("positions").len(), 2, "owned ones stay put");
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -36,7 +36,9 @@ pub struct PdfView {
     // ponytail: renders on the turn; pre-rendering the next page while idle would hide the
     // MuPDF time on heavy (scanned) pages.
     rendered: Option<(usize, GrayImage)>,
-    state_file: PathBuf,
+    /// Where the page read is saved, and the book's key there.
+    store: Option<zarathustra_store::Store>,
+    path: PathBuf,
     pub clock: bool,
 }
 
@@ -46,8 +48,9 @@ impl PdfView {
         if pdf.page_count() == 0 {
             bail!("no pages");
         }
-        let state_file = ctx.state_file(path);
-        let page = Position::load(&state_file).map_or(0, |p| p.chapter.min(pdf.page_count() - 1));
+        let store = ctx.store();
+        let saved = store.as_ref().and_then(|s| Position::load(s, &ctx.state_dir, path));
+        let page = saved.map_or(0, |p| p.chapter.min(pdf.page_count() - 1));
         let contents = (pdf.outline().into_iter())
             .map(|e| toc::Entry { title: e.title, depth: e.depth, chapter: e.page, fragment: None })
             .collect();
@@ -61,7 +64,8 @@ impl PdfView {
             contents,
             toc: None,
             rendered: None,
-            state_file,
+            store,
+            path: path.to_path_buf(),
             clock: false,
         })
     }
@@ -80,7 +84,9 @@ impl PdfView {
 
     /// Saved as the reader's position format, the page index in place of the chapter.
     fn save(&self) {
-        Position { chapter: self.page, block: 0, progress: self.progress(), offset: 0 }.save(&self.state_file);
+        if let Some(store) = &self.store {
+            Position { chapter: self.page, block: 0, progress: self.progress(), offset: 0 }.save(store, &self.path);
+        }
     }
 
     /// One page forward or back; false at either end.

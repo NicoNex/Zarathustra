@@ -24,7 +24,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Schema migrations; entry `i` takes the database from `user_version` `i` to `i + 1`.
-const MIGRATIONS: &[&str] = &[include_str!("v1.sql"), include_str!("v2.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("v1.sql"), include_str!("v2.sql"), include_str!("v3.sql")];
 const LATEST: u32 = MIGRATIONS.len() as u32;
 
 /// Stable identity of a book across moves, renames and re-downloads: its EPUB
@@ -174,6 +174,40 @@ impl Store {
              ON CONFLICT(name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             (name, value),
         )?;
+        Ok(())
+    }
+
+    /// The reading position saved for the book at `path`.
+    pub fn position(&self, path: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM positions WHERE path = ?1", [path], |r| r.get(0)).optional()?)
+    }
+
+    /// Every saved position: path → (value, when saved, Unix seconds).
+    pub fn positions(&self) -> Result<HashMap<String, (String, i64)>> {
+        let mut stmt = self.conn.prepare("SELECT path, value, updated_at FROM positions")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Saves the position of the book at `path`, as of `at` (Unix seconds).
+    pub fn set_position(&self, path: &str, value: &str, at: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO positions(path, value, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (path, value, at),
+        )?;
+        Ok(())
+    }
+
+    /// Forgets the position of the book at `path` (it starts over).
+    pub fn delete_position(&self, path: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM positions WHERE path = ?1", [path])?;
+        Ok(())
+    }
+
+    /// The book at `from` moved to `to`: its position follows.
+    pub fn move_position(&self, from: &str, to: &str) -> Result<()> {
+        self.conn.execute("UPDATE positions SET path = ?2 WHERE path = ?1", [from, to])?;
         Ok(())
     }
 
