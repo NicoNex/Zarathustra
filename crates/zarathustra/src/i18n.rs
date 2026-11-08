@@ -509,10 +509,10 @@ impl Lang {
     }
 
     /// The pill offering the way back after a jump: "‹  Torna a p. 12".
-    pub fn back_to_page(self, page: usize) -> String {
+    pub fn back_to_percent(self, percent: u32) -> String {
         match self {
-            Lang::It => format!("‹  Torna a p. {page}"),
-            Lang::En => format!("‹  Back to p. {page}"),
+            Lang::It => format!("‹  Torna al {percent}%"),
+            Lang::En => format!("‹  Back to {percent}%"),
         }
     }
 

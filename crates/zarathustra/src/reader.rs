@@ -225,7 +225,7 @@ impl Reader {
 
     /// Where the page shown is, to come back to.
     fn mark(&self) -> Mark {
-        Mark { chapter: self.chapter_index, pos: self.start(), page: self.page }
+        Mark { chapter: self.chapter_index, pos: self.start(), page: self.page, progress: self.progress() }
     }
 
     /// The time on the page shown counts as read (a forward turn, the menu opening, leaving
@@ -379,7 +379,7 @@ impl Reader {
     /// Bookkeeping after any page turn.
     fn turned(&mut self) {
         self.found = None;
-        self.back.turned();
+        self.back.turned(self.mark());
         self.save();
     }
 
@@ -464,6 +464,12 @@ impl Reader {
                 let title = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.clone());
                 self.marks.toggle(self.hl.store(), &self.chapter, self.page, title);
                 return Action::Region(nav::ribbon_area());
+            }
+            if self.back.get().is_some() && nav::pill_close().contains(x0, y0) {
+                self.back.clear();
+                let r = nav::pill();
+                // With the paper halo around it.
+                return Action::Region(Rect::new(r.x - 8, r.y - 8, r.w + 16, r.h + 16));
             }
             if self.back.get().is_some() && nav::pill().contains(x0, y0) {
                 self.go_back(ctx);
@@ -771,7 +777,7 @@ impl Reader {
         let start = self.start();
         // ponytail: the way back names a page of the old layout; dropped rather than
         // recomputed, since a typography change mid-jump is rare.
-        self.back.turned();
+        self.back.clear();
         self.prefs = preferences(&self.typo);
         // On failure the old layout stays up.
         match self.load(self.chapter_index, ctx) {
@@ -901,7 +907,7 @@ impl Reader {
             nav::draw_ribbon(c);
         }
         if let Some(m) = self.back.get() {
-            nav::draw_pill(c, ctx, m.page);
+            nav::draw_pill(c, ctx, m.progress);
         }
         self.hl.render_over(c, ctx, &self.chapter, self.page, self.origin());
         if let Some(popup) = &self.note {

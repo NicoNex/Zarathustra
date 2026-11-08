@@ -29,7 +29,8 @@ const RIBBON: Rect = Rect { x: W - 96, y: 0, w: 40, h: 88 };
 const NOTCH: i32 = 16;
 /// Words of the page's opening kept as the bookmark's quote (shown in the list).
 const QUOTE_WORDS: usize = 12;
-const PILL_W: i32 = 380;
+const PILL_W: i32 = 440;
+const PILL_CLOSE_W: i32 = 90;
 const PILL_H: i32 = 72;
 /// Inset of the scrubber's track from its touch area, so the knob fits at both ends.
 const KNOB: i32 = 22;
@@ -249,17 +250,20 @@ impl Bookmarks {
     }
 }
 
-/// A place in the book to come back to: chapter, where its page starts, and that page's
-/// number (as the footer shows it) for the label.
+/// A place in the book to come back to: chapter, where its page starts, that page's index in
+/// the chapter, and how far through the book it is (the pill's label: page numbers restart in
+/// every chapter, so they can't name it).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mark {
     pub chapter: usize,
     pub pos: TextPos,
     pub page: usize,
+    pub progress: f32,
 }
 
 /// Where the reader was before a jump (contents, bookmark, scrubber, highlight list), offered
-/// until the next page turn.
+/// until it is used, dismissed, or the reader turns back onto that page: reading on from a
+/// highlight jumped to (a passage over several pages) keeps the way back.
 #[derive(Debug, Default)]
 pub struct Back(Option<Mark>);
 
@@ -276,8 +280,15 @@ impl Back {
         }
     }
 
-    /// A page turn: the reader stays where they are.
-    pub fn turned(&mut self) {
+    /// A page turn to `here`: turning back onto the place left makes the way back moot.
+    pub fn turned(&mut self, here: Mark) {
+        if self.0.is_some_and(|m| (m.chapter, m.page) == (here.chapter, here.page)) {
+            self.0 = None;
+        }
+    }
+
+    /// Forgets the way back (the pill's ×, a new layout whose pages it no longer names).
+    pub fn clear(&mut self) {
         self.0 = None;
     }
 
@@ -290,19 +301,30 @@ impl Back {
     }
 }
 
-/// The "‹ Back to p. 12" pill, centred over the footer.
+/// The "‹ Back to 37%  ×" pill, centred over the footer.
 pub fn pill() -> Rect {
     Rect::new((W - PILL_W) / 2, H - MARGIN_BOTTOM + 24, PILL_W, PILL_H)
 }
 
-pub fn draw_pill(c: &mut Canvas, ctx: &mut Ctx, page: usize) {
+/// The pill's ×, which dismisses it.
+pub fn pill_close() -> Rect {
+    let r = pill();
+    Rect::new(r.right() - PILL_CLOSE_W, r.y, PILL_CLOSE_W, r.h)
+}
+
+pub fn draw_pill(c: &mut Canvas, ctx: &mut Ctx, progress: f32) {
     let r = pill();
     // A paper halo keeps it apart from the progress bar under it.
     rounded_rect(c, Rect::new(r.x - 8, r.y - 8, r.w + 16, r.h + 16), r.h / 2 + 8, PAPER);
     rounded_rect(c, r, r.h / 2, INK);
+    let close = pill_close();
+    c.fill(Rect::new(close.x, r.y + 18, 2, r.h - 36), 120);
     let Ctx { fonts, raster, .. } = ctx;
     let Some(face) = crate::sans(fonts, true) else { return };
-    Label { face, size: 28.0, ink: PAPER }.centered(c, raster, &crate::i18n::lang().back_to_page(page + 1), r);
+    let percent = (progress * 100.0).round() as u32;
+    let back = Rect::new(r.x, r.y, r.w - PILL_CLOSE_W, r.h);
+    Label { face, size: 28.0, ink: PAPER }.centered(c, raster, &crate::i18n::lang().back_to_percent(percent), back);
+    Label { face, size: 30.0, ink: PAPER }.centered(c, raster, "×", close);
 }
 
 /// The scrubber's track inside its touch area `r`.
@@ -537,8 +559,8 @@ mod tests {
     }
 
     #[test]
-    fn back_offers_the_place_first_left_until_a_turn() {
-        let at = |chapter, page| Mark { chapter, pos: TextPos::new(page, 0), page };
+    fn back_offers_the_place_first_left_until_used_or_reached() {
+        let at = |chapter, page| Mark { chapter, pos: TextPos::new(page, 0), page, progress: 0.0 };
         let mut back = Back::default();
         back.jumped(at(0, 4), at(0, 4));
         assert_eq!(back.get(), None, "a jump to the page shown");
@@ -549,7 +571,12 @@ mod tests {
         back.jumped(at(8, 2), at(0, 4));
         assert_eq!(back.get(), None, "jumped back onto it");
         back.jumped(at(0, 4), at(2, 1));
-        back.turned();
+        back.turned(at(2, 2));
+        assert_eq!(back.get(), Some(at(0, 4)), "reading on keeps the way back");
+        back.turned(at(0, 4));
+        assert_eq!(back.get(), None, "turned back onto it");
+        back.jumped(at(0, 4), at(2, 1));
+        back.clear();
         assert_eq!(back.get(), None);
         back.jumped(at(0, 4), at(2, 1));
         assert_eq!(back.take(), Some(at(0, 4)));
