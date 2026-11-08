@@ -319,7 +319,6 @@ impl Reader {
     /// Moves one page forward or back across chapters, skipping chapters that are empty or
     /// fail to load; false (and the page unchanged) at either end of the book.
     pub fn turn(&mut self, forward: bool, ctx: &mut Ctx) -> bool {
-        self.found = None;
         if forward && self.page + 1 < self.chapter.pages.len() {
             self.page += 1;
             self.hl.dismiss();
@@ -339,9 +338,15 @@ impl Reader {
             }
             self.page = if forward { 0 } else { self.chapter.pages.len() - 1 };
         }
+        self.turned();
+        true
+    }
+
+    /// Bookkeeping after any page turn.
+    fn turned(&mut self) {
+        self.found = None;
         self.back.turned();
         self.save();
-        true
     }
 
     /// Progress through the book, 0–1, by chapters and pages.
@@ -750,13 +755,18 @@ impl Reader {
         (self.margin_x(), MARGIN_TOP)
     }
 
+    /// Something is open over the page (menu, contents, search, a note, a definition).
+    fn overlay_open(&self) -> bool {
+        self.menu || self.toc.is_some() || self.search_shown() || self.note.is_some() || self.card.is_some()
+    }
+
     /// Long press at `at`: starts a selection on the word there. Returns the screen area to
     /// refresh, `None` when nothing was selected.
     pub fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
         if let Some(s) = self.search.as_mut().filter(|s| s.open) {
             return s.long_press(at);
         }
-        if self.menu || self.toc.is_some() || self.search_shown() || self.note.is_some() || self.card.is_some() {
+        if self.overlay_open() {
             return None;
         }
         outcome_rect(self.hl.long_press(&self.chapter, self.page, self.origin(), at))
@@ -770,7 +780,7 @@ impl Reader {
     /// A finger down on a knob of the selection: that end follows the finger. Returns the area
     /// to refresh, `None` when no knob is there.
     pub fn grab(&mut self, at: (i32, i32)) -> Option<Rect> {
-        if self.menu || self.toc.is_some() || self.search_shown() || self.note.is_some() || self.card.is_some() {
+        if self.overlay_open() {
             return None;
         }
         outcome_rect(self.hl.grab(&self.chapter, self.page, self.origin(), at))
@@ -786,9 +796,7 @@ impl Reader {
     pub fn edge_turn(&mut self) -> bool {
         let Some(next) = self.hl.edge_turn(&self.chapter, self.page) else { return false };
         self.page = next;
-        self.found = None;
-        self.back.turned();
-        self.save();
+        self.turned();
         true
     }
 

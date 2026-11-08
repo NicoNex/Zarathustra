@@ -70,6 +70,8 @@ struct Press {
     fired: bool,
     /// It selected a word: moves extend the selection.
     selecting: bool,
+    /// The selection turned the page: drawn black and white, the whole page settles on the lift.
+    turned: bool,
 }
 
 impl Press {
@@ -83,11 +85,16 @@ impl Press {
         self.at = None;
         let typing = r.search_shown();
         if let Some(rect) = r.long_press(start) {
-            self.fired = true;
             // Accents on the search keyboard are tapped next, not dragged over.
-            self.selecting = !typing;
-            *selection = Some(selection.map_or(rect, |s| s.union(&rect)));
+            self.select(rect, !typing, selection);
         }
+    }
+
+    /// The press selected text (`rect` to refresh); `drag` when moves extend it.
+    fn select(&mut self, rect: Rect, drag: bool, selection: &mut Option<Rect>) {
+        self.fired = true;
+        self.selecting = drag;
+        *selection = Some(selection.map_or(rect, |s| s.union(&rect)));
     }
 }
 
@@ -679,8 +686,8 @@ fn main() -> Result<()> {
                     // On a knob of the selection: dragging moves that end, no long press needed.
                     if let Screen::Reader(r) = &mut screen {
                         if let Some(rect) = r.grab((t.x, t.y)) {
-                            press = Press { at: None, fired: true, selecting: true };
-                            selection = Some(selection.map_or(rect, |s| s.union(&rect)));
+                            press.at = None;
+                            press.select(rect, true, &mut selection);
                             continue;
                         }
                     }
@@ -725,12 +732,14 @@ fn main() -> Result<()> {
                 Phase::Up => {}
             }
             let Some(start) = down.take() else { continue };
-            if std::mem::take(&mut press).fired {
+            let lifted = std::mem::take(&mut press);
+            if lifted.fired {
                 // The end of a long press: show the actions for the selection, if any.
                 if let Screen::Reader(r) = &mut screen {
                     if let Some(rect) = r.release(&mut ctx) {
                         // Drag frames of this batch are not drawn yet: cover them too.
                         let rect = selection.map_or(rect, |s| s.union(&rect));
+                        let rect = if lifted.turned { full } else { rect };
                         ready(&mut dev, &mut typing, &mut marker)?;
                         r.render(&mut dev.canvas(), &mut ctx);
                         marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
@@ -897,8 +906,9 @@ fn main() -> Result<()> {
                 marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
-        if let (Screen::Reader(r), true) = (&mut screen, press.selecting) {
-            if r.edge_turn() {
+        if let Screen::Reader(r) = &mut screen {
+            if press.selecting && r.edge_turn() {
+                press.turned = true;
                 selection = Some(full);
             }
         }
