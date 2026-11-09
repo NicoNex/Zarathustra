@@ -11,7 +11,7 @@ use crate::i18n::{lang, t};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::stats::{self, figures, Summary};
 use crate::ui::{clip_corners, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 const COVER_W: i32 = 300;
 const BLURB_SIZE: f32 = 34.0;
@@ -80,7 +80,7 @@ impl About {
             x = PAD + COVER_W.max(w) + 48;
             head_bottom = at.bottom();
         }
-        let width = (W - PAD - x) as f32;
+        let width = (screen_w() - PAD - x) as f32;
         let title = Label { face: serif_bold, size: 50.0, ink: INK };
         let mut y = top + 50;
         for line in title.wrap(&self.title, width, 4) {
@@ -106,7 +106,7 @@ impl About {
             y += 90;
         } else {
             let last = r.last_day.map_or_else(String::new, |d| crate::clock::date_text(lang(), d));
-            let row = Rect::new(PAD, y + 10, W - 2 * PAD, 130);
+            let row = Rect::new(PAD, y + 10, screen_w() - 2 * PAD, 130);
             figures(
                 c,
                 raster,
@@ -124,7 +124,7 @@ impl About {
 
         // The blurb, as much as fits.
         y += 50;
-        c.fill(Rect::new(PAD, y - 40, W - 2 * PAD, 2), LINE);
+        c.fill(Rect::new(PAD, y - 40, screen_w() - 2 * PAD, 2), LINE);
         caption.draw(c, raster, s.description, PAD as f32, y);
         y += 30;
         let blurb = Label { face: serif, size: BLURB_SIZE, ink: INK };
@@ -133,12 +133,12 @@ impl About {
             return;
         };
         // ponytail: a long blurb is cut with an ellipsis; page through it if users miss the end.
-        let mut room = ((H - 60 - y) / BLURB_LINE).max(0) as usize;
+        let mut room = ((screen_h() - 60 - y) / BLURB_LINE).max(0) as usize;
         for para in text.lines() {
             if room == 0 {
                 break;
             }
-            let lines = blurb.wrap(para, (W - 2 * PAD) as f32, room);
+            let lines = blurb.wrap(para, (screen_w() - 2 * PAD) as f32, room);
             for line in &lines {
                 y += BLURB_LINE;
                 blurb.draw(c, raster, line, PAD as f32, y);

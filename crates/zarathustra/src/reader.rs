@@ -23,18 +23,22 @@ use crate::pace::Pace;
 use crate::search::{self, Search};
 use crate::toc::{self, Toc};
 use crate::ui::{draw_lines, Label, INK_SOFT, LINE};
-use crate::{Action, Ctx, H, W};
+use crate::{screen_h, screen_w, Action, Ctx};
 
 pub(crate) const MARGIN_TOP: i32 = 110;
 pub(crate) const MARGIN_BOTTOM: i32 = 130;
 /// Clock baseline, well clear of the text starting at `MARGIN_TOP`.
 const HEADER_BASELINE: i32 = 66;
 /// The band the clock is drawn in, for refreshing it alone.
-pub const HEADER: Rect = Rect { x: 0, y: 0, w: W, h: MARGIN_TOP };
+pub fn header_rect() -> Rect {
+    Rect { x: 0, y: 0, w: screen_w(), h: MARGIN_TOP }
+}
 /// Taps above this open the reader menu, as on the Kindle.
 pub(crate) const TOP_BAND: i32 = 150;
 /// Taps left of this go back a page (the Kindle's narrow left strip); elsewhere forward.
-pub(crate) const BACK_ZONE: i32 = W / 4;
+pub(crate) fn back_zone() -> i32 {
+    screen_w() / 4
+}
 /// Horizontal travel that makes a touch a swipe.
 pub(crate) const SWIPE: i32 = 100;
 /// Swipes starting this close to the bottom edge open the menu.
@@ -302,7 +306,7 @@ impl Reader {
 
     pub fn load(&mut self, i: usize, ctx: &mut Ctx) -> Result<()> {
         let t = Instant::now();
-        let height = (H - MARGIN_TOP - MARGIN_BOTTOM) as f32;
+        let height = (screen_h() - MARGIN_TOP - MARGIN_BOTTOM) as f32;
         self.chapter = self.book.chapter(i, &self.prefs, &ctx.fonts, &mut ctx.ts, height)?;
         self.chapter_index = i;
         self.page = 0;
@@ -428,7 +432,7 @@ impl Reader {
             && self.toc.is_none()
             && self.note.is_none()
             && self.card.is_none()
-            && y0 >= H - BOTTOM_EDGE
+            && y0 >= screen_h() - BOTTOM_EDGE
             && y0 - y > SWIPE;
         if opens {
             self.hl.dismiss();
@@ -512,7 +516,7 @@ impl Reader {
                 self.menu = true;
                 return Action::Redraw { turn: None };
             }
-            _ => x0 >= BACK_ZONE,
+            _ => x0 >= back_zone(),
         };
         let active = self.hl.is_active();
         if !self.turn(forward, ctx) {
@@ -530,7 +534,7 @@ impl Reader {
         let (ox, oy) = self.origin();
         let a = footnote::link_at(page, &self.chapter.blocks, &self.chapter.dom, (x - ox) as f32, (y - oy) as f32)?;
         let prefs =
-            Preferences { font_size: self.prefs.font_size * 0.9, page_width: footnote::TEXT_W, ..self.prefs.clone() };
+            Preferences { font_size: self.prefs.font_size * 0.9, page_width: footnote::text_w(), ..self.prefs.clone() };
         let (fonts, ts) = (&ctx.fonts, &mut ctx.ts);
         let note = self.book.note(self.chapter_index, &self.chapter.dom, a, &prefs, fonts, ts, footnote::BODY_H)?;
         let popup = Popup::new(note, &self.chapter.dom.text(a), y);
@@ -954,7 +958,7 @@ impl Reader {
 
     /// Page count and time left in the chapter, and a thin progress bar through the book.
     fn footer(&self, c: &mut Canvas, ctx: &mut Ctx) {
-        let y = H - MARGIN_BOTTOM / 2;
+        let y = screen_h() - MARGIN_BOTTOM / 2;
         let margin = self.margin_x();
         footer(c, ctx, margin, self.progress(), (self.page, self.chapter.pages.len()));
 
@@ -969,8 +973,8 @@ impl Reader {
 /// A thin progress bar through the book (`progress` 0–1) and "page / pages" under its right
 /// end, `margin` in from the screen edges (also the PDF view's).
 pub(crate) fn footer(c: &mut Canvas, ctx: &mut Ctx, margin: i32, progress: f32, (page, pages): (usize, usize)) {
-    let y = H - MARGIN_BOTTOM / 2;
-    let width = W - 2 * margin;
+    let y = screen_h() - MARGIN_BOTTOM / 2;
+    let width = screen_w() - 2 * margin;
     c.fill(Rect::new(margin, y, width, 2), LINE);
     c.fill(Rect::new(margin, y - 1, (width as f32 * progress) as i32, 4), 60);
 
@@ -978,7 +982,7 @@ pub(crate) fn footer(c: &mut Canvas, ctx: &mut Ctx, margin: i32, progress: f32, 
     let Some(face) = crate::serif(fonts, false) else { return };
     let label = Label { face, size: 26.0, ink: INK_SOFT };
     let text = format!("{} / {}", page + 1, pages);
-    let x = (W - margin) as f32 - label.width(&text);
+    let x = (screen_w() - margin) as f32 - label.width(&text);
     label.draw(c, raster, &text, x, y + 44);
 }
 
@@ -988,7 +992,7 @@ pub(crate) fn header(c: &mut Canvas, ctx: &mut Ctx) {
     let Some(face) = crate::sans(fonts, false) else { return };
     let label = Label { face, size: 24.0, ink: INK_SOFT };
     let text = crate::clock::hhmm(crate::clock::local_now().1);
-    label.draw_centred(c, raster, &text, W as f32 / 2.0, HEADER_BASELINE);
+    label.draw_centred(c, raster, &text, screen_w() as f32 / 2.0, HEADER_BASELINE);
 }
 
 fn outcome_rect(o: Outcome) -> Option<Rect> {
@@ -1005,7 +1009,7 @@ fn preferences(t: &Typography) -> Preferences {
         line_height: Some(t.line_height()),
         align: Some(t.text_align()),
         hyphenate: true,
-        page_width: (W - 2 * t.margin_x()) as f32,
+        page_width: (screen_w() - 2 * t.margin_x()) as f32,
     }
 }
 

@@ -15,7 +15,7 @@ use crate::outsheet::OutputSheet;
 use crate::plugin::{Kind, LastRun, Plugin, ACTIVE, AT_BOOT};
 use crate::toc::BACK_W;
 use crate::ui::{button, rounded_outline, segmented_labels, segments, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 const STATUS_H: i32 = 58;
 const ROW_H: i32 = 150;
@@ -24,7 +24,9 @@ const CONTROL_W: i32 = 520;
 const ITEM_H: i32 = 96;
 const REMOVE_W: i32 = 220;
 /// The field of a text setting being typed.
-const FIELD: Rect = Rect { x: PAD, y: TOPBAR_H + 100, w: W - 2 * PAD, h: 112 };
+fn field() -> Rect {
+    Rect { x: PAD, y: TOPBAR_H + 100, w: screen_w() - 2 * PAD, h: 112 }
+}
 /// Longest value typed into a text setting.
 const MAX_TEXT: usize = 200;
 /// The boot runs `zarathustra --start-services` (not yet: see the "start at power-on" row).
@@ -195,10 +197,10 @@ impl PluginPage {
         let mut y = TOPBAR_H + 30;
         let mut out = Vec::new();
         for (row, h) in self.rows() {
-            if y + h > H - 40 {
+            if y + h > screen_h() - 40 {
                 break;
             }
-            out.push((row, Rect::new(PAD, y, W - 2 * PAD, h)));
+            out.push((row, Rect::new(PAD, y, screen_w() - 2 * PAD, h)));
             y += h;
         }
         out
@@ -467,10 +469,10 @@ impl PluginPage {
         let label = self.plugin.manifest.as_ref().ok().and_then(|m| m.setting.get(e.setting));
         let label = label.map(|s| self.plugin.setting_label(s)).unwrap_or_default();
         topbar(c, raster, sans, serif_bold, t().cancel, &label);
-        rounded_outline(c, FIELD, 20, 3, INK, PAPER);
-        let field = Label { face: sans, size: 40.0, ink: INK };
-        let text = field.fit_tail(&e.text, (FIELD.w - 56) as f32);
-        field.draw(c, raster, text, (FIELD.x + 28) as f32, field.baseline(FIELD));
+        rounded_outline(c, field(), 20, 3, INK, PAPER);
+        let text_label = Label { face: sans, size: 40.0, ink: INK };
+        let text = text_label.fit_tail(&e.text, (field().w - 56) as f32);
+        text_label.draw(c, raster, text, (field().x + 28) as f32, text_label.baseline(field()));
         e.keyboard.render(c, ctx);
     }
 }

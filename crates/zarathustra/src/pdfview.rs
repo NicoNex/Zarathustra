@@ -15,10 +15,10 @@ use crate::highlight::mark;
 use crate::keyboard::Keyboard;
 use crate::menu::{self, Control};
 use crate::pdfmarks::{bands, PdfMarks, Place};
-use crate::reader::{footer, header, Position, BACK_ZONE, MARGIN_BOTTOM, MARGIN_TOP, SWIPE, TOP_BAND};
+use crate::reader::{back_zone, footer, header, Position, MARGIN_BOTTOM, MARGIN_TOP, SWIPE, TOP_BAND};
 use crate::search::{Found, Search};
 use crate::toc::{self, Toc};
-use crate::{Action, Ctx, H, W};
+use crate::{screen_h, screen_w, Action, Ctx};
 
 /// Space left and right of the page: cropped pages run almost edge to edge.
 const GUTTER: i32 = 8;
@@ -204,7 +204,7 @@ impl PdfView {
                 self.marks.dismiss();
                 return Action::Redraw { turn: None };
             }
-            _ => x0 >= BACK_ZONE,
+            _ => x0 >= back_zone(),
         };
         if self.turn(forward) {
             Action::Redraw { turn: Some(forward) }
@@ -299,7 +299,7 @@ impl PdfView {
             return;
         }
         let t = std::time::Instant::now();
-        let (w, h) = (W - 2 * GUTTER, H - MARGIN_TOP - MARGIN_BOTTOM);
+        let (w, h) = (screen_w() - 2 * GUTTER, screen_h() - MARGIN_TOP - MARGIN_BOTTOM);
         self.rendered = match self.pdf.render_with_text(self.page, w as u32, h as u32, true) {
             Ok((img, frame, text)) => {
                 let x = GUTTER + (w - img.width as i32) / 2;

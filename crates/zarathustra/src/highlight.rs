@@ -20,7 +20,7 @@ use zarathustra_engine::library::{BookEntry, Format};
 use zarathustra_store::{book_key, Annotation, AnnotationData, BookId, Color, Kind, Store};
 
 use crate::ui::{rounded_rect, Label, INK, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// Hold this long without moving to select a word.
 pub const LONG_PRESS: Duration = Duration::from_millis(500);
@@ -303,15 +303,15 @@ impl Popup {
     pub(crate) fn new(target: Option<usize>, buttons: &[Button], bands: &[Rect]) -> Popup {
         let w = BUTTON_W * buttons.len() as i32;
         let union = bands.iter().fold(Rect::default(), |u, r| u.union(r));
-        let x = (union.x + union.w / 2 - w / 2).clamp(16, W - 16 - w);
+        let x = (union.x + union.w / 2 - w / 2).clamp(16, screen_w() - 16 - w);
         let above = union.y - POPUP_GAP - POPUP_H;
         let below = union.bottom() + POPUP_GAP;
         let y = if above >= crate::menu::TOPBAR_H {
             above
-        } else if below + POPUP_H <= H - crate::menu::TOPBAR_H {
+        } else if below + POPUP_H <= screen_h() - crate::menu::TOPBAR_H {
             below
         } else {
-            (H - POPUP_H) / 2
+            (screen_h() - POPUP_H) / 2
         };
         let rect = Rect::new(x, y, w, POPUP_H);
         let buttons = buttons
@@ -608,7 +608,7 @@ impl Highlights {
             return Outcome::Redraw(damage);
         }
         if self.selection.take().is_some() {
-            return Outcome::Redraw(Rect::new(0, 0, W, crate::H));
+            return Outcome::Redraw(Rect::new(0, 0, screen_w(), crate::screen_h()));
         }
         let Some(pos) = hit(p, &chapter.blocks, (x - origin.0) as f32, (y - origin.1) as f32) else {
             return Outcome::Ignored;
@@ -786,7 +786,7 @@ mod tests {
         assert!(Popup::new(None, &b, &[line(800)]).rect.bottom() < 800, "above when there is room");
         assert!(Popup::new(None, &b, &[line(160)]).rect.y > 200, "below under the top bar");
         let page = Popup::new(None, &b, &[line(160), line(1500)]).rect;
-        assert!(page.y > 0 && page.bottom() < H, "a page-long selection: on screen, {page:?}");
+        assert!(page.y > 0 && page.bottom() < screen_h(), "a page-long selection: on screen, {page:?}");
     }
 
     fn chapter(src: &str) -> (Dom, Vec<Block>) {

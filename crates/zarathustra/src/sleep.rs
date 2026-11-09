@@ -7,7 +7,7 @@ use zarathustra_engine::image;
 
 use crate::clock::{date_text, hhmm, local_now};
 use crate::ui::{Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// Side and top margin around the cover.
 const MARGIN: i32 = 48;
@@ -26,7 +26,7 @@ pub fn render_sleep(
     author: &str,
     battery: Option<Battery>,
 ) {
-    c.fill(Rect::new(0, 0, W, H), PAPER);
+    c.fill(Rect::new(0, 0, screen_w(), screen_h()), PAPER);
     let Ctx { fonts, raster, .. } = ctx;
     let (Some(sans), Some(bold), Some(serif)) =
         (crate::sans(fonts, false), crate::sans(fonts, true), crate::serif(fonts, false))
@@ -34,12 +34,12 @@ pub fn render_sleep(
         return;
     };
     let hint = Label { face: sans, size: 28.0, ink: INK_SOFT };
-    hint.draw_centred(c, raster, crate::i18n::t().sleeping, W as f32 / 2.0, H - 48);
+    hint.draw_centred(c, raster, crate::i18n::t().sleeping, screen_w() as f32 / 2.0, screen_h() - 48);
 
     if title.is_empty() {
         return clock(c, raster, sans, bold, battery);
     }
-    let area = Rect::new(MARGIN, MARGIN, W - 2 * MARGIN, H - MARGIN - FOOTER);
+    let area = Rect::new(MARGIN, MARGIN, screen_w() - 2 * MARGIN, screen_h() - MARGIN - FOOTER);
     let img = cover.and_then(|b| image::decode(b, area.w as u32, area.h as u32));
     let Some(mut img) = img else {
         return title_page(c, raster, serif, area, title, author);
@@ -59,8 +59,8 @@ pub fn render_sleep(
     }
     let line = if author.is_empty() { title.to_string() } else { format!("{title} · {author}") };
     let label = Label { face: bold, size: 30.0, ink: INK };
-    let line = label.fit(&line, (W - 2 * MARGIN) as f32);
-    label.draw_centred(c, raster, &line, W as f32 / 2.0, H - 100);
+    let line = label.fit(&line, (screen_w() - 2 * MARGIN) as f32);
+    label.draw_centred(c, raster, &line, screen_w() as f32 / 2.0, screen_h() - 100);
 }
 
 /// No usable cover: the title typeset large in the book font, the author under it.
@@ -70,13 +70,13 @@ fn title_page(c: &mut Canvas, raster: &mut Rasterizer, serif: &Face, area: Rect,
     let lead = 112;
     let mut y = area.y + area.h * 2 / 5 - (lines.len() as i32 - 1) * lead / 2;
     for l in &lines {
-        big.draw_centred(c, raster, l, W as f32 / 2.0, y);
+        big.draw_centred(c, raster, l, screen_w() as f32 / 2.0, y);
         y += lead;
     }
     if !author.is_empty() {
         let small = Label { face: serif, size: 44.0, ink: INK_SOFT };
         let a = small.fit(author, area.w as f32);
-        small.draw_centred(c, raster, &a, W as f32 / 2.0, y + 24);
+        small.draw_centred(c, raster, &a, screen_w() as f32 / 2.0, y + 24);
     }
 }
 
@@ -85,18 +85,24 @@ fn clock(c: &mut Canvas, raster: &mut Rasterizer, sans: &Face, bold: &Face, batt
     let (days, minutes) = local_now();
     let time = hhmm(minutes);
     let center = |label: &Label, text: &str, y: i32, c: &mut Canvas, raster: &mut Rasterizer| {
-        label.draw_centred(c, raster, text, W as f32 / 2.0, y);
+        label.draw_centred(c, raster, text, screen_w() as f32 / 2.0, y);
     };
-    center(&Label { face: bold, size: 200.0, ink: INK }, &time, H * 2 / 5, c, raster);
+    center(&Label { face: bold, size: 200.0, ink: INK }, &time, screen_h() * 2 / 5, c, raster);
     center(
         &Label { face: sans, size: 44.0, ink: INK_SOFT },
         &date_text(crate::i18n::lang(), days),
-        H * 2 / 5 + 96,
+        screen_h() * 2 / 5 + 96,
         c,
         raster,
     );
     if let Some(b) = battery {
-        center(&Label { face: sans, size: 32.0, ink: INK_SOFT }, &format!("{}%", b.percent), H - 120, c, raster);
+        center(
+            &Label { face: sans, size: 32.0, ink: INK_SOFT },
+            &format!("{}%", b.percent),
+            screen_h() - 120,
+            c,
+            raster,
+        );
     }
 }
 
@@ -107,8 +113,8 @@ mod tests {
     fn render(cover: Option<&[u8]>, title: &str) -> Option<Vec<u8>> {
         let mut ctx = Ctx::new();
         ctx.sans(false)?;
-        let mut px = vec![0u8; (W * H) as usize];
-        let mut c = Canvas { width: W, height: H, stride: W as usize, pixels: &mut px };
+        let mut px = vec![0u8; (screen_w() * screen_h()) as usize];
+        let mut c = Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px };
         render_sleep(&mut c, &mut ctx, cover, title, "Author", Some(Battery { percent: 80, charging: false }));
         Some(px)
     }
@@ -133,7 +139,7 @@ mod tests {
         let Ok(mut book) = zarathustra_engine::book::Book::open(&path) else { return };
         let Some(cover) = book.cover() else { return };
         let Some(px) = render(Some(&cover), "Title") else { return };
-        let mid = &px[(H / 2 * W) as usize..(H / 2 * W + W) as usize];
+        let mid = &px[(screen_h() / 2 * screen_w()) as usize..(screen_h() / 2 * screen_w() + screen_w()) as usize];
         assert!(mid.iter().all(|&p| p % 17 == 0 || p == LINE), "cover row quantized to 16 levels (plus the frame)");
         assert!(mid.iter().any(|&p| p != PAPER), "cover row has content");
     }

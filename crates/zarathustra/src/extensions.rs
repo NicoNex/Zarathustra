@@ -18,7 +18,7 @@ use crate::plugin::{discover, Dirs, LastRun, Outcome, Output, Place, Plugin, ACT
 use crate::plugin_page::PluginPage;
 use crate::toc::{next_button, pager, prev_button, BACK_W, FOOTER_H};
 use crate::ui::{button, rounded_rect, segmented_labels, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// Action buttons: two per row.
 const BUTTON_H: i32 = 96;
@@ -255,7 +255,7 @@ impl Extensions {
 
     /// Plugins per page, filled by height.
     fn pages(&self) -> Vec<Vec<usize>> {
-        let room = H - TOPBAR_H - 30 - FOOTER_H;
+        let room = screen_h() - TOPBAR_H - 30 - FOOTER_H;
         let mut pages = vec![Vec::new()];
         let mut used = 0;
         for i in 0..self.plugins.len() {
@@ -275,7 +275,7 @@ impl Extensions {
     fn parts(&self) -> Vec<(Part, Rect)> {
         let pages = self.pages();
         let page = self.page.min(pages.len() - 1);
-        let w = W - 2 * PAD;
+        let w = screen_w() - 2 * PAD;
         let mut y = TOPBAR_H + 30;
         let mut out = Vec::new();
         for &i in &pages[page] {
@@ -408,7 +408,7 @@ impl Extensions {
                 .collect();
             draw_block(c, raster, sans, p, &block, self.runs[i].as_ref());
             let bottom = r.y + self.height(i) - SPACE / 2;
-            c.fill(Rect::new(PAD, bottom, W - 2 * PAD, 2), LINE);
+            c.fill(Rect::new(PAD, bottom, screen_w() - 2 * PAD, 2), LINE);
         }
         let pages = self.pages().len();
         pager(c, raster, sans, self.page.min(pages - 1), pages);

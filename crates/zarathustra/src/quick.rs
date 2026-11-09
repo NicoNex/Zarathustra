@@ -18,10 +18,12 @@ use crate::keyboard::{Keyboard, Typed};
 use crate::settings::Settings;
 use crate::ui::{rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
 use crate::wifi::{self, WifiScreen};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// The panel covers the top of the screen, full width.
-pub const PANEL: Rect = Rect { x: 0, y: 0, w: W, h: 1016 };
+pub fn panel() -> Rect {
+    Rect { x: 0, y: 0, w: screen_w(), h: 1016 }
+}
 /// A downward swipe that starts this close to the top edge opens the panel.
 pub const EDGE: i32 = 60;
 /// Minimum travel for a swipe; less is a tap.
@@ -35,14 +37,18 @@ const RADIUS: i32 = 28;
 const TILE_TOP: i32 = 176;
 const TILE_H: i32 = 196;
 const TILE_GAP: i32 = 28;
-const TILE_W: i32 = (W - 2 * PAD - 3 * TILE_GAP) / 4;
+fn tile_w() -> i32 {
+    (screen_w() - 2 * PAD - 3 * TILE_GAP) / 4
+}
 /// Slider rows: a label line, then the control (− button, track, + button).
 const ROW_H: i32 = 96;
 const BUTTON: i32 = 88;
 const TRACK_H: i32 = 24;
 const KNOB_R: i32 = 38;
 const TRACK_X0: i32 = PAD + BUTTON + 28;
-const TRACK_X1: i32 = W - PAD - BUTTON - 28;
+fn track_x1() -> i32 {
+    screen_w() - PAD - BUTTON - 28
+}
 const STEP: i16 = 5;
 
 /// Automatic warmth schedule: the evening ramp is centered on `DUSK`, the morning one on
@@ -70,13 +76,13 @@ impl Slider {
 
     /// The control row (buttons and track).
     fn row(self) -> Rect {
-        Rect::new(PAD, self.label_y() + 22, W - 2 * PAD, ROW_H)
+        Rect::new(PAD, self.label_y() + 22, screen_w() - 2 * PAD, ROW_H)
     }
 
     /// Everything the slider draws: label, value and control.
     fn rect(self) -> Rect {
         let top = self.label_y() - 44;
-        Rect::new(PAD - KNOB_R, top, W - 2 * (PAD - KNOB_R), self.row().bottom() - top)
+        Rect::new(PAD - KNOB_R, top, screen_w() - 2 * (PAD - KNOB_R), self.row().bottom() - top)
     }
 
     fn minus(self) -> Rect {
@@ -92,18 +98,18 @@ impl Slider {
     /// Where the track takes drags: between the buttons, the full row height.
     fn track(self) -> Rect {
         let r = self.row();
-        Rect::new(TRACK_X0 - KNOB_R / 2, r.y, TRACK_X1 - TRACK_X0 + KNOB_R, ROW_H)
+        Rect::new(TRACK_X0 - KNOB_R / 2, r.y, track_x1() - TRACK_X0 + KNOB_R, ROW_H)
     }
 }
 
 /// Knob center for `value` (0–100); the knob stays inside the track at both ends.
 fn knob_x(value: u8) -> i32 {
-    TRACK_X0 + KNOB_R + (value as i32 * (TRACK_X1 - TRACK_X0 - 2 * KNOB_R) + 50) / 100
+    TRACK_X0 + KNOB_R + (value as i32 * (track_x1() - TRACK_X0 - 2 * KNOB_R) + 50) / 100
 }
 
 /// The value a touch at `x` sets, clamped to 0–100.
 fn value_at(x: i32) -> u8 {
-    let span = TRACK_X1 - TRACK_X0 - 2 * KNOB_R;
+    let span = track_x1() - TRACK_X0 - 2 * KNOB_R;
     ((x - TRACK_X0 - KNOB_R) * 100 + span / 2).div_euclid(span).clamp(0, 100) as u8
 }
 
@@ -128,7 +134,7 @@ const TILES: [Tile; 8] =
 impl Tile {
     fn rect(self) -> Rect {
         let i = TILES.iter().position(|t| *t == self).unwrap_or(0) as i32;
-        Rect::new(PAD + (i % 4) * (TILE_W + TILE_GAP), TILE_TOP + (i / 4) * (TILE_H + TILE_GAP), TILE_W, TILE_H)
+        Rect::new(PAD + (i % 4) * (tile_w() + TILE_GAP), TILE_TOP + (i / 4) * (TILE_H + TILE_GAP), tile_w(), TILE_H)
     }
 
     fn label(self) -> [&'static str; 2] {
@@ -267,7 +273,7 @@ impl QuickPanel {
     }
 
     pub fn contains(x: i32, y: i32) -> bool {
-        PANEL.contains(x, y)
+        panel().contains(x, y)
     }
 
     /// Opens the panel; render it over the screen and refresh the returned rect.
@@ -275,7 +281,7 @@ impl QuickPanel {
         self.battery = dev.battery();
         self.read_wifi();
         self.open = true;
-        PANEL
+        panel()
     }
 
     /// Reads the radio state for the tile (two quick `lipc` calls on a Kindle).
@@ -351,7 +357,7 @@ impl QuickPanel {
     /// Takes in a finished Wi-Fi operation; the rect to refresh after [`QuickPanel::render`].
     pub fn poll(&mut self) -> Option<Rect> {
         let w = self.wifi_screen.as_mut().filter(|_| self.open)?;
-        w.poll().then_some(Rect::new(0, 0, W, H))
+        w.poll().then_some(Rect::new(0, 0, screen_w(), screen_h()))
     }
 
     /// Closes the panel; redraw the screen and refresh the returned rect.
@@ -360,7 +366,7 @@ impl QuickPanel {
         self.leave_wifi();
         self.down = None;
         self.drag = None;
-        PANEL
+        panel()
     }
 
     /// Applies the automatic warmth for the current time; call every few minutes.
@@ -396,7 +402,10 @@ impl QuickPanel {
                     let (dx, dy) = (t.x - x0, t.y - y0);
                     if !w.entering() && dy.abs() > SWIPE && dy.abs() > dx.abs() {
                         return match w.turn(dy < 0) {
-                            true => QuickResult::Redraw { rect: Rect::new(0, 0, W, H), waveform: Waveform::Text },
+                            true => QuickResult::Redraw {
+                                rect: Rect::new(0, 0, screen_w(), screen_h()),
+                                waveform: Waveform::Text,
+                            },
                             false => QuickResult::None,
                         };
                     }
@@ -460,7 +469,10 @@ impl QuickPanel {
                 // The "›" third opens the network list; the rest switches the radio.
                 if x >= r.right() - r.w / 3 {
                     self.wifi_screen = Some(WifiScreen::open(w.clone(), self.wifi.clone()));
-                    return QuickResult::Redraw { rect: Rect::new(0, 0, W, H), waveform: Waveform::Text };
+                    return QuickResult::Redraw {
+                        rect: Rect::new(0, 0, screen_w(), screen_h()),
+                        waveform: Waveform::Text,
+                    };
                 }
                 let on = !self.wifi.enabled;
                 if let Err(e) = w.set_enabled(on) {
@@ -585,9 +597,9 @@ impl QuickPanel {
             return w.render(c, ctx);
         }
         // The top corners and the side edges of the outline fall outside the screen.
-        let sheet = Rect::new(-3, -RADIUS, W + 6, PANEL.h + RADIUS);
+        let sheet = Rect::new(-3, -RADIUS, screen_w() + 6, panel().h + RADIUS);
         rounded_outline(c, sheet, RADIUS, 3, INK, PAPER);
-        rounded_rect(c, Rect::new(W / 2 - 40, PANEL.h - 28, 80, 8), 4, LINE);
+        rounded_rect(c, Rect::new(screen_w() / 2 - 40, panel().h - 28, 80, 8), 4, LINE);
 
         let Ctx { fonts, raster, .. } = ctx;
         let (Some(sans), Some(bold)) = (crate::sans(fonts, false), crate::sans(fonts, true)) else {
@@ -600,7 +612,7 @@ impl QuickPanel {
         let x = PAD as f32 + clock.draw(c, raster, &hhmm(minutes), PAD as f32, 124) + 28.0;
         Label { face: sans, size: 32.0, ink: INK_SOFT }.draw(c, raster, &date_text(crate::i18n::lang(), days), x, 124);
         if let Some(b) = self.battery {
-            let icon = Rect::new(W - PAD - 58, 98, 52, 28);
+            let icon = Rect::new(screen_w() - PAD - 58, 98, 52, 28);
             rounded_outline(c, icon, 7, 3, INK, PAPER);
             rounded_rect(c, Rect::new(icon.right() + 2, icon.y + 8, 5, 12), 2, INK);
             let fill = (icon.w - 12) * b.percent as i32 / 100;
@@ -699,7 +711,7 @@ impl QuickPanel {
         }
         let text = format!("{value}%");
         let num = Label { face: sans, size: 34.0, ink: if enabled { INK } else { INK_SOFT } };
-        num.draw(c, raster, &text, (W - PAD) as f32 - num.width(&text), y);
+        num.draw(c, raster, &text, (screen_w() - PAD) as f32 - num.width(&text), y);
 
         let (fill, knob) = if enabled { (INK, INK) } else { (150, 150) };
         // While dragging, the fast waveform shows only black and white: light grays would
@@ -719,7 +731,7 @@ impl QuickPanel {
         }
         let row = s.row();
         let cy = row.y + row.h / 2;
-        let track = Rect::new(TRACK_X0, cy - TRACK_H / 2, TRACK_X1 - TRACK_X0, TRACK_H);
+        let track = Rect::new(TRACK_X0, cy - TRACK_H / 2, track_x1() - TRACK_X0, TRACK_H);
         if mono {
             rounded_outline(c, track, TRACK_H / 2, 3, INK, PAPER);
         } else {
@@ -769,9 +781,9 @@ mod tests {
             assert_eq!(value_at(knob_x(v)), v);
         }
         assert_eq!(value_at(0), 0);
-        assert_eq!(value_at(W), 100);
+        assert_eq!(value_at(screen_w()), 100);
         assert_eq!(knob_x(0), TRACK_X0 + KNOB_R);
-        assert_eq!(knob_x(100), TRACK_X1 - KNOB_R);
+        assert_eq!(knob_x(100), track_x1() - KNOB_R);
     }
 
     #[test]
@@ -791,7 +803,11 @@ mod tests {
 
     impl Fake {
         fn new() -> Fake {
-            Fake { px: vec![0; (W * crate::H) as usize], light: Light { brightness: 30, warmth: Some(10) }, writes: 0 }
+            Fake {
+                px: vec![0; (screen_w() * crate::screen_h()) as usize],
+                light: Light { brightness: 30, warmth: Some(10) },
+                writes: 0,
+            }
         }
     }
 
@@ -803,10 +819,10 @@ mod tests {
             300
         }
         fn size(&self) -> (i32, i32) {
-            (W, crate::H)
+            (screen_w(), crate::screen_h())
         }
         fn canvas(&mut self) -> Canvas<'_> {
-            Canvas { width: W, height: crate::H, stride: W as usize, pixels: &mut self.px }
+            Canvas { width: screen_w(), height: crate::screen_h(), stride: screen_w() as usize, pixels: &mut self.px }
         }
         fn refresh(&mut self, _: &zarathustra_device::Refresh) -> std::io::Result<u32> {
             Ok(0)
@@ -850,7 +866,7 @@ mod tests {
         let mut dev = Fake::new();
         let mut q = QuickPanel::new(&dir, &mut dev);
         assert_eq!(q.settings().brightness, 30);
-        assert_eq!(q.open(&dev), PANEL);
+        assert_eq!(q.open(&dev), panel());
         let row = Slider::Brightness.row();
         let y = row.y + row.h / 2;
         let down = q.touch(&touch(Phase::Down, (knob_x(50), y)), &mut dev);
@@ -890,7 +906,7 @@ mod tests {
         assert_eq!(r, QuickResult::Redraw { rect: both, waveform: Waveform::Text });
         assert_eq!(tap(&mut q, &mut dev, Slider::Warmth.plus()), QuickResult::None);
         assert_eq!(Settings::load(&dir), *q.settings());
-        assert_eq!(tap(&mut q, &mut dev, Rect::new(0, PANEL.bottom() + 100, 10, 10)), QuickResult::Close);
+        assert_eq!(tap(&mut q, &mut dev, Rect::new(0, panel().bottom() + 100, 10, 10)), QuickResult::Close);
         assert!(!q.is_open());
         std::fs::remove_dir_all(dir).ok();
     }
@@ -922,7 +938,8 @@ mod tests {
         let wifi = Tile::Wifi.rect();
         tap(&mut q, (wifi.x + 20, wifi.y + 20));
         assert!(!q.wifi.enabled);
-        let full = QuickResult::Redraw { rect: Rect::new(0, 0, W, crate::H), waveform: Waveform::Text };
+        let full =
+            QuickResult::Redraw { rect: Rect::new(0, 0, screen_w(), crate::screen_h()), waveform: Waveform::Text };
         assert_eq!(tap(&mut q, (wifi.right() - 20, wifi.y + 20)), full);
         assert!(q.wifi_screen.is_some());
         assert_eq!(tap(&mut q, (100, 60)), QuickResult::Repaint { flash: false }, "back to the panel");
@@ -955,7 +972,7 @@ mod tests {
         q.open(&dev);
         q.touch(&touch(Phase::Down, (600, 120)), &mut dev);
         assert_eq!(q.touch(&touch(Phase::Up, (600, 60)), &mut dev), QuickResult::None, "too short");
-        q.touch(&touch(Phase::Down, (600, PANEL.h - 20)), &mut dev);
+        q.touch(&touch(Phase::Down, (600, panel().h - 20)), &mut dev);
         assert_eq!(q.touch(&touch(Phase::Up, (600, 400)), &mut dev), QuickResult::Close);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -970,27 +987,29 @@ mod tests {
         let mut dev = Fake::new();
         let mut q = QuickPanel::new(&dir, &mut dev);
         q.open(&dev);
-        let mut px = vec![200u8; (W * crate::H) as usize];
-        let mut c = Canvas { width: W, height: crate::H, stride: W as usize, pixels: &mut px };
+        let mut px = vec![200u8; (screen_w() * crate::screen_h()) as usize];
+        let mut c =
+            Canvas { width: screen_w(), height: crate::screen_h(), stride: screen_w() as usize, pixels: &mut px };
         crate::home::Home::scan(&[], &ctx).render(&mut c, &mut ctx);
         q.render(&mut c, &mut ctx);
-        let at = |x: i32, y: i32| px[(y * W + x) as usize];
-        assert_eq!(at(W / 2, 20), PAPER, "panel background");
-        assert_eq!(at(W / 2, PANEL.h - 2), INK, "bottom edge");
-        assert_eq!(at(1, PANEL.h - 2), PAPER, "rounded corner shows the screen below");
+        let at = |x: i32, y: i32| px[(y * screen_w() + x) as usize];
+        assert_eq!(at(screen_w() / 2, 20), PAPER, "panel background");
+        assert_eq!(at(screen_w() / 2, panel().h - 2), INK, "bottom edge");
+        assert_eq!(at(1, panel().h - 2), PAPER, "rounded corner shows the screen below");
         let tile = Tile::Animation.rect();
         assert_eq!(at(tile.x + 5, tile.y + tile.h / 2), INK, "the animation tile is on");
         // Set ZARATHUSTRA_PGM_DIR to look at the design.
         let save = |name: &str, px: &[u8]| {
             if let Some(out) = std::env::var_os("ZARATHUSTRA_PGM_DIR") {
-                let mut pgm = format!("P5\n{W} {}\n255\n", crate::H).into_bytes();
+                let mut pgm = format!("P5\n{} {}\n255\n", crate::screen_w(), crate::screen_h()).into_bytes();
                 pgm.extend_from_slice(px);
                 std::fs::write(Path::new(&out).join(name), pgm).unwrap();
             }
         };
         save("quick.pgm", &px);
         q.settings.auto_warmth = true;
-        let mut c = Canvas { width: W, height: crate::H, stride: W as usize, pixels: &mut px };
+        let mut c =
+            Canvas { width: screen_w(), height: crate::screen_h(), stride: screen_w() as usize, pixels: &mut px };
         q.render(&mut c, &mut ctx);
         save("quick-auto.pgm", &px);
         std::fs::remove_dir_all(dir).ok();

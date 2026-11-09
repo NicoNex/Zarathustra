@@ -33,9 +33,15 @@ const ABS_MT_POSITION_Y: u16 = 0x36;
 const ABS_MT_TRACKING_ID: u16 = 0x39;
 
 impl Emulator {
-    /// A Paperwhite-sized screen shown at 50%.
+    /// A Paperwhite-sized screen shown at 50%, or the size in `ZARATHUSTRA_SIZE` (`1072x1448`
+    /// for a Kobo Clara).
     pub fn new() -> io::Result<Self> {
-        Self::with_size(1236, 1648, 2)
+        let size = std::env::var("ZARATHUSTRA_SIZE").ok().and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        });
+        let (w, h) = size.filter(|&(w, h)| w > 0 && h > 0).unwrap_or((1236, 1648));
+        Self::with_size(w, h, 2)
     }
 
     pub fn with_size(width: i32, height: i32, scale: i32) -> io::Result<Self> {

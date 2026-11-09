@@ -11,12 +11,14 @@ use zarathustra_engine::style::css::TextAlign;
 
 use crate::i18n::t;
 use crate::ui::{button, rounded_rect, segmented, segments, Label, INK, INK_SOFT, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 pub const TOPBAR_H: i32 = 150;
 pub const PAD: i32 = 64;
 /// The search button, at the right end of the top bar.
-const SEARCH: Rect = Rect { x: W - 180, y: 0, w: 180, h: TOPBAR_H };
+fn search() -> Rect {
+    Rect { x: screen_w() - 180, y: 0, w: 180, h: TOPBAR_H }
+}
 /// Touch targets: 96 px ≈ 8 mm at 300 dpi.
 pub const ROW_H: i32 = 96;
 const ROW_GAP: i32 = 20;
@@ -134,7 +136,7 @@ fn families(ctx: &Ctx) -> Vec<Option<String>> {
 /// `N` controls side by side across the sheet at height `y`.
 fn cols<const N: usize>(y: i32) -> [Rect; N] {
     let n = N as i32;
-    let cw = (W - 2 * PAD - (n - 1) * COL_GAP) / n;
+    let cw = (screen_w() - 2 * PAD - (n - 1) * COL_GAP) / n;
     std::array::from_fn(|i| Rect::new(PAD + i as i32 * (cw + COL_GAP), y, cw, ROW_H))
 }
 
@@ -165,13 +167,13 @@ impl Layout {
     fn new(typography: bool) -> Layout {
         let rows = if typography { ROW_GAP + SCRUB_H + ROW_GAP + 3 * ROW_H + 2 * ROW_GAP } else { 0 };
         let height = SHEET_PAD_TOP + CONTENTS_H + rows + SHEET_PAD_BOTTOM;
-        let top = H - height;
-        let w = W - 2 * PAD;
+        let top = screen_h() - height;
+        let w = screen_w() - 2 * PAD;
         let mut y = top + SHEET_PAD_TOP;
         let contents = Rect::new(PAD, y, w, CONTENTS_H);
         y += CONTENTS_H + ROW_GAP;
         // Wider than the rows by the knob's radius, so the track lines up with them.
-        let scrubber = Rect::new(PAD - 22, y, W - 2 * (PAD - 22), SCRUB_H);
+        let scrubber = Rect::new(PAD - 22, y, screen_w() - 2 * (PAD - 22), SCRUB_H);
         y += SCRUB_H + ROW_GAP;
         let [size, weight] = cols(y);
         y += ROW_H + ROW_GAP;
@@ -205,7 +207,7 @@ pub fn controls(typography: bool) -> Vec<(Control, Rect)> {
     let l = Layout::new(typography);
     let mut out = vec![
         (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
-        (Control::Search, SEARCH),
+        (Control::Search, search()),
         (Control::Contents, l.contents),
     ];
     if !typography {
@@ -249,12 +251,12 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: Option<&Typography>, title: &
     };
 
     topbar(c, raster, sans, serif_bold, t().back_library, title);
-    let icon = Rect::new(SEARCH.x + (SEARCH.w - 52) / 2, SEARCH.y + (SEARCH.h - 52) / 2 + 4, 52, 52);
+    let icon = Rect::new(search().x + (search().w - 52) / 2, search().y + (search().h - 52) / 2 + 4, 52, 52);
     crate::search::icon(c, icon, INK, PAPER);
 
     // Sheet: rounded top corners over a black edge, like the quick panel.
-    rounded_rect(c, Rect::new(0, l.top - 3, W, H - l.top + 40), 32, INK);
-    rounded_rect(c, Rect::new(0, l.top, W, H - l.top + 40), 30, PAPER);
+    rounded_rect(c, Rect::new(0, l.top - 3, screen_w(), screen_h() - l.top + 40), 32, INK);
+    rounded_rect(c, Rect::new(0, l.top, screen_w(), screen_h() - l.top + 40), 30, PAPER);
 
     // Contents: a full-width row naming the current chapter.
     let r = l.contents;
@@ -368,13 +370,13 @@ fn layout_icon(c: &mut Canvas, kind: Icon, i: usize, r: Rect, ink: u8) {
 
 /// The menu's top bar: a back link on the left and a centred title, over a black rule.
 pub fn topbar(c: &mut Canvas, raster: &mut Rasterizer, sans: &Face, serif_bold: &Face, back: &str, title: &str) {
-    c.fill(Rect::new(0, 0, W, TOPBAR_H), PAPER);
-    c.fill(Rect::new(0, TOPBAR_H - 3, W, 3), INK);
+    c.fill(Rect::new(0, 0, screen_w(), TOPBAR_H), PAPER);
+    c.fill(Rect::new(0, TOPBAR_H - 3, screen_w(), 3), INK);
     let b = Label { face: sans, size: 32.0, ink: INK };
     b.draw(c, raster, back, PAD as f32, 92);
     let t = Label { face: serif_bold, size: 34.0, ink: INK };
-    let text = t.fit(title, (W - 2 * 380) as f32);
-    t.draw_centred(c, raster, &text, W as f32 / 2.0, 92);
+    let text = t.fit(title, (screen_w() - 2 * 380) as f32);
+    t.draw_centred(c, raster, &text, screen_w() as f32 / 2.0, 92);
 }
 
 fn title_case(s: &str) -> String {

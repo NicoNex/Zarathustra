@@ -24,7 +24,7 @@ use crate::reader::Position;
 use crate::stats::{self, StatsScreen};
 use crate::transfer::{self, Transfer};
 use crate::ui::{clip_corners, rounded_outline, rounded_rect, Label, FILL, INK, INK_SOFT, LINE, PAPER};
-use crate::{Action, Ctx, Landing, H, W};
+use crate::{screen_h, screen_w, Action, Ctx, Landing};
 
 const PAD: i32 = 72;
 pub const HEADER: i32 = 210;
@@ -37,27 +37,57 @@ const ENDS: i32 = 200;
 /// Grid: three columns of covers at the books' usual 2:3 ratio, title and author below.
 const COLS: i32 = 3;
 /// Cell height sized so pages without the "continue reading" card hold two rows.
-const CELL_H: i32 = (H - FOOTER - HEADER - CHIPS_H - 36) / 2;
-const COVER_H: i32 = CELL_H - 150;
-const CELL_W: i32 = COVER_H * 2 / 3;
-const GUTTER: i32 = (W - 2 * PAD - COLS * CELL_W) / (COLS - 1);
-const _: () = assert!(GUTTER >= 48, "covers keep their breathing room");
+fn cell_h() -> i32 {
+    (screen_h() - FOOTER - HEADER - CHIPS_H - 36) / 2
+}
+fn cover_h() -> i32 {
+    cell_h() - 150
+}
+fn cell_w() -> i32 {
+    cover_h() * 2 / 3
+}
+fn gutter() -> i32 {
+    (screen_w() - 2 * PAD - COLS * cell_w()) / (COLS - 1)
+}
 /// List: one book per row.
 const ROW_H: i32 = 190;
 const ROW_COVER: (i32, i32) = (100, 150);
 const RADIUS: i32 = 10;
-const POWER: Rect = Rect { x: W - PAD - 72, y: 82, w: 72, h: 72 };
-const VIEW: Rect = Rect { x: POWER.x - 32 - 192, y: 82, w: 192, h: 72 };
+/// Space between the header's buttons: 32 on the Paperwhite, tighter on narrower screens so
+/// the title keeps its room.
+fn button_gap() -> i32 {
+    ((screen_w() - 1000) / 7).clamp(12, 32)
+}
+fn power() -> Rect {
+    Rect { x: screen_w() - PAD - 72, y: 82, w: 72, h: 72 }
+}
+fn view() -> Rect {
+    Rect { x: power().x - button_gap() - 192, y: 82, w: 192, h: 72 }
+}
 /// The power menu, hanging under its button.
 const POWER_ROW_H: i32 = 100;
-const POWER_MENU: Rect = Rect { x: W - PAD - 440, y: POWER.y + POWER.h + 16, w: 440, h: 4 * POWER_ROW_H + 16 };
-const STATS: Rect = Rect { x: VIEW.x - 32 - 72, y: 82, w: 72, h: 72 };
-const SEARCH: Rect = Rect { x: STATS.x - 32 - 72, y: 82, w: 72, h: 72 };
-const GEAR: Rect = Rect { x: SEARCH.x - 32 - 72, y: 82, w: 72, h: 72 };
-const TRANSFER: Rect = Rect { x: GEAR.x - 32 - 72, y: 82, w: 72, h: 72 };
+fn power_menu_rect() -> Rect {
+    Rect { x: screen_w() - PAD - 440, y: power().y + power().h + 16, w: 440, h: 4 * POWER_ROW_H + 16 }
+}
+fn stats() -> Rect {
+    Rect { x: view().x - button_gap() - 72, y: 82, w: 72, h: 72 }
+}
+fn search() -> Rect {
+    Rect { x: stats().x - button_gap() - 72, y: 82, w: 72, h: 72 }
+}
+fn gear() -> Rect {
+    Rect { x: search().x - button_gap() - 72, y: 82, w: 72, h: 72 }
+}
+fn transfer() -> Rect {
+    Rect { x: gear().x - button_gap() - 72, y: 82, w: 72, h: 72 }
+}
 /// The search field, over the header's title and buttons while searching.
-const FIELD: Rect = Rect { x: PAD, y: 82, w: W - 2 * PAD, h: 72 };
-const CLEAR: Rect = Rect { x: FIELD.x + FIELD.w - 96, y: FIELD.y, w: 96, h: FIELD.h };
+fn field() -> Rect {
+    Rect { x: PAD, y: 82, w: screen_w() - 2 * PAD, h: 72 }
+}
+fn clear() -> Rect {
+    Rect { x: field().x + field().w - 96, y: field().y, w: 96, h: field().h }
+}
 /// Progress from which a book counts as read.
 const FINISHED: f32 = 0.99;
 
@@ -85,7 +115,7 @@ struct Entry {
 
 impl Entry {
     fn cover(&self) -> Option<&GrayImage> {
-        self.cover.get_or_init(|| cover(self.book.cover_thumb.as_deref(), (CELL_W, COVER_H))).as_ref()
+        self.cover.get_or_init(|| cover(self.book.cover_thumb.as_deref(), (cell_w(), cover_h()))).as_ref()
     }
 
     fn small(&self) -> Option<&GrayImage> {
@@ -380,7 +410,7 @@ impl Home {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let size = if grid { (CELL_W, COVER_H) } else { ROW_COVER };
+        let size = if grid { (cell_w(), cover_h()) } else { ROW_COVER };
         std::thread::spawn(move || {
             // SAFETY: setpriority on the calling thread (who = 0 is this thread on Linux); a
             // nicer thread leaves the CPU to page turns and taps.
@@ -447,10 +477,10 @@ impl Home {
 
     /// Books that fit on `page`.
     fn capacity(&self, page: usize) -> usize {
-        let bottom = if self.keyboard.is_some() { H - keyboard::KEYBOARD_H } else { H - FOOTER };
+        let bottom = if self.keyboard.is_some() { screen_h() - keyboard::KEYBOARD_H } else { screen_h() - FOOTER };
         let height = bottom - self.items_top(page);
         if self.grid {
-            ((height / CELL_H).max(1) * COLS) as usize
+            ((height / cell_h()).max(1) * COLS) as usize
         } else {
             (height / ROW_H).max(1) as usize
         }
@@ -478,9 +508,9 @@ impl Home {
             .map(|(n, &i)| {
                 let n = n as i32;
                 let r = if self.grid {
-                    Rect::new(PAD + (n % COLS) * (CELL_W + GUTTER), top + (n / COLS) * CELL_H, CELL_W, CELL_H)
+                    Rect::new(PAD + (n % COLS) * (cell_w() + gutter()), top + (n / COLS) * cell_h(), cell_w(), cell_h())
                 } else {
-                    Rect::new(PAD, top + n * ROW_H, W - 2 * PAD, ROW_H)
+                    Rect::new(PAD, top + n * ROW_H, screen_w() - 2 * PAD, ROW_H)
                 };
                 (i, r)
             })
@@ -536,33 +566,39 @@ impl Home {
 
         match &self.query {
             Some(q) => {
-                rounded_outline(c, FIELD, FIELD.h / 2, 3, INK, PAPER);
-                crate::search::icon(c, Rect::new(FIELD.x + 28, FIELD.y + 20, 32, 32), INK, PAPER);
-                let x = (FIELD.x + 84) as f32;
-                let width = (CLEAR.x - FIELD.x - 84) as f32;
+                rounded_outline(c, field(), field().h / 2, 3, INK, PAPER);
+                crate::search::icon(c, Rect::new(field().x + 28, field().y + 20, 32, 32), INK, PAPER);
+                let x = (field().x + 84) as f32;
+                let width = (clear().x - field().x - 84) as f32;
                 if q.is_empty() {
                     Label { face: sans, size: 30.0, ink: INK_SOFT }.draw(
                         c,
                         raster,
                         t().search_library,
                         x,
-                        FIELD.y + 47,
+                        field().y + 47,
                     );
                 } else {
                     // The end of a long query stays in view.
                     let text = Label { face: sans, size: 32.0, ink: INK };
-                    text.draw(c, raster, text.fit_tail(q, width), x, FIELD.y + 48);
+                    text.draw(c, raster, text.fit_tail(q, width), x, field().y + 48);
                 }
                 Label { face: sans, size: 40.0, ink: INK }.draw_centred(
                     c,
                     raster,
                     "×",
-                    (CLEAR.x + CLEAR.w / 2) as f32,
-                    CLEAR.y + 50,
+                    (clear().x + clear().w / 2) as f32,
+                    clear().y + 50,
                 );
             }
             None => {
-                let title = Label { face: serif_bold, size: 66.0, ink: INK };
+                // Shrunk when the buttons leave it less room (narrow screens).
+                let room = (transfer().x - PAD - 24 - if self.wifi { 74 } else { 0 }) as f32;
+                let mut title = Label { face: serif_bold, size: 66.0, ink: INK };
+                let width = title.width(t().library);
+                if width > room {
+                    title.size *= room / width;
+                }
                 title.draw(c, raster, t().library, PAD as f32, 150);
                 if self.wifi {
                     wifi_mark(c, (PAD + title.width(t().library) as i32 + 44, 140));
@@ -571,8 +607,8 @@ impl Home {
                 stats_button(c);
                 gear_button(c);
                 transfer_button(c);
-                rounded_outline(c, SEARCH, SEARCH.h / 2, 2, LINE, PAPER);
-                crate::search::icon(c, Rect::new(SEARCH.x + 22, SEARCH.y + 22, 28, 28), INK, PAPER);
+                rounded_outline(c, search(), search().h / 2, 2, LINE, PAPER);
+                crate::search::icon(c, Rect::new(search().x + 22, search().y + 22, 28, 28), INK, PAPER);
                 power_button(c);
             }
         }
@@ -580,7 +616,7 @@ impl Home {
         if let (true, Some((i, big))) = (self.card(self.page), &self.current) {
             self.continue_card(c, raster, &faces, &self.books[*i], big.as_ref());
             // Under the book being read, before the library: a quote or the reading figures.
-            self.render_band(c, raster, &faces, Rect::new(PAD, HEADER + CARD_H + 24, W - 2 * PAD, BAND_H));
+            self.render_band(c, raster, &faces, Rect::new(PAD, HEADER + CARD_H + 24, screen_w() - 2 * PAD, BAND_H));
         }
 
         let chip = Label { face: sans, size: 28.0, ink: INK };
@@ -614,11 +650,11 @@ impl Home {
             kb.render(c, ctx);
         } else if self.pages() > 1 {
             let label = format!("‹   {} / {}   ›", self.page + 1, self.pages());
-            let y = H - FOOTER / 2 + 10;
-            soft.draw_centred(c, raster, &label, W as f32 / 2.0, y);
+            let y = screen_h() - FOOTER / 2 + 10;
+            soft.draw_centred(c, raster, &label, screen_w() as f32 / 2.0, y);
             // First and last page, out beside the arrows.
-            soft.draw_centred(c, raster, "«", (W / 2 - ENDS) as f32, y);
-            soft.draw_centred(c, raster, "»", (W / 2 + ENDS) as f32, y);
+            soft.draw_centred(c, raster, "«", (screen_w() / 2 - ENDS) as f32, y);
+            soft.draw_centred(c, raster, "»", (screen_w() / 2 + ENDS) as f32, y);
         }
     }
 
@@ -658,9 +694,9 @@ impl Home {
 
     /// Two-segment control: grid (four squares) and list (three bars) icons.
     fn view_toggle(&self, c: &mut Canvas) {
-        rounded_outline(c, VIEW, VIEW.h / 2, 2, LINE, PAPER);
-        let half = VIEW.w / 2;
-        let seg = |n: i32| Rect::new(VIEW.x + n * half, VIEW.y, half, VIEW.h);
+        rounded_outline(c, view(), view().h / 2, 2, LINE, PAPER);
+        let half = view().w / 2;
+        let seg = |n: i32| Rect::new(view().x + n * half, view().y, half, view().h);
         let on = seg(if self.grid { 0 } else { 1 });
         rounded_rect(c, Rect::new(on.x + 4, on.y + 4, on.w - 8, on.h - 8), (on.h - 8) / 2, INK);
         let ink = |active: bool| if active { PAPER } else { INK };
@@ -676,7 +712,7 @@ impl Home {
     }
 
     fn continue_card(&self, c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, big: Option<&GrayImage>) {
-        let card = Rect::new(PAD, HEADER, W - 2 * PAD, CARD_H);
+        let card = Rect::new(PAD, HEADER, screen_w() - 2 * PAD, CARD_H);
         rounded_rect(c, card, 28, FILL);
         let r = Rect::new(card.x + 36, card.y + 36, CARD_COVER.0, CARD_COVER.1);
         draw_cover(c, raster, f, r, big, book, FILL);
@@ -715,7 +751,7 @@ impl Home {
     fn sort_chip(&self, label: &Label) -> (String, Rect) {
         let text = format!("↕  {}", t().sorts[SORTS.iter().position(|&s| s == self.sort).unwrap_or(0)]);
         let w = label.width(&text) as i32 + 56;
-        (text, Rect::new(W - PAD - w, self.chips_top(self.page), w, CHIPS_H))
+        (text, Rect::new(screen_w() - PAD - w, self.chips_top(self.page), w, CHIPS_H))
     }
 
     /// The book under `(x, y)`: a cover, a list row or the "continue reading" card.
@@ -728,14 +764,14 @@ impl Home {
     /// The book at `(x, y)` and its cover (grid) or row (list, the continue-reading card).
     fn book_rect_at(&self, (x, y): (i32, i32)) -> Option<(usize, Rect)> {
         if let (true, Some((i, _))) = (self.card(self.page), &self.current) {
-            let card = Rect::new(PAD, HEADER, W - 2 * PAD, CARD_H);
+            let card = Rect::new(PAD, HEADER, screen_w() - 2 * PAD, CARD_H);
             if card.contains(x, y) {
                 return Some((*i, card));
             }
         }
         let (i, r) = self.items().into_iter().find(|(_, r)| r.contains(x, y))?;
         // In the grid, the cover alone: the title under it stays readable beside the card.
-        Some((i, if self.grid { Rect::new(r.x, r.y, r.w, COVER_H) } else { r }))
+        Some((i, if self.grid { Rect::new(r.x, r.y, r.w, cover_h()) } else { r }))
     }
 
     /// A long press on a book: its menu.
@@ -847,8 +883,8 @@ impl Home {
             Overlay::Power => {
                 self.overlay = None;
                 let (x0, y0) = start;
-                let row = (y0 - POWER_MENU.y - 8).div_euclid(POWER_ROW_H);
-                match (POWER_MENU.contains(x0, y0), row) {
+                let row = (y0 - power_menu_rect().y - 8).div_euclid(POWER_ROW_H);
+                match (power_menu_rect().contains(x0, y0), row) {
                     (true, 0) => Action::Sleep,
                     (true, 1) => Action::Quit,
                     (true, 2) => Action::Reboot,
@@ -995,13 +1031,13 @@ impl Home {
     /// rest of the screen (chips, books, pages), handled as usual.
     fn search_tap(&mut self, (x0, y0): (i32, i32)) -> Option<Action> {
         let q = self.query.as_mut()?;
-        if CLEAR.contains(x0, y0) {
+        if clear().contains(x0, y0) {
             self.query = None;
             self.keyboard = None;
             self.set_filter(self.filter);
             return Some(Action::Redraw { turn: None });
         }
-        if FIELD.contains(x0, y0) {
+        if field().contains(x0, y0) {
             return Some(match self.keyboard {
                 Some(_) => Action::None,
                 None => {
@@ -1028,7 +1064,7 @@ impl Home {
         }
         self.set_filter(self.filter);
         // Results and field change above the keyboard: no flash while typing.
-        Some(Action::Typed(typed.and_text(Rect::new(0, 0, W, H - keyboard::KEYBOARD_H))))
+        Some(Action::Typed(typed.and_text(Rect::new(0, 0, screen_w(), screen_h() - keyboard::KEYBOARD_H))))
     }
 
     /// Handles a completed touch from `(x0, y0)` to `(x, y)`.
@@ -1057,37 +1093,37 @@ impl Home {
             if let Some(a) = self.search_tap((x0, y0)) {
                 return a;
             }
-        } else if inside(SEARCH) {
+        } else if inside(search()) {
             self.query = Some(String::new());
             self.keyboard = Some(Keyboard::default());
             self.set_filter(self.filter);
             return Action::Redraw { turn: None };
-        } else if inside(TRANSFER) {
+        } else if inside(transfer()) {
             self.open_transfer();
             return Action::Redraw { turn: None };
-        } else if inside(GEAR) {
+        } else if inside(gear()) {
             self.overlay = Some(Overlay::Prefs(Prefs::new(crate::settings::Settings::load(&ctx.state_dir), ctx)));
             return Action::Redraw { turn: None };
-        } else if inside(STATS) {
+        } else if inside(stats()) {
             let finished = self.books.iter().filter(|b| b.status() == Filter::Finished).count();
             self.overlay = Some(Overlay::Stats(StatsScreen::new(&ctx.state_dir, finished)));
             return Action::Redraw { turn: None };
         }
-        if inside(POWER) && self.query.is_none() {
+        if inside(power()) && self.query.is_none() {
             self.overlay = Some(Overlay::Power);
             return Action::Redraw { turn: None };
         }
-        if inside(VIEW) && self.query.is_none() {
-            let grid = x0 < VIEW.x + VIEW.w / 2;
+        if inside(view()) && self.query.is_none() {
+            let grid = x0 < view().x + view().w / 2;
             if grid == self.grid {
                 return Action::None;
             }
             self.set_grid(grid);
             return Action::Redraw { turn: None };
         }
-        if y0 > H - FOOTER {
+        if y0 > screen_h() - FOOTER {
             // « and » (outside the middle) jump to the first and last page; ‹ and › turn one.
-            let end = match x0 - W / 2 {
+            let end = match x0 - screen_w() / 2 {
                 dx if dx < -ENDS / 2 - 50 => Some(0),
                 dx if dx > ENDS / 2 + 50 => Some(pages - 1),
                 _ => None,
@@ -1099,7 +1135,7 @@ impl Home {
                     Action::Redraw { turn: Some(forward) }
                 }
                 Some(_) => Action::None,
-                None => turn(&mut self.page, x0 > W / 2),
+                None => turn(&mut self.page, x0 > screen_w() / 2),
             };
         }
         if let Some(sans) = ctx.sans(false) {
@@ -1148,8 +1184,8 @@ fn shape(c: &mut Canvas, (cx, cy): (i32, i32), w: i32, h: i32, inside: impl Fn(f
 /// The settings button: a cog (eight square teeth round a ring, a hole in the middle) in a
 /// ring.
 fn gear_button(c: &mut Canvas) {
-    rounded_outline(c, GEAR, GEAR.h / 2, 2, LINE, PAPER);
-    let (cx, cy) = ((GEAR.x + GEAR.w / 2) as f32, (GEAR.y + GEAR.h / 2) as f32);
+    rounded_outline(c, gear(), gear().h / 2, 2, LINE, PAPER);
+    let (cx, cy) = ((gear().x + gear().w / 2) as f32, (gear().y + gear().h / 2) as f32);
     let (body, tip, hole, teeth) = (12.5f32, 18.0f32, 5.5f32, 8.0f32);
     let inside = |x: f32, y: f32| {
         let (r, a) = (x.hypot(y), y.atan2(x));
@@ -1165,8 +1201,8 @@ fn gear_button(c: &mut Canvas) {
 
 /// The power button: the standby symbol, a ring open at the top crossed by a bar.
 fn power_button(c: &mut Canvas) {
-    rounded_outline(c, POWER, POWER.h / 2, 2, LINE, PAPER);
-    let (cx, cy) = ((POWER.x + POWER.w / 2) as f32, (POWER.y + POWER.h / 2 + 2) as f32);
+    rounded_outline(c, power(), power().h / 2, 2, LINE, PAPER);
+    let (cx, cy) = ((power().x + power().w / 2) as f32, (power().y + power().h / 2 + 2) as f32);
     let inside = |x: f32, y: f32| {
         let r = x.hypot(y);
         // The ring, with a gap of ±40° round the top for the bar.
@@ -1179,13 +1215,18 @@ fn power_button(c: &mut Canvas) {
 
 /// The power menu: four rows under the button, each one tap.
 fn power_menu(c: &mut Canvas, ctx: &mut Ctx) {
-    rounded_outline(c, POWER_MENU, 24, 4, INK, PAPER);
+    rounded_outline(c, power_menu_rect(), 24, 4, INK, PAPER);
     let Ctx { fonts, raster, .. } = ctx;
     let Some(serif) = crate::serif(fonts, false) else { return };
     let label = Label { face: serif, size: 34.0, ink: INK };
     let s = t();
     for (i, text) in [s.standby, s.exit, s.restart, s.power_off].into_iter().enumerate() {
-        let r = Rect::new(POWER_MENU.x, POWER_MENU.y + 8 + i as i32 * POWER_ROW_H, POWER_MENU.w, POWER_ROW_H);
+        let r = Rect::new(
+            power_menu_rect().x,
+            power_menu_rect().y + 8 + i as i32 * POWER_ROW_H,
+            power_menu_rect().w,
+            POWER_ROW_H,
+        );
         if i > 0 {
             c.fill(Rect::new(r.x + 32, r.y, r.w - 64, 2), LINE);
         }
@@ -1195,8 +1236,8 @@ fn power_menu(c: &mut Canvas, ctx: &mut Ctx) {
 
 /// The send-books button: an arrow down into a tray.
 fn transfer_button(c: &mut Canvas) {
-    rounded_outline(c, TRANSFER, TRANSFER.h / 2, 2, LINE, PAPER);
-    let (cx, cy) = (TRANSFER.x + TRANSFER.w / 2, TRANSFER.y + TRANSFER.h / 2);
+    rounded_outline(c, transfer(), transfer().h / 2, 2, LINE, PAPER);
+    let (cx, cy) = (transfer().x + transfer().w / 2, transfer().y + transfer().h / 2);
     c.fill(Rect::new(cx - 3, cy - 18, 6, 20), INK);
     for n in 0..9 {
         c.fill(Rect::new(cx - 11 + n, cy - 2 + n, 22 - 2 * n, 1), INK);
@@ -1218,8 +1259,8 @@ fn wifi_mark(c: &mut Canvas, (cx, cy): (i32, i32)) {
 
 /// The statistics button: three rising bars in a ring.
 fn stats_button(c: &mut Canvas) {
-    rounded_outline(c, STATS, STATS.h / 2, 2, LINE, PAPER);
-    let (x, base) = (STATS.x + STATS.w / 2 - 17, STATS.y + STATS.h / 2 + 14);
+    rounded_outline(c, stats(), stats().h / 2, 2, LINE, PAPER);
+    let (x, base) = (stats().x + stats().w / 2 - 17, stats().y + stats().h / 2 + 14);
     for (n, h) in [14, 22, 30].into_iter().enumerate() {
         rounded_rect(c, Rect::new(x + n as i32 * 12, base - h, 8, h), 2, INK);
     }
@@ -1234,7 +1275,7 @@ struct Faces<'a> {
 
 /// A grid cell: the cover with a soft offset shadow, then title (two lines) and author.
 fn grid_cell(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r: Rect) {
-    let cover = Rect::new(r.x, r.y, CELL_W, COVER_H);
+    let cover = Rect::new(r.x, r.y, cell_w(), cover_h());
     let drawn = draw_cover(c, raster, f, cover, book.cover(), book, PAPER);
     let mut y = drawn.bottom() + 20;
     match (book.status(), book.progress) {
@@ -1254,13 +1295,13 @@ fn grid_cell(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r
         _ => {}
     }
     let title = Label { face: f.serif, size: 31.0, ink: INK };
-    let lines = title.wrap(&book.book.title, CELL_W as f32, 2);
+    let lines = title.wrap(&book.book.title, cell_w() as f32, 2);
     for (n, line) in lines.iter().enumerate() {
         title.draw(c, raster, line, r.x as f32, y + 30 + n as i32 * 38);
     }
     let author = Label { face: f.sans, size: 24.0, ink: INK_SOFT };
     let ay = y + 30 + lines.len() as i32 * 38 + 4;
-    author.draw(c, raster, &author.fit(&book.author(), CELL_W as f32), r.x as f32, ay);
+    author.draw(c, raster, &author.fit(&book.author(), cell_w() as f32), r.x as f32, ay);
 }
 
 /// A list row: cover, title, author, status on the right.
@@ -1351,15 +1392,15 @@ mod tests {
         let mut home = Home::scan(std::slice::from_ref(&books), &ctx);
         let last = home.pages() - 1;
         assert!(last >= 2, "{} pages", home.pages());
-        let y = H - FOOTER / 2;
+        let y = screen_h() - FOOTER / 2;
         let tap = |home: &mut Home, x: i32| home.tap((x, y), (x, y), &ctx);
-        assert!(matches!(tap(&mut home, W / 2 + ENDS), Action::Redraw { turn: Some(true) }));
+        assert!(matches!(tap(&mut home, screen_w() / 2 + ENDS), Action::Redraw { turn: Some(true) }));
         assert_eq!(home.page, last);
-        tap(&mut home, W / 2 - 100);
+        tap(&mut home, screen_w() / 2 - 100);
         assert_eq!(home.page, last - 1, "‹ turns one");
-        tap(&mut home, W / 2 - ENDS);
+        tap(&mut home, screen_w() / 2 - ENDS);
         assert_eq!(home.page, 0);
-        assert!(matches!(tap(&mut home, W / 2 - ENDS), Action::None), "already there");
+        assert!(matches!(tap(&mut home, screen_w() / 2 - ENDS), Action::None), "already there");
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -13,7 +13,7 @@ use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::settings::Settings;
 use crate::toc::BACK_W;
 use crate::ui::{segments, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Action, Ctx, H, W};
+use crate::{screen_h, screen_w, Action, Ctx};
 
 /// A row: its name, then the choices under it.
 const ROW_H: i32 = 210;
@@ -22,18 +22,22 @@ const CONTROL_H: i32 = 96;
 const FLASHES: [u8; 4] = [4, 8, 16, 32];
 const ROWS: usize = 3;
 /// The device information row, at the top.
-const DEVICE_ROW: Rect = Rect { x: PAD, y: TOPBAR_H + 10, w: W - 2 * PAD, h: 120 };
+fn device_row() -> Rect {
+    Rect { x: PAD, y: TOPBAR_H + 10, w: screen_w() - 2 * PAD, h: 120 }
+}
 /// Where the rows of choices start, under it.
-const ROWS_TOP: i32 = DEVICE_ROW.y + DEVICE_ROW.h + 30;
+fn rows_top() -> i32 {
+    device_row().y + device_row().h + 30
+}
 
 /// The Extensions row, under the choices.
 fn extensions_row() -> Rect {
-    Rect::new(PAD, ROWS_TOP + ROWS as i32 * ROW_H + 10, W - 2 * PAD, 120)
+    Rect::new(PAD, rows_top() + ROWS as i32 * ROW_H + 10, screen_w() - 2 * PAD, 120)
 }
 
 /// The choices of row `i`.
 fn control(i: usize) -> Rect {
-    Rect::new(PAD, ROWS_TOP + i as i32 * ROW_H + 74, W - 2 * PAD, CONTROL_H)
+    Rect::new(PAD, rows_top() + i as i32 * ROW_H + 74, screen_w() - 2 * PAD, CONTROL_H)
 }
 
 pub struct Prefs {
@@ -89,7 +93,7 @@ impl Prefs {
         if y < TOPBAR_H {
             return (x >= BACK_W).then_some(Action::None);
         }
-        if DEVICE_ROW.contains(x, y) {
+        if device_row().contains(x, y) {
             self.device = Some(DeviceInfo::new(ctx));
             return Some(Action::Redraw { turn: None });
         }
@@ -137,17 +141,17 @@ impl Prefs {
         };
         topbar(c, raster, sans, serif_bold, t().back_library, t().settings);
         let label = Label { face: serif, size: 36.0, ink: INK };
-        let r = DEVICE_ROW;
+        let r = device_row();
         label.draw(c, raster, t().device_info, PAD as f32, r.y + r.h / 2 + 12);
         let chevron = Label { face: sans, size: 28.0, ink: INK_SOFT };
         chevron.draw(c, raster, "›", r.right() as f32 - chevron.width("›"), r.y + r.h / 2 + 12);
-        c.fill(Rect::new(PAD, r.bottom(), W - 2 * PAD, 2), LINE);
+        c.fill(Rect::new(PAD, r.bottom(), screen_w() - 2 * PAD, 2), LINE);
         for i in 0..ROWS {
             let (name, choices, on) = self.row(i);
             let r = control(i);
             label.draw(c, raster, name, PAD as f32, r.y - 26);
             crate::ui::segmented_labels(c, raster, sans, 28.0, r, &choices, Some(on));
-            c.fill(Rect::new(PAD, r.bottom() + 40, W - 2 * PAD, 2), LINE);
+            c.fill(Rect::new(PAD, r.bottom() + 40, screen_w() - 2 * PAD, 2), LINE);
         }
         let r = extensions_row();
         let base = r.y + r.h / 2 + 12;
@@ -155,9 +159,9 @@ impl Prefs {
         let count = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let n = format!("{}   ›", crate::i18n::fill(t().extensions_installed, &[&self.plugins.to_string()]));
         count.draw(c, raster, &n, r.right() as f32 - count.width(&n), base);
-        c.fill(Rect::new(PAD, r.bottom(), W - 2 * PAD, 2), LINE);
+        c.fill(Rect::new(PAD, r.bottom(), screen_w() - 2 * PAD, 2), LINE);
         let version = format!("Zarathustra {}", env!("CARGO_PKG_VERSION"));
-        Label { face: sans, size: 28.0, ink: INK_SOFT }.draw(c, raster, &version, PAD as f32, H - 60);
+        Label { face: sans, size: 28.0, ink: INK_SOFT }.draw(c, raster, &version, PAD as f32, screen_h() - 60);
     }
 }
 
@@ -183,7 +187,7 @@ mod tests {
         p.tap((100, 60), &ctx);
         assert!(p.extensions.is_none());
         // So does the device information row, at the top.
-        let r = DEVICE_ROW;
+        let r = device_row();
         assert!(p.tap((r.x + 10, r.y + 10), &ctx).is_some() && p.device.is_some());
         p.tap((100, 60), &ctx);
         assert!(p.device.is_none());

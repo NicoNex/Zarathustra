@@ -12,7 +12,7 @@ use zarathustra_engine::note;
 
 use crate::highlight::glyph_pos;
 use crate::ui::{draw_lines, rounded_outline, rounded_rect, Label, INK, INK_SOFT, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// How far (pixels) a tap may land from a reference's glyphs: superscript digits are smaller
 /// than a fingertip.
@@ -21,7 +21,9 @@ const LINK_SLOP: f32 = 44.0;
 const LINK_BIAS: f32 = 16.0;
 
 const CARD_X: i32 = 44;
-const CARD_W: i32 = W - 2 * CARD_X;
+fn card_w() -> i32 {
+    screen_w() - 2 * CARD_X
+}
 const PAD: i32 = 60;
 const HEADER_H: i32 = 104;
 const FOOTER_H: i32 = 84;
@@ -30,11 +32,15 @@ const BORDER: i32 = 3;
 /// A hard offset shadow under the card: crisp on e-ink, where soft gray blurs ghost.
 const SHADOW: i32 = 8;
 /// Width and height of the note's text area.
-pub const TEXT_W: f32 = (CARD_W - 2 * PAD) as f32;
+pub fn text_w() -> f32 {
+    (card_w() - 2 * PAD) as f32
+}
 pub const BODY_H: f32 = 620.0;
 /// The card keeps clear of the reader's header and footer.
 const TOP: i32 = 120;
-const BOTTOM: i32 = H - 120;
+fn bottom() -> i32 {
+    screen_h() - 120
+}
 /// Horizontal travel that makes a touch a swipe.
 const SWIPE: i32 = 100;
 /// Up to this many pages show as dots, beyond as "3 / 12".
@@ -96,10 +102,10 @@ impl Popup {
         let paged = note.pages.len() > 1;
         let body = if paged { BODY_H } else { note.pages.first().map_or(0.0, content_height) };
         let h = HEADER_H + body.ceil() as i32 + if paged { FOOTER_H } else { PAD * 3 / 4 };
-        let y = if ref_y < H / 2 { BOTTOM - h } else { TOP };
+        let y = if ref_y < screen_h() / 2 { bottom() - h } else { TOP };
         let marker = link_text.trim().trim_matches(|c| matches!(c, '[' | ']' | '(' | ')')).trim_end_matches('.');
         let marker = if note::is_marker(marker) { marker.to_string() } else { String::new() };
-        Popup { note, marker, page: 0, card: Rect::new(CARD_X, y, CARD_W, h) }
+        Popup { note, marker, page: 0, card: Rect::new(CARD_X, y, card_w(), h) }
     }
 
     pub fn pages(&self) -> usize {

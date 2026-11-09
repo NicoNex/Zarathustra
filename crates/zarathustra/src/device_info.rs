@@ -10,7 +10,7 @@ use crate::i18n::{fill, t};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::toc::BACK_W;
 use crate::ui::{Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 const ROW_H: i32 = 84;
 const VALUE_X: i32 = 420;
@@ -49,7 +49,7 @@ impl DeviceInfo {
             rows.push((s.device_mac, mac.to_uppercase()));
         }
         let dpi = if ctx.dpi > 0 { format!(", {} dpi", ctx.dpi) } else { String::new() };
-        rows.push((s.device_screen, format!("{W} × {H}{dpi}")));
+        rows.push((s.device_screen, format!("{} × {}{dpi}", screen_w(), screen_h())));
         if let Some(up) = uptime() {
             rows.push((s.device_uptime, up));
         }
@@ -72,8 +72,8 @@ impl DeviceInfo {
             let y = TOPBAR_H + 30 + i as i32 * ROW_H;
             let base = y + ROW_H / 2 + 10;
             name.draw(c, raster, &name.fit(k, (VALUE_X - PAD - 20) as f32), PAD as f32, base);
-            value.draw(c, raster, &value.fit(v, (W - PAD - VALUE_X) as f32), VALUE_X as f32, base);
-            c.fill(Rect::new(PAD, y + ROW_H - 1, W - 2 * PAD, 1), LINE);
+            value.draw(c, raster, &value.fit(v, (screen_w() - PAD - VALUE_X) as f32), VALUE_X as f32, base);
+            c.fill(Rect::new(PAD, y + ROW_H - 1, screen_w() - 2 * PAD, 1), LINE);
         }
     }
 }

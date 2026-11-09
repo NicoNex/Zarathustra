@@ -16,17 +16,25 @@ use crate::i18n::t;
 use crate::keyboard::{Key, Keyboard, Typed};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::ui::{button, rounded_outline, rounded_rect, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 const BACK_W: i32 = 400;
-const SWITCH_ROW: Rect = Rect { x: 0, y: TOPBAR_H, w: W, h: 160 };
-const SWITCH: Rect = Rect { x: W - PAD - 132, y: TOPBAR_H + 44, w: 132, h: 72 };
+fn switch_row() -> Rect {
+    Rect { x: 0, y: TOPBAR_H, w: screen_w(), h: 160 }
+}
+fn switch_rect() -> Rect {
+    Rect { x: screen_w() - PAD - 132, y: TOPBAR_H + 44, w: 132, h: 72 }
+}
 const HEADER_H: i32 = 96;
 const ROW_H: i32 = 112;
 /// The page arrows under the list, when it takes more than one page.
-const PAGER: Rect = Rect { x: 0, y: H - 110, w: W, h: 110 };
+fn pager() -> Rect {
+    Rect { x: 0, y: screen_h() - 110, w: screen_w(), h: 110 }
+}
 /// The list under the switch, paged rather than scrolled: e-ink redraws a page in one go.
-const LIST_TOP: i32 = SWITCH_ROW.y + SWITCH_ROW.h;
+fn list_top() -> i32 {
+    switch_row().y + switch_row().h
+}
 const ACTION_W: i32 = 220;
 /// The longest WPA passphrase.
 const MAX_PSK: usize = 63;
@@ -36,11 +44,19 @@ fn valid_psk(p: &str) -> bool {
     (8..=MAX_PSK).contains(&p.len())
 }
 /// Password entry: the field (with the show/hide eye at its right end) and the connect button.
-const FIELD: Rect = Rect { x: PAD, y: TOPBAR_H + 100, w: W - 2 * PAD, h: 112 };
-const EYE: Rect = Rect { x: W - PAD - 112, y: TOPBAR_H + 100, w: 112, h: 112 };
-const CONNECT: Rect = Rect { x: (W - 400) / 2, y: TOPBAR_H + 270, w: 400, h: 100 };
+fn field() -> Rect {
+    Rect { x: PAD, y: TOPBAR_H + 100, w: screen_w() - 2 * PAD, h: 112 }
+}
+fn eye_rect() -> Rect {
+    Rect { x: screen_w() - PAD - 112, y: TOPBAR_H + 100, w: 112, h: 112 }
+}
+fn connect() -> Rect {
+    Rect { x: (screen_w() - 400) / 2, y: TOPBAR_H + 270, w: 400, h: 100 }
+}
 
-const FULL: Rect = Rect { x: 0, y: 0, w: W, h: H };
+fn full() -> Rect {
+    Rect { x: 0, y: 0, w: screen_w(), h: screen_h() }
+}
 
 /// What is running on the worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,16 +231,16 @@ impl WifiScreen {
             rows.extend((0..available).map(Row::Available));
         }
         let mut pages = vec![Vec::new()];
-        let mut y = LIST_TOP;
+        let mut y = list_top();
         for row in rows {
             // A header never ends a page: it keeps a row's room under it.
             let room = row.height() + if row.height() == HEADER_H { ROW_H } else { 0 };
-            if y + room > PAGER.y && pages.last().is_some_and(|p: &Vec<_>| !p.is_empty()) {
+            if y + room > pager().y && pages.last().is_some_and(|p: &Vec<_>| !p.is_empty()) {
                 pages.push(Vec::new());
-                y = LIST_TOP;
+                y = list_top();
             }
             if let Some(page) = pages.last_mut() {
-                page.push((row, Rect::new(0, y, W, row.height())));
+                page.push((row, Rect::new(0, y, screen_w(), row.height())));
             }
             y += row.height();
         }
@@ -259,11 +275,11 @@ impl WifiScreen {
     }
 
     fn rescan_button(header: Rect) -> Rect {
-        Rect::new(W - PAD - ACTION_W, header.y + 20, ACTION_W, 64)
+        Rect::new(screen_w() - PAD - ACTION_W, header.y + 20, ACTION_W, 64)
     }
 
     fn forget_button(row: Rect) -> Rect {
-        Rect::new(W - PAD - ACTION_W, row.y + (ROW_H - 72) / 2, ACTION_W, 72)
+        Rect::new(screen_w() - PAD - ACTION_W, row.y + (ROW_H - 72) / 2, ACTION_W, 72)
     }
 
     /// The finger went down: on the password keyboard, the key shows pressed.
@@ -291,7 +307,7 @@ impl WifiScreen {
         if self.busy.is_some() {
             return Tap::None;
         }
-        if SWITCH_ROW.contains(x, y) {
+        if switch_row().contains(x, y) {
             let on = !self.status.enabled;
             self.start(Busy::Working, on, move |w| {
                 w.set_enabled(on)?;
@@ -304,11 +320,11 @@ impl WifiScreen {
                 }
                 Ok(())
             });
-            return Tap::Redraw(FULL);
+            return Tap::Redraw(full());
         }
         let (rows, pages) = self.page();
-        if pages > 1 && PAGER.contains(x, y) {
-            return if self.turn(x >= W / 2) { Tap::Redraw(FULL) } else { Tap::None };
+        if pages > 1 && pager().contains(x, y) {
+            return if self.turn(x >= screen_w() / 2) { Tap::Redraw(full()) } else { Tap::None };
         }
         let Some(&(row, r)) = rows.iter().find(|(_, r)| r.contains(x, y)) else { return Tap::None };
         match row {
@@ -338,7 +354,7 @@ impl WifiScreen {
             }
             _ => return Tap::None,
         }
-        Tap::Redraw(FULL)
+        Tap::Redraw(full())
     }
 
     fn join(&mut self, ssid: String, password: Option<String>) {
@@ -351,15 +367,15 @@ impl WifiScreen {
         if y < TOPBAR_H {
             if x < BACK_W {
                 self.entry = None;
-                return Tap::Redraw(FULL);
+                return Tap::Redraw(full());
             }
             return Tap::None;
         }
-        if EYE.contains(x, y) {
+        if eye_rect().contains(x, y) {
             e.show = !e.show;
-            return Tap::Redraw(FIELD);
+            return Tap::Redraw(field());
         }
-        let submit = if CONNECT.contains(x, y) {
+        let submit = if connect().contains(x, y) {
             true
         } else if e.keyboard.holds(x, y) {
             let Some((key, typed)) = e.keyboard.tap(x, y) else { return Tap::None };
@@ -373,7 +389,7 @@ impl WifiScreen {
                 _ => return Tap::Typed(typed),
             }
             // The connect button greys out or in with the password.
-            return Tap::Typed(typed.and_text(FIELD.union(&CONNECT)));
+            return Tap::Typed(typed.and_text(field().union(&connect())));
         } else {
             false
         };
@@ -388,7 +404,7 @@ impl WifiScreen {
         match self.entry.take() {
             Some(e) if valid_psk(&e.password) => {
                 self.join(e.ssid, Some(e.password));
-                Tap::Redraw(FULL)
+                Tap::Redraw(full())
             }
             other => {
                 self.entry = other;
@@ -426,15 +442,15 @@ impl WifiScreen {
         let s = t();
         if let Some(e) = &self.entry {
             topbar(c, raster, sans, serif_bold, s.back, &e.ssid);
-            Label { face: sans, size: 28.0, ink: INK_SOFT }.draw(c, raster, s.password, PAD as f32, FIELD.y - 24);
-            rounded_outline(c, FIELD, 20, 3, INK, PAPER);
+            Label { face: sans, size: 28.0, ink: INK_SOFT }.draw(c, raster, s.password, PAD as f32, field().y - 24);
+            rounded_outline(c, field(), 20, 3, INK, PAPER);
             let text: String = if e.show { e.password.clone() } else { "•".repeat(e.password.chars().count()) };
-            let field = Label { face: sans, size: 40.0, ink: INK };
-            let width = (EYE.x - FIELD.x - 48) as f32;
-            field.draw(c, raster, field.fit_tail(&text, width), (FIELD.x + 28) as f32, field.baseline(FIELD));
-            eye(c, EYE, e.show);
-            rounded_rect(c, CONNECT, CONNECT.h / 2, if valid_psk(&e.password) { INK } else { LINE });
-            Label { face: sans_bold, size: 34.0, ink: PAPER }.centered(c, raster, s.connect, CONNECT);
+            let label = Label { face: sans, size: 40.0, ink: INK };
+            let width = (eye_rect().x - field().x - 48) as f32;
+            label.draw(c, raster, label.fit_tail(&text, width), (field().x + 28) as f32, label.baseline(field()));
+            eye(c, eye_rect(), e.show);
+            rounded_rect(c, connect(), connect().h / 2, if valid_psk(&e.password) { INK } else { LINE });
+            Label { face: sans_bold, size: 34.0, ink: PAPER }.centered(c, raster, s.connect, connect());
             e.keyboard.render(c, ctx);
             return;
         }
@@ -442,11 +458,11 @@ impl WifiScreen {
         topbar(c, raster, sans, serif_bold, s.back, "Wi-Fi");
         let name = Label { face: serif, size: 38.0, ink: INK };
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
-        Label { face: serif_bold, size: 40.0, ink: INK }.draw(c, raster, "Wi-Fi", PAD as f32, SWITCH_ROW.y + 70);
+        Label { face: serif_bold, size: 40.0, ink: INK }.draw(c, raster, "Wi-Fi", PAD as f32, switch_row().y + 70);
         let line = self.state_line();
-        soft.draw(c, raster, &soft.fit(&line, (SWITCH.x - PAD - 40) as f32), PAD as f32, SWITCH_ROW.y + 118);
-        switch(c, SWITCH, self.status.enabled);
-        c.fill(Rect::new(PAD, SWITCH_ROW.bottom() - 2, W - 2 * PAD, 2), LINE);
+        soft.draw(c, raster, &soft.fit(&line, (switch_rect().x - PAD - 40) as f32), PAD as f32, switch_row().y + 118);
+        switch(c, switch_rect(), self.status.enabled);
+        c.fill(Rect::new(PAD, switch_row().bottom() - 2, screen_w() - 2 * PAD, 2), LINE);
 
         let header = Label { face: sans_bold, size: 26.0, ink: INK_SOFT };
         let in_range = |ssid: &str| self.networks.iter().find(|n| n.ssid == ssid);
@@ -486,19 +502,19 @@ impl WifiScreen {
                     } else {
                         face.draw(c, raster, &face.fit(ssid, width), PAD as f32, r.y + 70);
                     }
-                    c.fill(Rect::new(PAD, r.bottom() - 1, W - 2 * PAD, 1), LINE);
+                    c.fill(Rect::new(PAD, r.bottom() - 1, screen_w() - 2 * PAD, 1), LINE);
                 }
                 Row::Available(i) => {
                     let Some(n) = available.get(i) else { continue };
-                    let right = signal(c, W - PAD, r, n);
+                    let right = signal(c, screen_w() - PAD, r, n);
                     name.draw(c, raster, &name.fit(&n.ssid, (right - PAD - 24) as f32), PAD as f32, r.y + 70);
-                    c.fill(Rect::new(PAD, r.bottom() - 1, W - 2 * PAD, 1), LINE);
+                    c.fill(Rect::new(PAD, r.bottom() - 1, screen_w() - 2 * PAD, 1), LINE);
                 }
             }
         }
         if pages > 1 {
             let text = format!("‹   {} / {}   ›", self.page.min(pages - 1) + 1, pages);
-            Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &text, PAGER);
+            Label { face: sans, size: 32.0, ink: INK }.centered(c, raster, &text, pager());
         }
     }
 }
@@ -602,7 +618,7 @@ mod tests {
         assert!(matches!(s.tap(centre(row).0, centre(row).1), Tap::Redraw(_)));
         assert!(s.entry.is_some());
         type_text(&mut s, "nopenope");
-        s.tap(centre(CONNECT).0, centre(CONNECT).1);
+        s.tap(centre(connect()).0, centre(connect()).1);
         assert!(s.entry.is_none() && s.busy());
         assert!(s.state_line().contains("Vodafone-A1B2"), "connecting…");
         settle(&mut s);
@@ -612,7 +628,7 @@ mod tests {
         s.tap(centre(row).0, centre(row).1);
         type_text(&mut s, "password");
         assert_eq!(s.entry.as_ref().map(|e| e.password.as_str()), Some("password"));
-        s.tap(centre(EYE).0, centre(EYE).1);
+        s.tap(centre(eye_rect()).0, centre(eye_rect()).1);
         assert!(s.entry.as_ref().is_some_and(|e| e.show));
         let enter = s.entry.as_ref().and_then(|e| e.keyboard.keys().into_iter().find(|(k, _)| *k == Key::Enter));
         let (_, enter) = enter.expect("enter");
@@ -627,7 +643,7 @@ mod tests {
         s.tap(centre(forget).0, centre(forget).1);
         settle(&mut s);
         assert!(!s.saved.contains(&"Casa".to_string()));
-        s.tap(W / 2, SWITCH_ROW.y + 40);
+        s.tap(screen_w() / 2, switch_row().y + 40);
         settle(&mut s);
         assert!(!s.status.enabled && s.networks.is_empty());
         assert!(matches!(s.tap(100, 60), Tap::Back));
@@ -665,7 +681,7 @@ mod tests {
         let (_, pages) = s.page();
         assert!(pages > 1);
         assert!(s.available_row(0).h == 0, "the networks in range moved to a later page");
-        let pager = (W - 100, PAGER.y + PAGER.h / 2);
+        let pager = (screen_w() - 100, pager().y + pager().h / 2);
         while s.available_row(0).h == 0 {
             assert!(matches!(s.tap(pager.0, pager.1), Tap::Redraw(_)), "one more page");
         }

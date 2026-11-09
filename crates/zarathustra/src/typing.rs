@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use zarathustra_device::{Canvas, Device, Rect, Refresh, Waveform};
 
 use crate::keyboard::Typed;
-use crate::{H, W};
+use crate::{screen_h, screen_w};
 
 /// How long a refresh is expected to take, after which its area may be drawn into again.
 // ponytail: guesses for the PW5's MTK panel (DU about 120 ms, GL16 about 300 ms). Too short
@@ -46,14 +46,14 @@ pub struct Typing {
 
 impl Default for Typing {
     fn default() -> Typing {
-        Typing { frame: vec![0; (W * H) as usize], flights: Vec::new(), pending: Vec::new() }
+        Typing { frame: vec![0; (screen_w() * screen_h()) as usize], flights: Vec::new(), pending: Vec::new() }
     }
 }
 
 impl Typing {
     /// The frame to draw the screen into (whole, or the keys just changed).
     pub fn canvas(&mut self) -> Canvas<'_> {
-        Canvas { width: W, height: H, stride: W as usize, pixels: &mut self.frame }
+        Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut self.frame }
     }
 
     /// Puts what a touch on the keyboard changed (drawn into [`Typing::canvas`]) on the panel.
@@ -134,7 +134,7 @@ impl Typing {
     /// Copies `rect` from the frame to the panel and refreshes it, once the refreshes
     /// overlapping it have ended.
     fn show(&mut self, dev: &mut dyn Device, marker: &mut u32, rect: Rect, waveform: Waveform) -> io::Result<()> {
-        let rect = rect.intersect(&Rect::new(0, 0, W, H));
+        let rect = rect.intersect(&Rect::new(0, 0, screen_w(), screen_h()));
         for f in self.flights.iter().filter(|f| !f.rect.intersect(&rect).is_empty()) {
             dev.wait_refresh(f.marker)?;
         }
@@ -145,7 +145,8 @@ impl Typing {
         {
             let c = dev.canvas();
             for y in rect.y..rect.bottom() {
-                let (src, dst) = (y as usize * W as usize + rect.x as usize, y as usize * c.stride + rect.x as usize);
+                let (src, dst) =
+                    (y as usize * screen_w() as usize + rect.x as usize, y as usize * c.stride + rect.x as usize);
                 c.pixels[dst..dst + rect.w as usize].copy_from_slice(&self.frame[src..src + rect.w as usize]);
             }
         }
@@ -176,10 +177,10 @@ mod tests {
             300
         }
         fn size(&self) -> (i32, i32) {
-            (W, H)
+            (screen_w(), screen_h())
         }
         fn canvas(&mut self) -> Canvas<'_> {
-            Canvas { width: W, height: H, stride: W as usize, pixels: &mut self.px }
+            Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut self.px }
         }
         fn refresh(&mut self, r: &Refresh) -> io::Result<u32> {
             self.marker += 1;
@@ -209,16 +210,16 @@ mod tests {
 
     #[test]
     fn keys_go_at_once_and_an_area_still_refreshing_waits() {
-        let mut dev = Panel { px: vec![255; (W * H) as usize], log: Vec::new(), marker: 7 };
+        let mut dev = Panel { px: vec![255; (screen_w() * screen_h()) as usize], log: Vec::new(), marker: 7 };
         let mut typing = Typing::default();
         // The keyboard opened with a refresh from elsewhere: waited for once.
         let mut marker = 7;
         let (key, other, field) =
-            (Rect::new(10, 1300, 100, 100), Rect::new(300, 1300, 100, 100), Rect::new(0, 100, W, 100));
+            (Rect::new(10, 1300, 100, 100), Rect::new(300, 1300, 100, 100), Rect::new(0, 100, screen_w(), 100));
         typing.canvas().fill(key, 0);
         typing.typed(&mut dev, &mut marker, Typed::keys(key)).expect("pressed");
         assert_eq!(dev.log, ["wait 7", "refresh 8 Fast y1300"]);
-        assert_eq!(dev.px[1350 * W as usize + 50], 0, "copied from the frame");
+        assert_eq!(dev.px[1350 * screen_w() as usize + 50], 0, "copied from the frame");
         // Released at once, with the field: the key waits for its own refresh, the field goes.
         typing.typed(&mut dev, &mut marker, Typed::keys(key).and_text(field)).expect("released");
         assert_eq!(dev.log[2..], ["refresh 9 Text y100"]);

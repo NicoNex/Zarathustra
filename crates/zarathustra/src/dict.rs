@@ -25,7 +25,7 @@ use zarathustra_engine::style::css::TextAlign;
 
 use crate::i18n::t;
 use crate::ui::{button, rounded_outline, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// Distance from the screen edges.
 const MARGIN: i32 = 28;
@@ -123,10 +123,10 @@ impl Card {
             defs.push(Definition { dict: String::new(), article });
         }
         // The side with more room: below the word when it sits in the upper half.
-        let below = word_rect.y + word_rect.h / 2 < H / 2;
-        let room = if below { H - MARGIN - word_rect.bottom() - GAP } else { word_rect.y - MARGIN - GAP };
-        let max_h = room.min((H as f32 * MAX_SHARE) as i32).max(MIN_TEXT_H + 2 * PAD + FOOTER_H);
-        let width = W - 2 * MARGIN;
+        let below = word_rect.y + word_rect.h / 2 < screen_h() / 2;
+        let room = if below { screen_h() - MARGIN - word_rect.bottom() - GAP } else { word_rect.y - MARGIN - GAP };
+        let max_h = room.min((screen_h() as f32 * MAX_SHARE) as i32).max(MIN_TEXT_H + 2 * PAD + FOOTER_H);
+        let width = screen_w() - 2 * MARGIN;
         let text_w = (width - 2 * PAD) as f32;
         let text_h = (max_h - PAD - FOOTER_H) as f32;
 
@@ -144,7 +144,7 @@ impl Card {
             _ => text_h as i32,
         };
         let h = PAD + used + FOOTER_H;
-        let y = if below { H - MARGIN - h } else { MARGIN };
+        let y = if below { screen_h() - MARGIN - h } else { MARGIN };
         eprintln!("define {word:?}: {} articles, lookup {looked_up:?}, card {:?}", defs.len(), t0.elapsed());
         Card { rect: Rect::new(MARGIN, y, width, h), blocks, labels, pages, page: 0 }
     }
@@ -153,9 +153,9 @@ impl Card {
     /// there), with a margin so the outline reads against the text right behind it.
     pub fn area(&self) -> Rect {
         if self.rect.y > MARGIN {
-            Rect::new(0, self.rect.y - 8, W, H - self.rect.y + 8)
+            Rect::new(0, self.rect.y - 8, screen_w(), screen_h() - self.rect.y + 8)
         } else {
-            Rect::new(0, 0, W, self.rect.bottom() + 8)
+            Rect::new(0, 0, screen_w(), self.rect.bottom() + 8)
         }
     }
 
@@ -286,10 +286,10 @@ mod tests {
 
     fn card(defs: Vec<Definition>, word_y: i32, ctx: &mut Ctx) -> Card {
         let prefs = Preferences { font_size: prefs().font_size * TEXT_SCALE, ..prefs() };
-        let max_h = (H as f32 * MAX_SHARE) as i32;
+        let max_h = (screen_h() as f32 * MAX_SHARE) as i32;
         let (blocks, labels, pages) = layout(&defs, Some("it"), &prefs, (max_h - PAD - FOOTER_H) as f32, ctx);
-        let y = if word_y < H / 2 { H - MARGIN - max_h } else { MARGIN };
-        Card { rect: Rect::new(MARGIN, y, W - 2 * MARGIN, max_h), blocks, labels, pages, page: 0 }
+        let y = if word_y < screen_h() / 2 { screen_h() - MARGIN - max_h } else { MARGIN };
+        Card { rect: Rect::new(MARGIN, y, screen_w() - 2 * MARGIN, max_h), blocks, labels, pages, page: 0 }
     }
 
     fn def(dict: &str, hw: &str, body: String) -> Definition {
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(c.tap((left, mid_y), left + 300), Tap::Page(c.rect));
         let b = c.highlight_button();
         assert_eq!(c.tap((b.x + 5, b.y + 5), b.x + 5), Tap::Highlight);
-        assert_eq!(c.tap((10, if c.rect.y > 100 { 10 } else { H - 10 }), 10), Tap::Close);
+        assert_eq!(c.tap((10, if c.rect.y > 100 { 10 } else { screen_h() - 10 }), 10), Tap::Close);
     }
 
     #[test]
@@ -339,8 +339,8 @@ mod tests {
         let dicts = Dictionaries::default();
         // Word near the top: card at the bottom edge; no dictionaries: the hint shows.
         let c = Card::open(&dicts, "casa", Some("it"), Rect::new(100, 200, 120, 50), &prefs(), &mut ctx);
-        assert_eq!(c.rect.bottom(), H - MARGIN);
-        assert!(c.rect.h < H / 3, "{}", c.rect.h);
+        assert_eq!(c.rect.bottom(), screen_h() - MARGIN);
+        assert!(c.rect.h < screen_h() / 3, "{}", c.rect.h);
         assert_eq!(c.pages(), 1);
         assert!(c.page_text().contains("StarDict"));
         // Word near the bottom: card at the top.

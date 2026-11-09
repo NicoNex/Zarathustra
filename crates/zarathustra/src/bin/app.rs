@@ -1,6 +1,6 @@
 //! Zarathustra: home and reader on the device.
 //!
-//!   zarathustra [BOOK] [--no-swipe] [--pgm DIR] [--search WORD]
+//!   zarathustra [BOOK] [--no-swipe] [--pgm DIR [--size WxH]] [--search WORD]
 //!   zarathustra --start-services [--recovery]
 //!
 //! With `--pgm`, renders the home screen and the first pages of BOOK into DIR instead.
@@ -15,12 +15,12 @@ use zarathustra::highlight::{Button, LONG_PRESS, SLOP};
 use zarathustra::home::Home;
 use zarathustra::keyboard::{Keyboard, Typed};
 use zarathustra::pdfview::PdfView;
-use zarathustra::quick::{QuickPanel, QuickResult, PANEL};
-use zarathustra::reader::{Reader, HEADER};
+use zarathustra::quick::{QuickPanel, QuickResult};
+use zarathustra::reader::{header_rect, Reader};
 use zarathustra::sleep::render_sleep;
 use zarathustra::toc::Tab;
 use zarathustra::typing::Typing;
-use zarathustra::{Action, Ctx, Landing, H, W};
+use zarathustra::{screen_h, screen_w, Action, Ctx, Landing};
 use zarathustra_device::{Canvas, Device, Event, Phase, PowerEvent, Rect, Refresh, Swipe, Waveform};
 use zarathustra_engine::library::Format;
 
@@ -232,7 +232,7 @@ fn ready(dev: &mut dyn Device, typing: &mut Typing, marker: &mut u32) -> std::io
 }
 
 fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
-    let mut out = format!("P5\n{W} {H}\n255\n").into_bytes();
+    let mut out = format!("P5\n{} {}\n255\n", screen_w(), screen_h()).into_bytes();
     out.extend_from_slice(px);
     Ok(std::fs::write(path, out)?)
 }
@@ -254,7 +254,7 @@ const USB_EXIT: i32 = 42;
 // (unmount /mnt/base-us, point g_mass_storage's lun at it) once the framework is gone for good.
 fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::io::Result<bool> {
     use zarathustra::ui::{button, Label, INK, INK_SOFT, PAPER};
-    let (transfer, charge) = (Rect::new(160, 900, W - 320, 120), Rect::new(160, 1060, W - 320, 120));
+    let (transfer, charge) = (Rect::new(160, 900, screen_w() - 320, 120), Rect::new(160, 1060, screen_w() - 320, 120));
     {
         let mut c = dev.canvas();
         c.fill(c.bounds(), PAPER);
@@ -267,11 +267,11 @@ fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::i
                 &mut c,
                 raster,
                 s.usb_title,
-                Rect::new(0, 480, W, 100),
+                Rect::new(0, 480, screen_w(), 100),
             );
             let body = Label { face: sans, size: 34.0, ink: INK_SOFT };
-            for (i, line) in body.wrap(s.usb_body, (W - 320) as f32, 5).iter().enumerate() {
-                body.centered(&mut c, raster, line, Rect::new(0, 620 + i as i32 * 52, W, 52));
+            for (i, line) in body.wrap(s.usb_body, (screen_w() - 320) as f32, 5).iter().enumerate() {
+                body.centered(&mut c, raster, line, Rect::new(0, 620 + i as i32 * 52, screen_w(), 52));
             }
             button(&mut c, transfer, true);
             Label { face: bold, size: 36.0, ink: PAPER }.centered(&mut c, raster, s.usb_transfer, transfer);
@@ -279,7 +279,7 @@ fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::i
             Label { face: sans, size: 36.0, ink: INK }.centered(&mut c, raster, s.usb_charge, charge);
         }
     }
-    let full = Rect::new(0, 0, W, H);
+    let full = Rect::new(0, 0, screen_w(), screen_h());
     dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
     let mut events = Vec::new();
     loop {
@@ -306,7 +306,7 @@ fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::i
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let (mut book, mut swipe, mut pgm, mut query) = (None, true, None, "natura".to_string());
-    let (mut services, mut recovery) = (false, false);
+    let (mut services, mut recovery, mut size) = (false, false, None);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--start-services" => services = true,
@@ -314,6 +314,7 @@ fn main() -> Result<()> {
             "--no-swipe" => swipe = false,
             "--search" => query = args.next().context("--search WORD")?,
             "--pgm" => pgm = Some(PathBuf::from(args.next().context("--pgm DIR")?)),
+            "--size" => size = Some(args.next().and_then(|s| zarathustra::parse_size(&s)).context("--size WxH")?),
             path => book = Some(PathBuf::from(path)),
         }
     }
@@ -323,6 +324,11 @@ fn main() -> Result<()> {
         zarathustra::plugin::start_services(&zarathustra::plugin::Dirs::new(&state_dir), &state_dir, true, recovery);
         return Ok(());
     }
+    // The device first: every layout reads the screen size it reports.
+    let dev =
+        if pgm.is_none() { Some(zarathustra_device::Night::new(zarathustra_device::open_default()?)) } else { None };
+    let (w, h) = dev.as_ref().map(|d| d.size()).or(size).unwrap_or((screen_w(), screen_h()));
+    zarathustra::set_screen(w, h);
     let t = Instant::now();
     let mut ctx = Ctx::new();
     eprintln!("fonts and state ready in {:?}", t.elapsed());
@@ -343,30 +349,49 @@ fn main() -> Result<()> {
 
     if let Some(dir) = pgm {
         std::fs::create_dir_all(&dir)?;
-        let mut px = vec![0u8; (W * H) as usize];
+        let mut px = vec![0u8; (screen_w() * screen_h()) as usize];
         let mut home = home(&ctx);
         home.wifi = true;
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        home.render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_pgm(dir.join("home.pgm"), &px)?;
         // The first page's band with a sample quote, then as the reading figures.
         home.sample_band();
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        home.render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_pgm(dir.join("home-quote.pgm"), &px)?;
         home.band = zarathustra::home::Band::Stats;
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        home.render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_pgm(dir.join("home-stats.pgm"), &px)?;
         home.band = zarathustra::home::Band::Quote;
         // The quick panel pulled down over the library.
-        zarathustra::quick::QuickPanel::preview(&ctx.state_dir, false)
-            .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        zarathustra::quick::QuickPanel::preview(&ctx.state_dir, false).render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_pgm(dir.join("quick.pgm"), &px)?;
         // Night mode: the tile on, the whole screen inverted as the device shows it.
         zarathustra_device::set_night(true);
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
-        zarathustra::quick::QuickPanel::preview(&ctx.state_dir, true)
-            .render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        home.render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
+        zarathustra::quick::QuickPanel::preview(&ctx.state_dir, true).render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_night_pgm(dir.join("quick-night.pgm"), &px)?;
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        home.render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_night_pgm(dir.join("home-night.pgm"), &px)?;
         zarathustra_device::set_night(false);
         // The Wi-Fi screen on the pretend networks, then a password being typed (caps on).
@@ -380,7 +405,10 @@ fn main() -> Result<()> {
                 wifi.poll();
                 std::thread::sleep(Duration::from_millis(1));
             }
-            wifi.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            wifi.render(
+                &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                &mut ctx,
+            );
             write_pgm(dir.join("wifi.pgm"), &px)?;
             let row = wifi.available_row(0);
             wifi.tap(row.x + row.w / 2, row.y + row.h / 2);
@@ -395,7 +423,10 @@ fn main() -> Result<()> {
             }
             press(Key::Shift);
             press(Key::Char('l'));
-            wifi.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            wifi.render(
+                &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                &mut ctx,
+            );
             write_pgm(dir.join("wifi-password.pgm"), &px)?;
             // The keyboard alone, shift off, once (one tap) and locked (a second quick tap),
             // then a key held down.
@@ -404,7 +435,10 @@ fn main() -> Result<()> {
             let shift = kb.keys().into_iter().find(|(k, _)| *k == Key::Shift).map(|(_, r)| centre(r));
             for state in ["off", "once", "locked"] {
                 px.fill(255);
-                kb.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+                kb.render(
+                    &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                    &mut ctx,
+                );
                 write_pgm(dir.join(format!("keyboard-shift-{state}.pgm")), &px)?;
                 if let Some((x, y)) = shift {
                     kb.tap(x, y);
@@ -413,18 +447,27 @@ fn main() -> Result<()> {
             if let Some((_, r)) = kb.keys().into_iter().find(|(k, _)| *k == Key::Char('g')) {
                 kb.press(centre(r).0, centre(r).1);
             }
-            kb.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            kb.render(
+                &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                &mut ctx,
+            );
             write_pgm(dir.join("keyboard-pressed.pgm"), &px)?;
         }
         home.tap((900, 800), (300, 800), &ctx); // swipe to the second page
-        home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        home.render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_pgm(dir.join("home2.pgm"), &px)?;
         // Book menu on the first cover, its About screen, then the statistics.
         let mut shot = |home: &mut Home, ctx: &mut Ctx, at: Option<(i32, i32)>, name: &str| {
             if let Some(at) = at {
                 home.tap(at, at, ctx);
             }
-            home.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, ctx);
+            home.render(
+                &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                ctx,
+            );
             write_pgm(dir.join(name), &px)
         };
         // The floating book menu beside a cover in each grid column, then beside the
@@ -440,7 +483,7 @@ fn main() -> Result<()> {
         home.tap((100, 75), (100, 75), &ctx);
         shot(&mut home, &mut ctx, Some((722 + 78, 118)), "stats.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
-        shot(&mut home, &mut ctx, Some((W - 72 - 36, 118)), "power.pgm")?;
+        shot(&mut home, &mut ctx, Some((screen_w() - 72 - 36, 118)), "power.pgm")?;
         home.tap((5, 5), (5, 5), &ctx);
         shot(&mut home, &mut ctx, Some((516 + 78, 118)), "prefs.pgm")?;
         // The device information, back; the Extensions screen, then back to the settings and the home.
@@ -471,21 +514,33 @@ fn main() -> Result<()> {
         shot(&mut home, &mut ctx, None, "accents.pgm")?;
         let mut tr = zarathustra::transfer::Transfer::open();
         tr.set_url("http://192.168.1.42:8080/k7f3x2".into());
-        tr.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+        tr.render(
+            &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+            &mut ctx,
+        );
         write_pgm(dir.join("transfer-qr.pgm"), &px)?;
         drop(tr);
         if let Screen::Pdf(p) = &mut screen {
             zarathustra_device::set_night(true);
-            p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            p.render(
+                &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                &mut ctx,
+            );
             write_night_pgm(dir.join("page0-night.pgm"), &px)?;
             zarathustra_device::set_night(false);
             for n in 0..3 {
-                p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+                p.render(
+                    &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                    &mut ctx,
+                );
                 write_pgm(dir.join(format!("page{n}.pgm")), &px)?;
                 p.turn(true);
             }
             p.menu = true;
-            p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            p.render(
+                &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                &mut ctx,
+            );
             write_pgm(dir.join("menu.pgm"), &px)?;
             // Search: typed, run, the first hit opened; then a word there selected.
             p.show_search();
@@ -502,16 +557,19 @@ fn main() -> Result<()> {
                 p.search_step();
             }
             let mut shot = |p: &mut PdfView, name: &str| -> Result<()> {
-                p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+                p.render(
+                    &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                    &mut ctx,
+                );
                 write_pgm(dir.join(name), &px)
             };
             shot(p, "pdf_search_results.pgm")?;
-            let row = zarathustra::search::LIST_TOP + zarathustra::search::ROW_H / 2;
-            p.tap((W / 2, row), W / 2);
+            let row = zarathustra::search::list_top() + zarathustra::search::ROW_H / 2;
+            p.tap((screen_w() / 2, row), screen_w() / 2);
             shot(p, "pdf_search_hit.pgm")?;
-            for at in [(W / 3, H / 3), (W / 2, H / 2)] {
+            for at in [(screen_w() / 3, screen_h() / 3), (screen_w() / 2, screen_h() / 2)] {
                 if p.long_press(at).is_some() {
-                    p.drag((W * 2 / 3, at.1 + 120));
+                    p.drag((screen_w() * 2 / 3, at.1 + 120));
                     p.release();
                     break;
                 }
@@ -520,21 +578,30 @@ fn main() -> Result<()> {
         }
         if let Screen::Reader(r) = &mut screen {
             zarathustra_device::set_night(true);
-            r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+            r.render(
+                &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                &mut ctx,
+            );
             write_night_pgm(dir.join("page0-night.pgm"), &px)?;
             zarathustra_device::set_night(false);
             for n in 0..3 {
-                r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+                r.render(
+                    &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                    &mut ctx,
+                );
                 write_pgm(dir.join(format!("page{n}.pgm")), &px)?;
                 r.turn(true, &mut ctx);
             }
             // The highlight flow on the page shown: select, save, tap it, delete it again.
             let mut snap = |r: &mut Reader, ctx: &mut Ctx, name: &str| {
-                r.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, ctx);
+                r.render(
+                    &mut Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: &mut px },
+                    ctx,
+                );
                 write_pgm(dir.join(name), &px)
             };
             let centre = |b: Rect| (b.x + b.w / 2, b.y + b.h / 2);
-            let (x, y) = (W / 3, H / 2);
+            let (x, y) = (screen_w() / 3, screen_h() / 2);
             r.long_press((x, y));
             r.drag((x + 350, y + 120));
             r.release(&mut ctx);
@@ -546,8 +613,16 @@ fn main() -> Result<()> {
             if let Some(path) = &book {
                 let list = zarathustra::notebook::load(&ctx.state_dir, path);
                 let nb = zarathustra::notebook::Notebook::new(&ctx, r.title().unwrap_or(""), "", list);
-                let mut nb_px = vec![0u8; (W * H) as usize];
-                nb.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut nb_px }, &mut ctx);
+                let mut nb_px = vec![0u8; (screen_w() * screen_h()) as usize];
+                nb.render(
+                    &mut Canvas {
+                        width: screen_w(),
+                        height: screen_h(),
+                        stride: screen_w() as usize,
+                        pixels: &mut nb_px,
+                    },
+                    &mut ctx,
+                );
                 write_pgm(dir.join("notebook.pgm"), &nb_px)?;
             }
             r.tap((x, y), x, &mut ctx);
@@ -557,7 +632,7 @@ fn main() -> Result<()> {
             }
             // Bookmark the page (the dog-ear corner), then the menu with its scrubber at rest
             // and dragged, the jump on release (with the way back), and the bookmarks tab.
-            r.tap((W - 40, 40), W - 40, &mut ctx);
+            r.tap((screen_w() - 40, 40), screen_w() - 40, &mut ctx);
             snap(r, &mut ctx, "bookmark.pgm")?;
             r.menu = true;
             snap(r, &mut ctx, "menu.pgm")?;
@@ -591,19 +666,19 @@ fn main() -> Result<()> {
             }
             // A long press on one word: its definition card (dictionaries from dev-dicts/),
             // its second page when it has one, then a tap outside closes it.
-            let word = (W / 2, H / 4);
+            let word = (screen_w() / 2, screen_h() / 4);
             r.long_press(word);
             r.release(&mut ctx);
             snap(r, &mut ctx, "define.pgm")?;
             if r.card_open() {
-                r.tap((W - 100, H - 400), W - 100, &mut ctx);
+                r.tap((screen_w() - 100, screen_h() - 400), screen_w() - 100, &mut ctx);
                 snap(r, &mut ctx, "define2.pgm")?;
                 r.tap(word, word.0, &mut ctx);
             }
             r.menu = true;
             r.show_contents();
             snap(r, &mut ctx, "toc.pgm")?;
-            r.tap((W - 100, 200), W - 100, &mut ctx);
+            r.tap((screen_w() - 100, 200), screen_w() - 100, &mut ctx);
             snap(r, &mut ctx, "bookmarks.pgm")?;
             // Search: type the query on the keyboard, run it, open the first hit.
             r.show_search();
@@ -628,18 +703,18 @@ fn main() -> Result<()> {
             }
             eprintln!("search: done in {:?}", t0.elapsed());
             snap(r, &mut ctx, "search_results.pgm")?;
-            let row = zarathustra::search::LIST_TOP + zarathustra::search::ROW_H / 2;
-            r.tap((W / 2, row), W / 2, &mut ctx);
+            let row = zarathustra::search::list_top() + zarathustra::search::ROW_H / 2;
+            r.tap((screen_w() / 2, row), screen_w() / 2, &mut ctx);
             snap(r, &mut ctx, "search_hit.pgm")?;
         }
         return Ok(());
     }
 
-    let mut dev = zarathustra_device::Night::new(zarathustra_device::open_default()?);
+    let mut dev = dev.context("no device")?;
     (ctx.device, ctx.dpi) = (dev.name().to_string(), dev.dpi());
     let mut quick = QuickPanel::new(&ctx.state_dir, &mut dev);
     zarathustra_device::set_night(quick.settings().night);
-    let full = Rect::new(0, 0, W, H);
+    let full = Rect::new(0, 0, screen_w(), screen_h());
     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
     let mut marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
     // The plugins' services the user made active (running ones are left alone), once the first
@@ -760,7 +835,8 @@ fn main() -> Result<()> {
             if let Screen::Reader(_) | Screen::Pdf(_) = screen {
                 ready(&mut dev, &mut typing, &mut marker)?;
                 screen.render(&mut dev.canvas(), &mut ctx, true);
-                marker = dev.refresh(&Refresh { rect: HEADER, waveform: Waveform::Text, flash: false, swipe: None })?;
+                marker =
+                    dev.refresh(&Refresh { rect: header_rect(), waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
         // Panel changes from the whole batch, drawn once: a drag queues many moves per frame.
@@ -778,7 +854,7 @@ fn main() -> Result<()> {
                 h.wifi = quick.connected().is_some();
                 ready(&mut dev, &mut typing, &mut marker)?;
                 h.render(&mut dev.canvas(), &mut ctx);
-                let header = Rect::new(0, 0, W, zarathustra::home::HEADER);
+                let header = Rect::new(0, 0, screen_w(), zarathustra::home::HEADER);
                 marker = dev.refresh(&Refresh { rect: header, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
@@ -1100,7 +1176,12 @@ fn main() -> Result<()> {
         } else if closed {
             ready(&mut dev, &mut typing, &mut marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
-            marker = dev.refresh(&Refresh { rect: PANEL, waveform: Waveform::Text, flash: false, swipe: None })?;
+            marker = dev.refresh(&Refresh {
+                rect: zarathustra::quick::panel(),
+                waveform: Waveform::Text,
+                flash: false,
+                swipe: None,
+            })?;
         } else if let Some((rect, waveform)) = panel.filter(|_| quick.is_open()) {
             // Wait before drawing: the MTK driver reads the framebuffer while an update runs,
             // so drawing into a region still refreshing shows half-drawn gray blocks.

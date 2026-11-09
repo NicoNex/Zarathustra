@@ -24,7 +24,7 @@ use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::reader::SWIPE;
 use crate::toc::{self, next_button, prev_button, BACK_W, FOOTER_H};
 use crate::ui::{rounded_outline, rounded_rect, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Action, Ctx, H, W};
+use crate::{screen_h, screen_w, Action, Ctx};
 
 /// Hits kept per search.
 // ponytail: a common word in a long book has thousands of hits and nobody pages through them;
@@ -35,12 +35,20 @@ const BUDGET: Duration = Duration::from_millis(100);
 /// Characters of context before and after a match in its snippet.
 const CONTEXT: (usize, usize) = (40, 110);
 
-const FIELD: Rect = Rect { x: PAD, y: TOPBAR_H + 32, w: W - 2 * PAD, h: 104 };
-const STATUS_Y: i32 = FIELD.y + FIELD.h + 58;
-pub const LIST_TOP: i32 = FIELD.y + FIELD.h + 92;
+fn field() -> Rect {
+    Rect { x: PAD, y: TOPBAR_H + 32, w: screen_w() - 2 * PAD, h: 104 }
+}
+fn status_y() -> i32 {
+    field().y + field().h + 58
+}
+pub fn list_top() -> i32 {
+    field().y + field().h + 92
+}
 pub const ROW_H: i32 = 166;
 /// Hits per screen.
-const ROWS: usize = ((H - LIST_TOP - FOOTER_H) / ROW_H) as usize;
+fn rows() -> usize {
+    ((screen_h() - list_top() - FOOTER_H) / ROW_H) as usize
+}
 
 /// A hit: where it is and how the list shows it.
 #[derive(Debug, Clone)]
@@ -126,7 +134,7 @@ impl Search {
     }
 
     fn pages(&self) -> usize {
-        self.results.len().div_ceil(ROWS).max(1)
+        self.results.len().div_ceil(rows()).max(1)
     }
 
     /// A finger held on a key: its accents, if any. Returns the area to refresh.
@@ -165,7 +173,7 @@ impl Search {
                 _ => Tap::Typed(typed),
             };
         }
-        if FIELD.contains(x0, y0) {
+        if field().contains(x0, y0) {
             self.keyboard = Some(Keyboard::default());
             return Tap::Redraw;
         }
@@ -174,16 +182,16 @@ impl Search {
             dx if dx > SWIPE => return self.flip(false),
             _ => {}
         }
-        if y0 >= H - FOOTER_H {
+        if y0 >= screen_h() - FOOTER_H {
             return match () {
                 _ if prev_button().contains(x0, y0) => self.flip(false),
                 _ if next_button().contains(x0, y0) => self.flip(true),
                 _ => Tap::None,
             };
         }
-        let row = (y0 - LIST_TOP) / ROW_H;
-        let i = self.page * ROWS + row.max(0) as usize;
-        if y0 >= LIST_TOP && (row as usize) < ROWS && i < self.results.len() {
+        let row = (y0 - list_top()) / ROW_H;
+        let i = self.page * rows() + row.max(0) as usize;
+        if y0 >= list_top() && (row as usize) < rows() && i < self.results.len() {
             Tap::Open(i)
         } else {
             Tap::None
@@ -192,7 +200,7 @@ impl Search {
 
     fn edit(&mut self, f: impl FnOnce(&mut String), typed: Typed) -> Tap {
         f(&mut self.query);
-        Tap::Typed(typed.and_text(FIELD))
+        Tap::Typed(typed.and_text(field()))
     }
 
     fn flip(&mut self, forward: bool) -> Tap {
@@ -240,7 +248,7 @@ impl Search {
         let (query, next) = self.run.as_mut()?;
         let t0 = Instant::now();
         let before = self.results.len();
-        let screen_end = (self.page + 1) * ROWS;
+        let screen_end = (self.page + 1) * rows();
         while *next < units && self.results.len() < MAX_HITS && t0.elapsed() < BUDGET {
             let i = *next;
             *next += 1;
@@ -256,7 +264,12 @@ impl Search {
             self.run = None;
         }
         let shown = before < screen_end && self.results.len() > before;
-        (self.keyboard.is_none() && (shown || done)).then_some(Rect::new(0, FIELD.bottom(), W, H - FIELD.bottom()))
+        (self.keyboard.is_none() && (shown || done)).then_some(Rect::new(
+            0,
+            field().bottom(),
+            screen_w(),
+            screen_h() - field().bottom(),
+        ))
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
@@ -280,7 +293,7 @@ impl Search {
             _ if self.results.is_empty() => t().no_results.to_string(),
             _ => lang().results(self.results.len(), self.results.len() >= MAX_HITS),
         };
-        status.draw(c, raster, &text, PAD as f32, STATUS_Y);
+        status.draw(c, raster, &text, PAD as f32, status_y());
         if self.keyboard.is_some() {
             return;
         }
@@ -288,15 +301,15 @@ impl Search {
         let chapter = Label { face: sans, size: 24.0, ink: INK_SOFT };
         let (regular, bold) =
             (Label { face: serif, size: 32.0, ink: INK }, Label { face: serif_bold, size: 32.0, ink: INK });
-        let first = self.page * ROWS;
-        for (row, f) in self.results.iter().skip(first).take(ROWS).enumerate() {
-            let y = LIST_TOP + row as i32 * ROW_H;
+        let first = self.page * rows();
+        for (row, f) in self.results.iter().skip(first).take(rows()).enumerate() {
+            let y = list_top() + row as i32 * ROW_H;
             if row > 0 {
-                c.fill(Rect::new(PAD, y, W - 2 * PAD, 2), LINE);
+                c.fill(Rect::new(PAD, y, screen_w() - 2 * PAD, 2), LINE);
             }
-            let title = chapter.fit(&f.title, (W - 2 * PAD) as f32);
+            let title = chapter.fit(&f.title, (screen_w() - 2 * PAD) as f32);
             chapter.draw(c, raster, &title, PAD as f32, y + 46);
-            let lines = rich_lines(&regular, &bold, &f.snippet, &f.bold, (W - 2 * PAD) as f32, 2);
+            let lines = rich_lines(&regular, &bold, &f.snippet, &f.bold, (screen_w() - 2 * PAD) as f32, 2);
             for (n, line) in lines.iter().enumerate() {
                 let mut x = PAD as f32;
                 for (text, b) in line {
@@ -309,13 +322,13 @@ impl Search {
 
     /// The query field: a magnifier, the query (or a placeholder) and, while typing, a caret.
     fn field(&self, c: &mut Canvas, raster: &mut Rasterizer, serif: &Face, sans: &Face) {
-        rounded_outline(c, FIELD, FIELD.h / 2, 3, INK, PAPER);
-        icon(c, Rect::new(FIELD.x + 30, FIELD.y + 30, 44, 44), INK, PAPER);
-        let x = (FIELD.x + 100) as f32;
-        let width = (FIELD.right() - 60) as f32 - x;
+        rounded_outline(c, field(), field().h / 2, 3, INK, PAPER);
+        icon(c, Rect::new(field().x + 30, field().y + 30, 44, 44), INK, PAPER);
+        let x = (field().x + 100) as f32;
+        let width = (field().right() - 60) as f32 - x;
         if self.query.is_empty() {
             let hint = Label { face: sans, size: 34.0, ink: INK_SOFT };
-            hint.draw(c, raster, t().search_book, x, hint.baseline(FIELD));
+            hint.draw(c, raster, t().search_book, x, hint.baseline(field()));
         } else {
             let text = Label { face: serif, size: 40.0, ink: INK };
             // Long queries show their end, where the typing is.
@@ -325,13 +338,13 @@ impl Search {
                 chars.next();
                 shown = chars.as_str();
             }
-            let advance = text.draw(c, raster, shown, x, text.baseline(FIELD));
+            let advance = text.draw(c, raster, shown, x, text.baseline(field()));
             if self.keyboard.is_some() {
-                c.fill(Rect::new((x + advance) as i32 + 4, FIELD.y + 26, 3, FIELD.h - 52), INK);
+                c.fill(Rect::new((x + advance) as i32 + 4, field().y + 26, 3, field().h - 52), INK);
             }
         }
         if self.keyboard.is_some() && self.query.is_empty() {
-            c.fill(Rect::new(x as i32 - 6, FIELD.y + 26, 3, FIELD.h - 52), INK);
+            c.fill(Rect::new(x as i32 - 6, field().y + 26, 3, field().h - 52), INK);
         }
     }
 }
@@ -474,20 +487,24 @@ mod tests {
         let at = key(&s, Key::Enter);
         assert_eq!(s.tap(at, at.0), Tap::Redraw);
         assert!(s.keyboard.is_none() && s.is_running());
-        assert_eq!(s.tap((FIELD.x + 200, FIELD.y + 50), FIELD.x + 200), Tap::Redraw, "the field reopens the keyboard");
+        assert_eq!(
+            s.tap((field().x + 200, field().y + 50), field().x + 200),
+            Tap::Redraw,
+            "the field reopens the keyboard"
+        );
         assert!(s.keyboard.is_some());
         assert_eq!(s.tap((50, 50), 50), Tap::Close);
     }
 
     #[test]
     fn result_rows_open_and_pages_flip() {
-        let mut s = Search { results: found(ROWS + 2), ..Search::default() };
-        let row = |r: i32| LIST_TOP + r * ROW_H + ROW_H / 2;
+        let mut s = Search { results: found(rows() + 2), ..Search::default() };
+        let row = |r: i32| list_top() + r * ROW_H + ROW_H / 2;
         assert_eq!(s.tap((600, row(1)), 600), Tap::Open(1));
         assert_eq!(s.tap((600, row(1)), 200), Tap::Redraw, "swipe left: next screen");
-        assert_eq!(s.tap((600, row(1)), 600), Tap::Open(ROWS + 1));
+        assert_eq!(s.tap((600, row(1)), 600), Tap::Open(rows() + 1));
         assert_eq!(s.tap((600, row(2)), 600), Tap::None, "past the last hit");
-        assert_eq!(s.tap((600, STATUS_Y), 600), Tap::None);
+        assert_eq!(s.tap((600, status_y()), 600), Tap::None);
     }
 
     #[test]

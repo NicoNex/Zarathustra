@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use zarathustra::reader::Reader;
 use zarathustra::sleep::render_sleep;
-use zarathustra::{first_existing, Ctx, H, W};
+use zarathustra::{first_existing, screen_h, screen_w, Ctx};
 use zarathustra_device::{Canvas, PowerEvent, Rect, Refresh, Waveform};
 
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -42,13 +42,13 @@ fn first_book() -> Option<PathBuf> {
 }
 
 fn write_pgm(path: &Path, px: &[u8]) -> Result<()> {
-    let mut out = format!("P5\n{W} {H}\n255\n").into_bytes();
+    let mut out = format!("P5\n{} {}\n255\n", screen_w(), screen_h()).into_bytes();
     out.extend_from_slice(px);
     Ok(std::fs::write(path, out)?)
 }
 
 fn canvas(px: &mut [u8]) -> Canvas<'_> {
-    Canvas { width: W, height: H, stride: W as usize, pixels: px }
+    Canvas { width: screen_w(), height: screen_h(), stride: screen_w() as usize, pixels: px }
 }
 
 fn main() -> Result<()> {
@@ -69,7 +69,7 @@ fn main() -> Result<()> {
 
     if let Some(dir) = pgm {
         std::fs::create_dir_all(&dir)?;
-        let mut px = vec![0u8; (W * H) as usize];
+        let mut px = vec![0u8; (screen_w() * screen_h()) as usize];
         let battery = Some(zarathustra_device::Battery { percent: 87, charging: false });
         if let Some(r) = &mut reader {
             r.render_sleep(&mut canvas(&mut px), &mut ctx, battery);
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
     let t0 = Instant::now();
     let log = |msg: &str| eprintln!("[{:7.3}] {msg}", t0.elapsed().as_secs_f64());
     let mut dev = zarathustra_device::open_default()?;
-    let full = Rect::new(0, 0, W, H);
+    let full = Rect::new(0, 0, screen_w(), screen_h());
     let flash = Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None };
     let draw_page = |dev: &mut Box<dyn zarathustra_device::Device>, ctx: &mut Ctx, reader: &Option<Reader>| {
         let mut c = dev.canvas();

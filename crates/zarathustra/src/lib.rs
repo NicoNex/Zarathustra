@@ -44,9 +44,34 @@ use zarathustra_engine::fonts::FontLibrary;
 use zarathustra_engine::layout::hyphen::Hyphenators;
 use zarathustra_engine::layout::paragraph::Typesetter;
 
-/// Screen size the layouts are designed for (the Kindle Paperwhite 5).
-pub const W: i32 = 1236;
-pub const H: i32 = 1648;
+/// The screen size, set once from the device at startup; the Kindle Paperwhite 5's until then
+/// (tests and desktop renders).
+static SCREEN: std::sync::OnceLock<(i32, i32)> = std::sync::OnceLock::new();
+const DEFAULT_SCREEN: (i32, i32) = (1236, 1648);
+
+/// Sets the screen size every layout uses; only the first call counts.
+pub fn set_screen(w: i32, h: i32) {
+    SCREEN.set((w, h)).ok();
+}
+
+/// Screen width in pixels.
+// shortcut: sizes across the UI are pixels for 300 dpi screens; add a dpi scale when a
+// 167/212 dpi device is ported.
+pub fn screen_w() -> i32 {
+    SCREEN.get().unwrap_or(&DEFAULT_SCREEN).0
+}
+
+/// Screen height in pixels.
+pub fn screen_h() -> i32 {
+    SCREEN.get().unwrap_or(&DEFAULT_SCREEN).1
+}
+
+/// `"1072x1448"` → `(1072, 1448)`; positive sizes only.
+pub fn parse_size(s: &str) -> Option<(i32, i32)> {
+    let (w, h) = s.split_once('x')?;
+    let (w, h) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
+}
 
 /// Device paths first, then the repo's dev assets on a desktop.
 pub fn first_existing(candidates: &[&str]) -> PathBuf {
@@ -288,6 +313,14 @@ pub enum Action {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parses_screen_sizes() {
+        assert_eq!(parse_size("1072x1448"), Some((1072, 1448)));
+        assert_eq!(parse_size("10x"), None);
+        assert_eq!(parse_size("0x5"), None);
+        assert_eq!(parse_size("-3x5"), None);
+    }
+
     use super::*;
 
     #[test]

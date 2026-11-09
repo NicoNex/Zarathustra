@@ -21,7 +21,7 @@ use zarathustra_engine::library::Format;
 
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::ui::{rounded_outline, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 const PAGE: &str = include_str!("transfer.html");
 const MAX_SIZE: u64 = 500 << 20;
@@ -29,7 +29,9 @@ const MAX_HEAD: usize = 8 << 10;
 const PORTS: std::ops::RangeInclusive<u16> = 8080..=8089;
 /// Side of the QR code with its quiet zone: about 5.5 cm, easy for a phone at arm's length.
 const QR_SIZE: i32 = 660;
-const RETRY: Rect = Rect { x: (W - 320) / 2, y: 900, w: 320, h: 96 };
+fn retry() -> Rect {
+    Rect { x: (screen_w() - 320) / 2, y: 900, w: 320, h: 96 }
+}
 
 /// What the server thread reports, in the order it happens (one upload at a time).
 enum Event {
@@ -221,7 +223,7 @@ impl Transfer {
         if y < TOPBAR_H && x < 400 {
             return Tap::Back;
         }
-        if self.url.is_empty() && RETRY.contains(x, y) {
+        if self.url.is_empty() && retry().contains(x, y) {
             self.start();
             return Tap::Redraw;
         }
@@ -239,37 +241,37 @@ impl Transfer {
         let s = t();
         topbar(c, raster, sans, serif_bold, s.back_library, s.send_books);
         let soft = Label { face: sans, size: 30.0, ink: INK_SOFT };
-        let width = (W - 2 * PAD) as f32;
+        let width = (screen_w() - 2 * PAD) as f32;
 
         if self.url.is_empty() {
             let head = Label { face: serif_bold, size: 50.0, ink: INK };
-            head.draw_centred(c, raster, s.no_wifi, W as f32 / 2.0, 560);
+            head.draw_centred(c, raster, s.no_wifi, screen_w() as f32 / 2.0, 560);
             for (n, line) in soft.wrap(s.no_wifi_hint, width - 120.0, 4).iter().enumerate() {
-                soft.draw_centred(c, raster, line, W as f32 / 2.0, 650 + n as i32 * 44);
+                soft.draw_centred(c, raster, line, screen_w() as f32 / 2.0, 650 + n as i32 * 44);
             }
-            rounded_outline(c, RETRY, RETRY.h / 2, 3, INK, PAPER);
-            Label { face: sans, size: 34.0, ink: INK }.centered(c, raster, s.retry, RETRY);
+            rounded_outline(c, retry(), retry().h / 2, 3, INK, PAPER);
+            Label { face: sans, size: 34.0, ink: INK }.centered(c, raster, s.retry, retry());
             return;
         }
 
         for (n, line) in soft.wrap(s.transfer_hint, width, 2).iter().enumerate() {
-            soft.draw_centred(c, raster, line, W as f32 / 2.0, TOPBAR_H + 80 + n as i32 * 42);
+            soft.draw_centred(c, raster, line, screen_w() as f32 / 2.0, TOPBAR_H + 80 + n as i32 * 42);
         }
         // Whole pixels per module, with the standard four-module quiet zone around.
         let side = self.qr_width as i32;
         let module = QR_SIZE / (side + 8).max(1);
-        let (x0, y0) = ((W - module * side) / 2, TOPBAR_H + 170 + 4 * module);
+        let (x0, y0) = ((screen_w() - module * side) / 2, TOPBAR_H + 170 + 4 * module);
         for (i, _) in self.qr.iter().enumerate().filter(|(_, &dark)| dark) {
             let (col, row) = ((i % self.qr_width) as i32, (i / self.qr_width) as i32);
             c.fill(Rect::new(x0 + col * module, y0 + row * module, module, module), INK);
         }
         let url_y = y0 + side * module + 4 * module + 40;
         let url = Label { face: sans_bold, size: 42.0, ink: INK };
-        url.draw_centred(c, raster, &url.fit(&self.url, width), W as f32 / 2.0, url_y);
+        url.draw_centred(c, raster, &url.fit(&self.url, width), screen_w() as f32 / 2.0, url_y);
 
         // What arrived, the latest first, as many as fit.
         let mut y = url_y + 70;
-        c.fill(Rect::new(PAD, y, W - 2 * PAD, 2), LINE);
+        c.fill(Rect::new(PAD, y, screen_w() - 2 * PAD, 2), LINE);
         y += 60;
         let done = self.files.iter().filter(|f| f.1 == Status::Done).count();
         let caption = Label { face: sans, size: 26.0, ink: INK_SOFT };
@@ -281,7 +283,7 @@ impl Transfer {
         let name = Label { face: sans, size: 30.0, ink: INK };
         for (file, status) in self.files.iter().rev() {
             y += 54;
-            if y > H - 40 {
+            if y > screen_h() - 40 {
                 break;
             }
             let state = match status {
@@ -290,7 +292,7 @@ impl Transfer {
                 Status::Failed => s.failed,
             };
             let sw = soft.width(state);
-            soft.draw(c, raster, state, W as f32 - PAD as f32 - sw, y);
+            soft.draw(c, raster, state, screen_w() as f32 - PAD as f32 - sw, y);
             name.draw(c, raster, &name.fit(file, width - sw - 32.0), PAD as f32, y);
         }
     }

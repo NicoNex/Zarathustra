@@ -16,7 +16,7 @@ use zarathustra_device::{Canvas, Rect};
 
 use crate::i18n::t;
 use crate::ui::{button, Label, INK, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// Longest query the keyboard edits (library and book search alike).
 pub const MAX_QUERY: usize = 60;
@@ -146,12 +146,12 @@ impl Keyboard {
 
 /// Left edge of half-key column `u`.
 fn unit_x(u: i32) -> i32 {
-    SIDE + u * (W - 2 * SIDE) / UNITS
+    SIDE + u * (screen_w() - 2 * SIDE) / UNITS
 }
 
 /// The keyboard band.
 pub fn area() -> Rect {
-    Rect::new(0, H - KEYBOARD_H, W, KEYBOARD_H)
+    Rect::new(0, screen_h() - KEYBOARD_H, screen_w(), KEYBOARD_H)
 }
 
 /// Copies `r` (screen coordinates, clipped to the band) from a band image into `c`.
@@ -159,7 +159,7 @@ fn blit(band: &[u8], c: &mut Canvas, r: Rect) {
     let r = r.intersect(&area()).intersect(&c.bounds());
     let top = area().y;
     for y in r.y..r.bottom() {
-        let src = (y - top) as usize * W as usize + r.x as usize;
+        let src = (y - top) as usize * screen_w() as usize + r.x as usize;
         let dst = y as usize * c.stride + r.x as usize;
         c.pixels[dst..dst + r.w as usize].copy_from_slice(&band[src..src + r.w as usize]);
     }
@@ -168,7 +168,7 @@ fn blit(band: &[u8], c: &mut Canvas, r: Rect) {
 impl Keyboard {
     /// Every key with its rectangle, top row first.
     pub fn keys(&self) -> Vec<(Key, Rect)> {
-        let top = H - KEYBOARD_H + PAD_TOP;
+        let top = screen_h() - KEYBOARD_H + PAD_TOP;
         let x = unit_x;
         let key =
             |row: i32, u0: i32, u1: i32| Rect::new(x(u0) + GAP / 2, top + row * ROW_PITCH, x(u1) - x(u0) - GAP, KEY_H);
@@ -258,7 +258,7 @@ impl Keyboard {
         }
         let n = chars.chars().count() as i32;
         let w = unit_x(2) - unit_x(0);
-        let x0 = (key.x + key.w / 2 - n * w / 2).clamp(SIDE, W - SIDE - n * w);
+        let x0 = (key.x + key.w / 2 - n * w / 2).clamp(SIDE, screen_w() - SIDE - n * w);
         let y = key.y - ROW_PITCH - 8;
         self.strip =
             chars.chars().enumerate().map(|(i, v)| (self.case(v), Rect::new(x0 + i as i32 * w, y, w, KEY_H))).collect();
@@ -286,7 +286,7 @@ impl Keyboard {
             self.pressed = None;
             self.typed(key);
             // Above the band, the strip covered the screen's own (gray) drawing.
-            let above = strip.intersect(&Rect::new(0, 0, W, area().y));
+            let above = strip.intersect(&Rect::new(0, 0, screen_w(), area().y));
             return Some((key, Typed { keys: area(), text: above }));
         }
         let pressed = self.pressed.take();
@@ -349,10 +349,10 @@ impl Keyboard {
 
     /// Both images of the band for the current state; `None` without fonts.
     fn paint(&self, ctx: &mut Ctx) -> Option<Images> {
-        let len = (W * KEYBOARD_H) as usize;
+        let len = (screen_w() * KEYBOARD_H) as usize;
         let (mut up, mut down) = (vec![PAPER; len], vec![PAPER; len]);
         for (band, pressed) in [(&mut up, false), (&mut down, true)] {
-            let mut c = Canvas { width: W, height: KEYBOARD_H, stride: W as usize, pixels: band };
+            let mut c = Canvas { width: screen_w(), height: KEYBOARD_H, stride: screen_w() as usize, pixels: band };
             self.draw_band(&mut c, ctx, pressed)?;
         }
         Some(Images { state: self.state(), up, down })
@@ -364,7 +364,7 @@ impl Keyboard {
         let Ctx { fonts, raster, .. } = ctx;
         let (serif, sans, sans_bold) =
             (crate::serif(fonts, false)?, crate::sans(fonts, false)?, crate::sans(fonts, true)?);
-        c.fill(Rect::new(0, 0, W, 3), INK);
+        c.fill(Rect::new(0, 0, screen_w(), 3), INK);
         let top = area().y;
         for (key, r) in self.keys() {
             let r = Rect::new(r.x, r.y - top, r.w, r.h);
@@ -465,7 +465,10 @@ mod tests {
             assert_eq!(keys.len(), 27 + 6);
             for (i, (_, a)) in keys.iter().enumerate() {
                 assert!(a.h >= 96 && a.w >= 96, "touch target {a:?}");
-                assert!(a.x >= 0 && a.right() <= W && a.y >= H - KEYBOARD_H && a.bottom() <= H, "{a:?}");
+                assert!(
+                    a.x >= 0 && a.right() <= screen_w() && a.y >= screen_h() - KEYBOARD_H && a.bottom() <= screen_h(),
+                    "{a:?}"
+                );
                 for (_, b) in &keys[i + 1..] {
                     assert!(a.intersect(b).is_empty(), "{a:?} overlaps {b:?}");
                 }
@@ -478,7 +481,7 @@ mod tests {
         let mut kb = Keyboard::default();
         let q = find(&kb, Key::Char('q')).expect("q");
         let p = find(&kb, Key::Char('p')).expect("p");
-        assert!(q.x < 30 && p.right() > W - 30, "the top letter row spans the width");
+        assert!(q.x < 30 && p.right() > screen_w() - 30, "the top letter row spans the width");
         // A long press on e offers è, é…; tapping one types it, tapping elsewhere just closes.
         let e = find(&kb, Key::Char('e')).expect("e");
         assert!(kb.long_press(centre(e).0, centre(e).1).is_some());
@@ -497,7 +500,7 @@ mod tests {
         assert_eq!(kb.tap(centre(bs).0, centre(bs).1), Some((Key::Backspace, Typed::keys(bs))));
         // Between keys and above the keyboard: nothing.
         assert_eq!(kb.hit(q.right() + GAP / 2, centre(q).1), None);
-        assert_eq!(kb.hit(600, H - KEYBOARD_H - 10), None);
+        assert_eq!(kb.hit(600, screen_h() - KEYBOARD_H - 10), None);
         // The layer key swaps letters for digits in place.
         let layer = find(&kb, Key::Layer).expect("layer");
         assert_eq!(kb.tap(centre(layer).0, centre(layer).1), Some((Key::Layer, Typed::keys(area()))));

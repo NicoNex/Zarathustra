@@ -12,7 +12,7 @@ use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::plugin::{LastRun, Outcome, Plugin};
 use crate::toc::{next_button, pager, prev_button, BACK_W, FOOTER_H};
 use crate::ui::{Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 const LINE_H: i32 = 42;
 
@@ -97,7 +97,7 @@ impl OutputSheet {
 
     /// Screen lines per page.
     fn per_page() -> usize {
-        ((H - TOPBAR_H - 40 - FOOTER_H) / LINE_H).max(1) as usize
+        ((screen_h() - TOPBAR_H - 40 - FOOTER_H) / LINE_H).max(1) as usize
     }
 
     fn pages(&self) -> usize {
@@ -140,7 +140,7 @@ impl OutputSheet {
         let text = Label { face: sans, size: 28.0, ink: INK };
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let heading = Label { face: sans_bold, size: 30.0, ink: INK };
-        let width = (W - 2 * PAD) as f32;
+        let width = (screen_w() - 2 * PAD) as f32;
         if self.rows.borrow().is_empty() {
             let wrapped = (self.lines.iter()).flat_map(|line| match line {
                 Line::Text(t) => {
@@ -164,7 +164,7 @@ impl OutputSheet {
                 }
                 Line::Heading(h) => {
                     heading.draw(c, raster, h, PAD as f32, y);
-                    c.fill(Rect::new(PAD, y + 12, W - 2 * PAD, 2), LINE);
+                    c.fill(Rect::new(PAD, y + 12, screen_w() - 2 * PAD, 2), LINE);
                 }
                 Line::Text(t) => drop(text.draw(c, raster, t, PAD as f32, y)),
                 Line::Gap => {}

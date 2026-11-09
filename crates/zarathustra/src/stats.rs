@@ -10,7 +10,7 @@ use zarathustra_store::Reading;
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::ui::{rounded_rect, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// Days in the bar chart.
 const CHART_DAYS: i64 = 14;
@@ -117,7 +117,7 @@ impl StatsScreen {
         topbar(c, raster, sans, serif_bold, s.back_library, s.stats);
         let today = crate::clock::local_now().0;
         let sum = summary(&self.days, today);
-        let wide = Rect::new(PAD, TOPBAR_H + 40, W - 2 * PAD, FIGURE_H);
+        let wide = Rect::new(PAD, TOPBAR_H + 40, screen_w() - 2 * PAD, FIGURE_H);
         let streak = sum.streak.to_string();
         figures(
             c,
@@ -131,7 +131,7 @@ impl StatsScreen {
         let caption = Label { face: sans, size: 24.0, ink: INK_SOFT };
         let top = wide.bottom() + 70;
         caption.draw(c, raster, s.last_days, PAD as f32, top);
-        let chart = Rect::new(PAD, top + 40, W - 2 * PAD, 520);
+        let chart = Rect::new(PAD, top + 40, screen_w() - 2 * PAD, 520);
         let secs: Vec<i64> = (today - CHART_DAYS + 1..=today).map(|d| seconds_on(&self.days, d)).collect();
         let max = secs.iter().copied().max().unwrap_or(0).max(15 * 60);
         let slot = chart.w / CHART_DAYS as i32;
@@ -157,8 +157,8 @@ impl StatsScreen {
         // The top of the scale, so the bars read as time.
         caption.draw(c, raster, &duration(max), chart.x as f32, chart.y + 20);
 
-        let totals = Rect::new(PAD, chart.bottom() + 60, W - 2 * PAD, FIGURE_H);
-        c.fill(Rect::new(PAD, totals.y - 20, W - 2 * PAD, 2), LINE);
+        let totals = Rect::new(PAD, chart.bottom() + 60, screen_w() - 2 * PAD, FIGURE_H);
+        c.fill(Rect::new(PAD, totals.y - 20, screen_w() - 2 * PAD, 2), LINE);
         figures(
             c,
             raster,
@@ -171,7 +171,7 @@ impl StatsScreen {
             ],
         );
         if self.days.is_empty() {
-            caption.draw(c, raster, s.not_read_yet, PAD as f32, H - 120);
+            caption.draw(c, raster, s.not_read_yet, PAD as f32, screen_h() - 120);
         }
     }
 }

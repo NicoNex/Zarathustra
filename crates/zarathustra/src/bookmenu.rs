@@ -5,7 +5,7 @@ use zarathustra_device::{Canvas, Rect};
 
 use crate::i18n::t;
 use crate::ui::{rounded_outline, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 const CARD_W: i32 = 600;
 /// Text inset inside the card.
@@ -191,18 +191,18 @@ impl BookMenu {
 /// the roomier side over the neighbouring book. A list row (wider than half the screen) gets
 /// it below, or above when it would not fit. Always kept on screen.
 fn place(anchor: Rect, h: i32) -> Rect {
-    let h = h.min(H - 2 * GAP);
-    let clamp_y = |y: i32| y.clamp(GAP, H - GAP - h);
-    if anchor.w > W / 2 {
+    let h = h.min(screen_h() - 2 * GAP);
+    let clamp_y = |y: i32| y.clamp(GAP, screen_h() - GAP - h);
+    if anchor.w > screen_w() / 2 {
         let below = anchor.bottom() + GAP;
-        let y = if below + h <= H - GAP { below } else { anchor.y - GAP - h };
-        return Rect::new(W - GAP - CARD_W, clamp_y(y), CARD_W, h);
+        let y = if below + h <= screen_h() - GAP { below } else { anchor.y - GAP - h };
+        return Rect::new(screen_w() - GAP - CARD_W, clamp_y(y), CARD_W, h);
     }
     let (right, left) = (anchor.right() + GAP, anchor.x - GAP - CARD_W);
     let x = match () {
-        _ if right + CARD_W <= W - GAP => right,
+        _ if right + CARD_W <= screen_w() - GAP => right,
         _ if left >= GAP => left,
-        _ if W - anchor.right() >= anchor.x => W - GAP - CARD_W,
+        _ if screen_w() - anchor.right() >= anchor.x => screen_w() - GAP - CARD_W,
         _ => GAP,
     };
     Rect::new(x, clamp_y(anchor.y), CARD_W, h)
@@ -219,7 +219,10 @@ mod tests {
     fn rows_hit_and_outside_closes() {
         let mut m = BookMenu::new("Inferno", "Dante", Some(0.4), false, 3, true, BOOK, vec!["Send".into()]);
         let r = m.rect();
-        assert!(r.x > BOOK.right() && r.right() <= W && r.y >= 0 && r.bottom() <= H, "beside the book, on screen");
+        assert!(
+            r.x > BOOK.right() && r.right() <= screen_w() && r.y >= 0 && r.bottom() <= screen_h(),
+            "beside the book, on screen"
+        );
         let rows = m.rows.clone();
         let row = |i: usize| rows[i].1;
         let mid = |r: Rect| (r.x + r.w / 2, r.y + r.h / 2);
@@ -237,8 +240,8 @@ mod tests {
         assert_eq!(m.tap((r.x + r.w / 2, r.y + 20)), Tap::None, "the head");
         assert_eq!(m.tap((BOOK.x + 10, BOOK.y + 10)), Tap::Close);
         // A right-column cover gets the card on its left; a list row, below it.
-        assert!(place(Rect::new(W - 72 - 290, 400, 290, 435), 900).right() < W - 72 - 290);
-        let row = Rect::new(72, 500, W - 144, 190);
+        assert!(place(Rect::new(screen_w() - 72 - 290, 400, 290, 435), 900).right() < screen_w() - 72 - 290);
+        let row = Rect::new(72, 500, screen_w() - 144, 190);
         assert!(place(row, 900).y > row.bottom());
     }
 }

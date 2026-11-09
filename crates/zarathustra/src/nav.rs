@@ -18,13 +18,15 @@ use crate::i18n::t;
 use crate::reader::MARGIN_BOTTOM;
 use crate::toc::Entry;
 use crate::ui::{rounded_rect, Label, INK, INK_SOFT, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// The dog-ear: taps in this square at the top-right corner toggle the bookmark. It wins
 /// over the top band that opens the menu.
 pub const CORNER: i32 = 120;
 /// The ribbon drawn on bookmarked pages, hanging from the top edge.
-const RIBBON: Rect = Rect { x: W - 96, y: 0, w: 40, h: 88 };
+fn ribbon() -> Rect {
+    Rect { x: screen_w() - 96, y: 0, w: 40, h: 88 }
+}
 /// Depth of the V cut into the ribbon's tail.
 const NOTCH: i32 = 16;
 /// Words of the page's opening kept as the bookmark's quote (shown in the list).
@@ -39,17 +41,17 @@ const MAX_TICKS: usize = 80;
 
 /// Whether a tap at `(x, y)` lands on the dog-ear corner.
 pub fn in_corner((x, y): (i32, i32)) -> bool {
-    x >= W - CORNER && y < CORNER
+    x >= screen_w() - CORNER && y < CORNER
 }
 
 /// The screen area the ribbon may cover, to refresh after a toggle.
 pub fn ribbon_area() -> Rect {
-    Rect::new(W - CORNER, 0, CORNER, CORNER)
+    Rect::new(screen_w() - CORNER, 0, CORNER, CORNER)
 }
 
 /// A black ribbon with a notched tail, hanging from the top edge.
 pub fn draw_ribbon(c: &mut Canvas) {
-    let r = RIBBON;
+    let r = ribbon();
     c.fill(Rect::new(r.x, r.y, r.w, r.h - NOTCH), INK);
     for d in 0..NOTCH {
         // Both tails narrow towards the centre as the V deepens.
@@ -303,7 +305,7 @@ impl Back {
 
 /// The "‹ Back to 37%  ×" pill, centred over the footer.
 pub fn pill() -> Rect {
-    Rect::new((W - PILL_W) / 2, H - MARGIN_BOTTOM + 24, PILL_W, PILL_H)
+    Rect::new((screen_w() - PILL_W) / 2, screen_h() - MARGIN_BOTTOM + 24, PILL_W, PILL_H)
 }
 
 /// The pill with its paper halo: what drawing or removing it repaints.
@@ -591,8 +593,8 @@ mod tests {
 
     #[test]
     fn corner_wins_over_the_menu_band() {
-        assert!(in_corner((W - 10, 10)) && in_corner((W - CORNER, CORNER - 1)));
-        assert!(!in_corner((W - CORNER - 1, 10)) && !in_corner((W - 10, CORNER)));
+        assert!(in_corner((screen_w() - 10, 10)) && in_corner((screen_w() - CORNER, CORNER - 1)));
+        assert!(!in_corner((screen_w() - CORNER - 1, 10)) && !in_corner((screen_w() - 10, CORNER)));
         const { assert!(CORNER <= crate::reader::TOP_BAND) };
     }
 }

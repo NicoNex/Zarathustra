@@ -11,7 +11,7 @@ use crate::i18n::{lang, t};
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
 use crate::toc::BACK_W;
 use crate::ui::{button, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{screen_h, screen_w, Ctx};
 
 /// Book title, author and count under the top bar.
 const INTRO_H: i32 = 200;
@@ -76,18 +76,18 @@ impl Notebook {
         if let (Some(serif), Some(sans)) = (ctx.serif(false), ctx.sans(false)) {
             let quote = Label { face: serif, size: QUOTE_SIZE, ink: INK };
             let chapter = Label { face: sans, size: 24.0, ink: INK_SOFT };
-            let width = (W - PAD - QUOTE_X) as f32;
+            let width = (screen_w() - PAD - QUOTE_X) as f32;
             let mut y = LIST_TOP;
             for (index, a) in highlights.iter().enumerate() {
                 let text = a.data.quote.as_ref().map_or("", |q| q.exact.as_str());
                 let lines = quote.wrap(text, width, MAX_LINES);
                 let ch = a.data.chapter.as_deref().filter(|c| !c.is_empty()).map(|c| chapter.fit(c, width));
                 let h = 2 * ENTRY_PAD + lines.len().max(1) as i32 * QUOTE_LINE + ch.as_ref().map_or(0, |_| CHAPTER_H);
-                if y + h > H - FOOTER_H && pages.last().is_some_and(|p| !p.is_empty()) {
+                if y + h > screen_h() - FOOTER_H && pages.last().is_some_and(|p| !p.is_empty()) {
                     pages.push(Vec::new());
                     y = LIST_TOP;
                 }
-                let item = Item { index, chapter: ch, lines, rect: Rect::new(0, y, W, h) };
+                let item = Item { index, chapter: ch, lines, rect: Rect::new(0, y, screen_w(), h) };
                 if let Some(p) = pages.last_mut() {
                     p.push(item);
                 }
@@ -98,11 +98,16 @@ impl Notebook {
     }
 
     fn prev_button() -> Rect {
-        Rect::new(PAD, H - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
+        Rect::new(PAD, screen_h() - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
     }
 
     fn next_button() -> Rect {
-        Rect::new(W - PAD - PAGE_BUTTON_W, H - FOOTER_H + (FOOTER_H - ROW_H) / 2, PAGE_BUTTON_W, ROW_H)
+        Rect::new(
+            screen_w() - PAD - PAGE_BUTTON_W,
+            screen_h() - FOOTER_H + (FOOTER_H - ROW_H) / 2,
+            PAGE_BUTTON_W,
+            ROW_H,
+        )
     }
 
     fn flip(&mut self, forward: bool) -> Tap {
@@ -124,7 +129,7 @@ impl Notebook {
         if y0 < TOPBAR_H {
             return if x0 < BACK_W { Tap::Back } else { Tap::None };
         }
-        if y0 >= H - FOOTER_H {
+        if y0 >= screen_h() - FOOTER_H {
             return match () {
                 _ if Self::prev_button().contains(x0, y0) => self.flip(false),
                 _ if Self::next_button().contains(x0, y0) => self.flip(true),
@@ -145,14 +150,14 @@ impl Notebook {
         };
         topbar(c, raster, sans, serif_bold, t().back_library, t().highlights);
 
-        let width = (W - 2 * PAD) as f32;
+        let width = (screen_w() - 2 * PAD) as f32;
         let title = Label { face: serif_bold, size: 46.0, ink: INK };
         title.draw(c, raster, &title.fit(&self.title, width), PAD as f32, TOPBAR_H + 82);
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let count = lang().highlights(self.highlights.len());
         let byline = if self.author.is_empty() { count } else { format!("{}  ·  {count}", self.author) };
         soft.draw(c, raster, &soft.fit(&byline, width), PAD as f32, TOPBAR_H + 134);
-        c.fill(Rect::new(PAD, LIST_TOP - 2, W - 2 * PAD, 2), LINE);
+        c.fill(Rect::new(PAD, LIST_TOP - 2, screen_w() - 2 * PAD, 2), LINE);
 
         if self.highlights.is_empty() {
             soft.draw(c, raster, t().no_highlights, PAD as f32, LIST_TOP + 90);
@@ -172,7 +177,7 @@ impl Notebook {
             for (n, line) in item.lines.iter().enumerate() {
                 quote.draw(c, raster, line, QUOTE_X as f32, y + 36 + n as i32 * QUOTE_LINE);
             }
-            c.fill(Rect::new(PAD, r.bottom() - 1, W - 2 * PAD, 1), LINE);
+            c.fill(Rect::new(PAD, r.bottom() - 1, screen_w() - 2 * PAD, 1), LINE);
         }
 
         let pages = self.pages.len();
@@ -186,7 +191,7 @@ impl Notebook {
                 button(c, Self::next_button(), false);
                 nav.centered(c, raster, t().next, Self::next_button());
             }
-            let footer = Rect::new(0, H - FOOTER_H, W, FOOTER_H);
+            let footer = Rect::new(0, screen_h() - FOOTER_H, screen_w(), FOOTER_H);
             soft.centered(c, raster, &format!("{} / {pages}", self.page + 1), footer);
         }
     }
@@ -222,7 +227,7 @@ mod tests {
         }
         let mut nb = Notebook::new(&ctx, "Inferno", "Dante", (0..12).map(highlight).collect());
         assert!(nb.pages.len() > 1, "twelve long quotes don't fit one screen");
-        assert!(nb.pages.iter().flatten().all(|i| i.rect.bottom() <= H - FOOTER_H));
+        assert!(nb.pages.iter().flatten().all(|i| i.rect.bottom() <= screen_h() - FOOTER_H));
         let first = nb.pages[0][0].rect;
         assert_eq!(nb.tap((600, first.y + 10), 600), Tap::Open(0));
         assert_eq!(nb.tap((600, first.y + 10), 300), Tap::Redraw, "swipe left: next screen");
