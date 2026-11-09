@@ -141,11 +141,11 @@ impl Prefs {
             Label { face: serif, size: 34.0, ink: INK }.draw(
                 c,
                 raster,
-                &label.fit(p.name(), text_w),
+                &label.fit(&p.display_name(), text_w),
                 r.x as f32,
                 r.y + 52,
             );
-            let about = p.manifest.as_ref().map_or_else(|e| e.clone(), |m| m.description.clone());
+            let about = p.description();
             soft.draw(c, raster, &soft.fit(&about, text_w), r.x as f32, r.y + 96);
             c.fill(Rect::new(r.x, r.bottom() - 2, r.w, 2), LINE);
         }

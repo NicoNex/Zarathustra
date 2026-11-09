@@ -1,7 +1,7 @@
-# Remote shell and file transfer, public keys only. Labels are shown as written (no
-# translations yet).
+# Remote shell and file transfer, public keys only. The strings here are the English source;
+# locales/<lang>.ftl translate them.
 display_name = "SSH"
-description = "Accesso remoto e trasferimento file, solo con chiavi"
+description = "Remote shell and file transfer, keys only"
 plugin_version = "1.0.0"
 format_version = 1
 
@@ -17,17 +17,17 @@ executable = "status"
 [[setting]]
 id = "port"
 kind = "choice"
-label = "Porta"
+label = "Port"
 options = ["22", "2222", "8022"]
 default_value = "22"
 
 [[setting]]
 id = "authorized_keys"
 kind = "list"
-label = "Chiavi autorizzate"
+label = "Authorized keys"
 list_executable = "keys"
-empty_label = "Nessuna chiave. Copia la tua chiave pubblica in un file authorized_keys nella cartella zarathustra/plugins/ssh del Kindle (via USB), poi riattiva il servizio."
+empty_label = "No keys. Copy your public key into an authorized_keys file in the Kindle's zarathustra/plugins/ssh folder (over USB), then turn the service on again."
 
 [[action]]
-menu_label = "Salva diagnostica"
+menu_label = "Save diagnostics"
 executable = "diagnose"

@@ -15,6 +15,7 @@ pub mod notebook;
 pub mod pace;
 pub mod pdfview;
 pub mod plugin;
+pub mod plugin_i18n;
 pub mod plugin_page;
 pub mod prefs;
 pub mod quick;

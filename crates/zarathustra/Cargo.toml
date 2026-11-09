@@ -22,6 +22,8 @@ toml = { version = "1.2.1", default-features = false, features = ["std", "parse"
 serde = { version = "1.0.229", features = ["derive"] }
 nix = { version = "0.31", default-features = false, features = ["signal"] }
 thiserror = "2"
+fluent-bundle = "0.16"
+unic-langid = "0.9.6"
 
 [[bin]]
 name = "zarathustra-textprobe"
