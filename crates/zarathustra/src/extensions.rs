@@ -390,7 +390,9 @@ impl Extensions {
         for &(part, r) in &parts {
             let Part::Open(i) = part else { continue };
             let p = &self.plugins[i];
-            name.draw(c, raster, &name.fit(&p.display_name(), r.w as f32), r.x as f32, r.y + 66);
+            // The `›` says the name opens the plugin's page.
+            let title = name.fit(&p.display_name(), r.w as f32 - 60.0);
+            name.draw(c, raster, &format!("{title}  ›"), r.x as f32, r.y + 66);
             let text = p.description();
             about.draw(c, raster, &about.fit(&text, r.w as f32), r.x as f32, r.y + HEAD_H + 26);
             if self.has_service(i) {

@@ -9,11 +9,12 @@ use zarathustra_device::{Canvas, Rect};
 
 use crate::extensions::{actions_in, block_height, block_layout, draw_block, run_line, tap_block, Hit};
 use crate::i18n::t;
+use crate::keyboard::{Key, Keyboard};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::outsheet::OutputSheet;
 use crate::plugin::{Kind, LastRun, Plugin, ACTIVE, AT_BOOT};
 use crate::toc::BACK_W;
-use crate::ui::{button, segmented_labels, segments, Label, INK, INK_SOFT, LINE, PAPER};
+use crate::ui::{button, rounded_outline, segmented_labels, segments, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
 const STATUS_H: i32 = 58;
@@ -22,6 +23,10 @@ const CONTROL_H: i32 = 96;
 const CONTROL_W: i32 = 520;
 const ITEM_H: i32 = 96;
 const REMOVE_W: i32 = 220;
+/// The field of a text setting being typed.
+const FIELD: Rect = Rect { x: PAD, y: TOPBAR_H + 100, w: W - 2 * PAD, h: 112 };
+/// Longest value typed into a text setting.
+const MAX_TEXT: usize = 200;
 /// The boot runs `zarathustra --start-services` (not yet: see the "start at power-on" row).
 const BOOT_HOOK: bool = false;
 
@@ -62,6 +67,15 @@ pub struct PluginPage {
     shown: Option<(bool, String)>,
     /// The last run's output, open over the page.
     sheet: Option<OutputSheet>,
+    /// A text setting being typed, over the page.
+    editing: Option<Editing>,
+}
+
+/// A text setting being typed: its index in the manifest, the text so far, the keyboard.
+struct Editing {
+    setting: usize,
+    text: String,
+    keyboard: Keyboard,
 }
 
 impl PluginPage {
@@ -79,6 +93,7 @@ impl PluginPage {
             run: None,
             shown: None,
             sheet: None,
+            editing: None,
         };
         page.reload();
         if let Err(e) = prepared {
@@ -221,6 +236,10 @@ impl PluginPage {
         if OutputSheet::forward(&mut self.sheet, (x, y)) {
             return true;
         }
+        if self.editing.is_some() {
+            self.edit_tap(x, y);
+            return true;
+        }
         if y < TOPBAR_H {
             return x >= BACK_W;
         }
@@ -259,6 +278,12 @@ impl PluginPage {
                     self.set(id, &(now + delta).clamp(minimum, maximum).to_string());
                 }
             }
+            Row::Text(i) => {
+                let text = self.values.get(&m.setting[i].id).cloned().unwrap_or_default();
+                let mut keyboard = Keyboard::default();
+                keyboard.enter = Some(t().save);
+                self.editing = Some(Editing { setting: i, text, keyboard });
+            }
             Row::Item { setting, id, .. } => {
                 if Self::remove_button(r).contains(x, y) {
                     if let Err(e) = self.plugin.remove(&self.state_dir, &setting, &id) {
@@ -276,6 +301,37 @@ impl PluginPage {
             _ => {}
         }
         true
+    }
+
+    /// A tap while typing a text setting: back cancels, the enter key saves.
+    // shortcut: every key redraws the whole page (no pressed key, no accents strip, which the
+    // app wires only for top-level keyboards); fine for short values like a port, thread
+    // `Typed` up through Extensions and Prefs if longer text is typed here.
+    fn edit_tap(&mut self, x: i32, y: i32) {
+        let Some(e) = self.editing.as_mut() else { return };
+        if y < TOPBAR_H {
+            if x < BACK_W {
+                self.editing = None;
+            }
+            return;
+        }
+        if !e.keyboard.holds(x, y) {
+            return;
+        }
+        match e.keyboard.tap(x, y).map(|(key, _)| key) {
+            Some(Key::Char(c)) if e.text.len() < MAX_TEXT => e.text.push(c),
+            Some(Key::Space) if e.text.len() < MAX_TEXT => e.text.push(' '),
+            Some(Key::Backspace) => drop(e.text.pop()),
+            Some(Key::Enter) => {
+                let (setting, text) = (e.setting, std::mem::take(&mut e.text));
+                self.editing = None;
+                let id = self.plugin.manifest.as_ref().ok().and_then(|m| m.setting.get(setting)).map(|s| s.id.clone());
+                if let Some(id) = id {
+                    self.set(&id, text.trim());
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Saves a value and applies it: the service rows start or stop the service, any other
@@ -309,6 +365,9 @@ impl PluginPage {
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
         if let Some(sheet) = &self.sheet {
             return sheet.render(c, ctx);
+        }
+        if let Some(e) = &self.editing {
+            return self.render_editing(e, c, ctx);
         }
         c.fill(c.bounds(), PAPER);
         let Ctx { fonts, raster, .. } = ctx;
@@ -365,10 +424,11 @@ impl PluginPage {
                                     .centered(c, raster, &labels[k], seg);
                             }
                         }
+                        // A button: a tap opens the keyboard.
                         _ => {
-                            let text = value.fit(&current, CONTROL_W as f32);
-                            let w = value.width(&text);
-                            value.draw(c, raster, &text, r.right() as f32 - w, mid);
+                            let b = Self::control(r);
+                            button(c, b, false);
+                            value.centered(c, raster, &value.fit(&current, (CONTROL_W - 40) as f32), b);
                         }
                     }
                 }
@@ -385,6 +445,23 @@ impl PluginPage {
                 Row::Actions => draw_block(c, raster, sans, &self.plugin, &self.block(r), self.run.as_ref()),
             }
         }
+    }
+}
+
+impl PluginPage {
+    /// The setting's name in the top bar, its field, the keyboard.
+    fn render_editing(&self, e: &Editing, c: &mut Canvas, ctx: &mut Ctx) {
+        c.fill(c.bounds(), PAPER);
+        let Ctx { fonts, raster, .. } = ctx;
+        let (Some(sans), Some(serif_bold)) = (crate::sans(fonts, false), crate::serif(fonts, true)) else { return };
+        let label = self.plugin.manifest.as_ref().ok().and_then(|m| m.setting.get(e.setting));
+        let label = label.map(|s| self.plugin.setting_label(s)).unwrap_or_default();
+        topbar(c, raster, sans, serif_bold, t().cancel, &label);
+        rounded_outline(c, FIELD, 20, 3, INK, PAPER);
+        let field = Label { face: sans, size: 40.0, ink: INK };
+        let text = field.fit_tail(&e.text, (FIELD.w - 56) as f32);
+        field.draw(c, raster, text, (FIELD.x + 28) as f32, field.baseline(FIELD));
+        e.keyboard.render(c, ctx);
     }
 }
 
@@ -424,12 +501,21 @@ mod tests {
         assert_eq!(rows.iter().any(|r| matches!(r, Row::Switch(id, ..) if id == AT_BOOT)), BOOT_HOOK);
         // No keys yet: the hint on how to add one.
         assert!(rows.iter().any(|r| matches!(r, Row::Note(n) if n.contains("authorized_keys"))));
-        let choice = |r: &Row| matches!(r, Row::Choice(_));
-        // The middle of three options: 2222.
-        tap_row(&mut page, choice, |r| {
-            let c = PluginPage::control(r);
-            c.x + c.w / 2
-        });
+        // The port is typed: a tap opens the keyboard on its value, back cancels.
+        let text = |r: &Row| matches!(r, Row::Text(_));
+        let middle = |r: Rect| r.x + r.w / 2;
+        tap_row(&mut page, text, middle);
+        assert_eq!(page.editing.as_ref().map(|e| e.text.as_str()), Some("22"));
+        assert!(page.tap((60, 60)), "back closes the keyboard, not the page");
+        assert!(page.editing.is_none());
+        tap_row(&mut page, text, middle);
+        let kb = &page.editing.as_ref().expect("keyboard up").keyboard;
+        let key = |k| kb.keys().into_iter().find(|(key, _)| *key == k).map(|(_, r)| (r.x + 5, r.y + 5));
+        let (backspace, enter) = (key(Key::Backspace).expect("backspace"), key(Key::Enter).expect("enter"));
+        page.tap(backspace);
+        page.editing.as_mut().expect("still typing").text.push_str("222");
+        page.tap(enter);
+        assert!(page.editing.is_none());
         assert_eq!(page.values.get("port").map(String::as_str), Some("2222"));
         let right = |r: Rect| PluginPage::control(r).right() - 20;
         tap_row(&mut page, |r| matches!(r, Row::Switch(id, ..) if id == ACTIVE), right);

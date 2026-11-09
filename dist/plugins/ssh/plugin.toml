@@ -16,9 +16,8 @@ executable = "status"
 
 [[setting]]
 id = "port"
-kind = "choice"
+kind = "text"
 label = "Port"
-options = ["22", "2222", "8022"]
 default_value = "22"
 
 [[setting]]

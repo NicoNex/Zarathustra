@@ -119,7 +119,7 @@ service if it is running, since its arguments may have changed.
 | `toggle` | Off / On | `default_value` (true/false); the value is `true` or `false` |
 | `choice` | one of the options | `options` (strings), `default_value` |
 | `number` | − value + | `minimum`, `maximum`, `step` (default 1), `default_value` |
-| `text` | shown, not editable yet | `default_value` |
+| `text` | a button with the value; a tap types it on the on-screen keyboard | `default_value` |
 | `list` | items, each with Remove | `list_executable`, `empty_label` (what to show when the list is empty: tell the user how to add an item) |
 
 ```toml
