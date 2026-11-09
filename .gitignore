@@ -3,3 +3,4 @@ target/
 dev-fonts/
 dev-books/
 dev-dicts
+.claude/worktrees/

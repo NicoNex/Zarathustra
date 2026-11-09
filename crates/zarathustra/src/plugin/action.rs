@@ -115,7 +115,7 @@ impl Plugin {
         }
         let started = SystemTime::now();
         let timeout = action.timeout_seconds.map(|s| s.to_string()).unwrap_or_default();
-        let label = action.menu_label.replace('\n', " ");
+        let label = self.action_label(&action).replace('\n', " ");
         std::fs::write(self.action_file("run"), format!("{}\n{timeout}\n{i}\n{label}\n", millis(started)))?;
 
         let book_path = book.map(|(p, _)| p.to_string_lossy().into_owned()).unwrap_or_default();

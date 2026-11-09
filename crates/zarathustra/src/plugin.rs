@@ -89,6 +89,8 @@ pub struct Service {
 // and selection placeholders come with those menus.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Action {
+    /// Names the action in translations (`action-<key>`); see [`Action::key`].
+    pub id: Option<String>,
     pub menu_label: String,
     #[serde(flatten)]
     pub run: Run,
@@ -119,6 +121,16 @@ pub enum Place {
 
 fn extensions_only() -> Vec<Place> {
     vec![Place::Extensions]
+}
+
+impl Action {
+    /// Its `id`, else its executable's file name.
+    pub fn key(&self) -> String {
+        self.id.clone().unwrap_or_else(|| {
+            let exe = Path::new(&self.run.executable);
+            exe.file_name().map_or_else(|| self.run.executable.clone(), |n| n.to_string_lossy().into_owned())
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +227,7 @@ pub struct Plugin {
     /// The manifest, or why it can't be used (shown in its place).
     pub manifest: std::result::Result<Manifest, String>,
     dirs: Dirs,
+    pub(crate) locales: crate::plugin_i18n::Locales,
 }
 
 /// The plugins installed in `dirs`, by name; folders with an invalid id are skipped.
@@ -233,7 +246,7 @@ pub fn discover(dirs: &Dirs) -> Vec<Plugin> {
             if let Err(e) = &manifest {
                 eprintln!("plugin {id}: {e}");
             }
-            Some(Plugin { id, manifest, dirs: dirs.clone() })
+            Some(Plugin { id, manifest, dirs: dirs.clone(), locales: Default::default() })
         })
         .collect();
     plugins.sort_by_key(|p| p.name().to_lowercase());
@@ -367,6 +380,7 @@ impl Plugin {
         let mut cmd = Command::new(self.plugin_dir().join(&run.executable));
         cmd.args(run.arguments.iter().map(|a| expand(a, &vars)));
         cmd.current_dir(self.plugin_dir());
+        cmd.env("ZARATHUSTRA_LANGUAGE", crate::i18n::lang().code());
         for (k, p) in &dirs {
             cmd.env(format!("ZARATHUSTRA_{}", k.to_ascii_uppercase()), p);
         }

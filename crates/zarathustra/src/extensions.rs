@@ -127,7 +127,8 @@ pub fn draw_block(
                 let Some(a) = m.action.get(i) else { continue };
                 let this = busy && run.is_some_and(|r| r.action == i);
                 button(c, r, false);
-                let label = if this { s.running } else { a.menu_label.as_str() };
+                let name = plugin.action_label(a);
+                let label = if this { s.running } else { name.as_str() };
                 // Another action of this plugin running: these wait, drawn soft.
                 let ink = if busy && !this { INK_SOFT } else { INK };
                 Label { ink, ..text }.centered(c, raster, label, r);
@@ -366,8 +367,8 @@ impl Extensions {
             let Part::Open(i) = part else { continue };
             drawn.push(i);
             let p = &self.plugins[i];
-            name.draw(c, raster, &name.fit(p.name(), r.w as f32), r.x as f32, r.y + 66);
-            let text = p.manifest.as_ref().map_or_else(|e| e.clone(), |m| m.description.clone());
+            name.draw(c, raster, &name.fit(&p.display_name(), r.w as f32), r.x as f32, r.y + 66);
+            let text = p.description();
             about.draw(c, raster, &about.fit(&text, r.w as f32), r.x as f32, r.y + HEAD_H + 26);
             if self.has_service(i) {
                 let sw = parts.iter().filter(|(p, _)| matches!(p, Part::Service(j, _) if *j == i)).map(|&(_, r)| r);

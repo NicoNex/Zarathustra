@@ -120,7 +120,8 @@ impl PluginPage {
             Ok(m) => m,
             Err(e) => return vec![(Row::Note(e.clone()), STATUS_H * 2)],
         };
-        let mut rows = vec![(Row::Note(m.description.clone()), STATUS_H + 20)];
+        let p = &self.plugin;
+        let mut rows = vec![(Row::Note(p.description()), STATUS_H + 20)];
         rows.extend(self.status.iter().map(|(k, v)| (Row::Status(k.clone(), v.clone()), STATUS_H)));
         rows.push((Row::Rule, 40));
         if let Some(service) = &m.service {
@@ -141,20 +142,20 @@ impl PluginPage {
             match &setting.kind {
                 Kind::Toggle { .. } => {
                     let choices = [s.off.to_string(), s.on.to_string()];
-                    rows.push((Row::Switch(setting.id.clone(), setting.label.clone(), choices), ROW_H));
+                    rows.push((Row::Switch(setting.id.clone(), p.setting_label(setting), choices), ROW_H));
                 }
                 Kind::Choice { .. } => rows.push((Row::Choice(i), ROW_H)),
                 Kind::Number { .. } => rows.push((Row::Number(i), ROW_H)),
                 Kind::Text { .. } => rows.push((Row::Text(i), ROW_H)),
-                Kind::List { empty_label, .. } => {
-                    rows.push((Row::ListLabel(setting.label.clone()), 80));
+                Kind::List { .. } => {
+                    rows.push((Row::ListLabel(p.setting_label(setting)), 80));
                     let items = self.lists.get(&setting.id).map(Vec::as_slice).unwrap_or_default();
                     for (id, text) in items {
                         let item = Row::Item { setting: setting.id.clone(), id: id.clone(), text: text.clone() };
                         rows.push((item, ITEM_H));
                     }
                     if items.is_empty() {
-                        let hint = empty_label.clone().unwrap_or_else(|| s.nothing_listed.into());
+                        let hint = p.setting_empty(setting).unwrap_or_else(|| s.nothing_listed.into());
                         rows.push((Row::Note(hint), STATUS_H * 2));
                     }
                 }
@@ -314,7 +315,7 @@ impl PluginPage {
             return;
         };
         let s = t();
-        topbar(c, raster, sans, serif_bold, s.back_settings, self.plugin.name());
+        topbar(c, raster, sans, serif_bold, s.back_settings, &self.plugin.display_name());
         let name = Label { face: serif, size: 36.0, ink: INK };
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let value = Label { face: sans, size: 30.0, ink: INK };
@@ -340,12 +341,15 @@ impl PluginPage {
                 }
                 Row::Choice(i) | Row::Number(i) | Row::Text(i) => {
                     let Some(setting) = m.and_then(|m| m.setting.get(i)) else { continue };
-                    name.draw(c, raster, &name.fit(&setting.label, (r.w - CONTROL_W - 30) as f32), r.x as f32, mid);
+                    let label = self.plugin.setting_label(setting);
+                    name.draw(c, raster, &name.fit(&label, (r.w - CONTROL_W - 30) as f32), r.x as f32, mid);
                     let current = self.values.get(&setting.id).cloned().unwrap_or_default();
                     match &setting.kind {
                         Kind::Choice { options, .. } => {
                             let on = options.iter().position(|o| *o == current);
-                            segmented_labels(c, raster, sans, 28.0, Self::control(r), options, on);
+                            let shown: Vec<String> =
+                                options.iter().map(|o| self.plugin.option_label(setting, o)).collect();
+                            segmented_labels(c, raster, sans, 28.0, Self::control(r), &shown, on);
                         }
                         Kind::Number { .. } => {
                             let labels = ["−".to_string(), current, "+".to_string()];
