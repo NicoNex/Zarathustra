@@ -114,6 +114,11 @@ pub struct MtkFb {
     stride: usize,
     pub rotate: u32,
     marker: u32,
+    /// What the app draws into. The mapping is uncached: a byte read there costs ~0.3 µs (a
+    /// third of the screen read-modify-written took 186 ms on a PW5, against 2 ms to write the
+    /// whole screen), and blending and tinting read every pixel. So drawing happens in RAM and
+    /// [`MtkFb::refresh`] copies the refreshed rectangle out, write-only.
+    back: Vec<u8>,
 }
 
 impl MtkFb {
@@ -139,7 +144,7 @@ impl MtkFb {
         if map == libc::MAP_FAILED {
             return Err(io::Error::last_os_error());
         }
-        let fb = MtkFb {
+        let mut fb = MtkFb {
             map: map.cast(),
             map_len,
             offset: var[VAR_YOFFSET] as usize * fix.line_length as usize,
@@ -148,8 +153,11 @@ impl MtkFb {
             stride: fix.line_length as usize,
             rotate: var[VAR_ROTATE],
             marker: 0,
+            back: Vec::new(),
             file,
         };
+        // Start from what the screen shows, so a partial refresh never copies out stale zeros.
+        fb.back = fb.visible().to_vec();
         // Keep the driver from silently promoting refreshes to slow REAGL.
         let mut fast = 0x8000_0000u32 | 1;
         // SAFETY: the request takes one u32.
@@ -160,12 +168,16 @@ impl MtkFb {
         Ok(fb)
     }
 
-    pub fn canvas(&mut self) -> Canvas<'_> {
+    /// The visible area of the mapping.
+    fn visible(&mut self) -> &mut [u8] {
         let len = self.stride * self.height as usize;
         assert!(self.offset + len <= self.map_len);
         // SAFETY: the visible area lies inside the mapping (asserted) and we hold &mut self.
-        let pixels = unsafe { std::slice::from_raw_parts_mut(self.map.add(self.offset), len) };
-        Canvas { width: self.width, height: self.height, stride: self.stride, pixels }
+        unsafe { std::slice::from_raw_parts_mut(self.map.add(self.offset), len) }
+    }
+
+    pub fn canvas(&mut self) -> Canvas<'_> {
+        Canvas { width: self.width, height: self.height, stride: self.stride, pixels: &mut self.back }
     }
 
     pub fn refresh(&mut self, r: &Refresh) -> io::Result<u32> {
@@ -173,6 +185,14 @@ impl MtkFb {
         if rect.is_empty() {
             return Ok(0);
         }
+        let (x, w, stride) = (rect.x as usize, rect.w as usize, self.stride);
+        let back = std::mem::take(&mut self.back);
+        let fb = self.visible();
+        for y in rect.y as usize..rect.bottom() as usize {
+            let row = y * stride + x..y * stride + x + w;
+            fb[row.clone()].copy_from_slice(&back[row]);
+        }
+        self.back = back;
         self.marker = self.marker.wrapping_add(1).max(1);
         let (waveform_mode, mut flags) = match r.waveform {
             Waveform::Full => (WAVEFORM_GC16, 0),
