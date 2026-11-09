@@ -271,6 +271,10 @@ impl PluginPage {
                     } else if segs[2].contains(x, y) {
                         step
                     } else {
+                        // The value itself: typed (a port is too far for − and +).
+                        let text = self.values.get(&m.setting[i].id).cloned().unwrap_or_default();
+                        let keyboard = Keyboard::numbers(t().save);
+                        self.editing = Some(Editing { setting: i, text, keyboard });
                         return true;
                     };
                     let id = &m.setting[i].id;
@@ -303,8 +307,9 @@ impl PluginPage {
         true
     }
 
-    /// A tap while typing a text setting: back cancels, the enter key saves.
-    // shortcut: every key redraws the whole page (no pressed key, no accents strip, which the
+    /// A tap while typing a setting: back cancels, the enter key saves (a number clamped to
+    /// its range; anything else typed for one is not taken).
+    // ponytail: every key redraws the whole page (no pressed key, no accents strip, which the
     // app wires only for top-level keyboards); fine for short values like a port, thread
     // `Typed` up through Extensions and Prefs if longer text is typed here.
     fn edit_tap(&mut self, x: i32, y: i32) {
@@ -319,16 +324,21 @@ impl PluginPage {
             return;
         }
         match e.keyboard.tap(x, y).map(|(key, _)| key) {
-            Some(Key::Char(c)) if e.text.len() < MAX_TEXT => e.text.push(c),
+            Some(Key::Char(c)) if e.text.len() + c.len_utf8() <= MAX_TEXT => e.text.push(c),
             Some(Key::Space) if e.text.len() < MAX_TEXT => e.text.push(' '),
             Some(Key::Backspace) => drop(e.text.pop()),
             Some(Key::Enter) => {
-                let (setting, text) = (e.setting, std::mem::take(&mut e.text));
+                let Some(s) = self.plugin.manifest.as_ref().ok().and_then(|m| m.setting.get(e.setting)) else { return };
+                let value = match s.kind {
+                    Kind::Number { minimum, maximum, .. } => match e.text.trim().parse::<i64>() {
+                        Ok(n) => n.clamp(minimum, maximum).to_string(),
+                        Err(_) => return,
+                    },
+                    _ => e.text.trim().to_string(),
+                };
+                let id = s.id.clone();
                 self.editing = None;
-                let id = self.plugin.manifest.as_ref().ok().and_then(|m| m.setting.get(setting)).map(|s| s.id.clone());
-                if let Some(id) = id {
-                    self.set(&id, text.trim());
-                }
+                self.set(&id, &value);
             }
             _ => {}
         }
@@ -501,14 +511,17 @@ mod tests {
         assert_eq!(rows.iter().any(|r| matches!(r, Row::Switch(id, ..) if id == AT_BOOT)), BOOT_HOOK);
         // No keys yet: the hint on how to add one.
         assert!(rows.iter().any(|r| matches!(r, Row::Note(n) if n.contains("authorized_keys"))));
-        // The port is typed: a tap opens the keyboard on its value, back cancels.
-        let text = |r: &Row| matches!(r, Row::Text(_));
-        let middle = |r: Rect| r.x + r.w / 2;
-        tap_row(&mut page, text, middle);
+        // The port's value is typed: a tap opens the keyboard on it, back cancels.
+        let number = |r: &Row| matches!(r, Row::Number(_));
+        let middle = |r: Rect| {
+            let c = PluginPage::control(r);
+            c.x + c.w / 2
+        };
+        tap_row(&mut page, number, middle);
         assert_eq!(page.editing.as_ref().map(|e| e.text.as_str()), Some("22"));
         assert!(page.tap((60, 60)), "back closes the keyboard, not the page");
         assert!(page.editing.is_none());
-        tap_row(&mut page, text, middle);
+        tap_row(&mut page, number, middle);
         let kb = &page.editing.as_ref().expect("keyboard up").keyboard;
         let key = |k| kb.keys().into_iter().find(|(key, _)| *key == k).map(|(_, r)| (r.x + 5, r.y + 5));
         let (backspace, enter) = (key(Key::Backspace).expect("backspace"), key(Key::Enter).expect("enter"));
@@ -517,6 +530,17 @@ mod tests {
         page.tap(enter);
         assert!(page.editing.is_none());
         assert_eq!(page.values.get("port").map(String::as_str), Some("2222"));
+        // Out of range is clamped; not a number is not taken.
+        for (typed, saved) in [("70000", Some("65535")), ("22a", None)] {
+            tap_row(&mut page, number, middle);
+            page.editing.as_mut().expect("typing").text = typed.into();
+            page.tap(enter);
+            assert_eq!(page.editing.is_some(), saved.is_none(), "{typed}");
+            if let Some(v) = saved {
+                assert_eq!(page.values.get("port").map(String::as_str), Some(v));
+            }
+            page.editing = None;
+        }
         let right = |r: Rect| PluginPage::control(r).right() - 20;
         tap_row(&mut page, |r| matches!(r, Row::Switch(id, ..) if id == ACTIVE), right);
         assert!(page.flag(ACTIVE));

@@ -4,8 +4,8 @@
 set -u
 DIR=$(cd "$(dirname "$0")" && pwd)
 PORT=${ZARATHUSTRA_SETTING_PORT:-22}
-# Typed on the Kindle: anything but a port number 1-65535 means 22, so a typo never locks
-# the way in.
+# Anything but a port number 1-65535 (the app clamps it; a value saved by an older build
+# may not be) means 22, so a bad value never locks the way in.
 case $PORT in "" | *[!0-9]*) PORT=22 ;; esac
 [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || PORT=22
 DATA=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}

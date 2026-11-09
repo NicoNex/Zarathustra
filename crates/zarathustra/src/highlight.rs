@@ -45,6 +45,24 @@ pub const EDGE_REPEAT: Duration = Duration::from_millis(1200);
 const HANDLE_R: i32 = 22;
 const GRAB: i32 = 70;
 
+/// Marks band `r` of a selection or an opened search hit over drawn text: the highlight gray
+/// and a bar under it, which still shows in the black-and-white waveform.
+pub(crate) fn mark(c: &mut Canvas, r: Rect) {
+    c.darken(r, HIGHLIGHT_GRAY);
+    c.fill(Rect::new(r.x, r.bottom() + 2, r.w, SELECTION_BAR), INK);
+}
+
+/// The book's row in `store` (added if new) and its highlights drawn on pages.
+pub(crate) fn load(
+    store: &Store,
+    key: &str,
+    entry: &BookEntry,
+) -> zarathustra_store::Result<(BookId, Vec<Annotation>)> {
+    let id = store.ensure_book(key, entry)?;
+    let saved = store.annotations(id)?.into_iter().filter(|a| is_drawn(a.data.kind)).collect();
+    Ok((id, saved))
+}
+
 /// A position in a laid-out chapter: block index and byte offset in the block's text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TextPos {
@@ -350,13 +368,16 @@ impl Highlights {
                 modified: std::time::SystemTime::UNIX_EPOCH,
                 cover_thumb: None,
             };
-            let id = store.ensure_book(&key, &entry)?;
-            Ok((store, id))
+            let (id, saved) = load(&store, &key, &entry)?;
+            Ok(((store, id), saved))
         });
-        let store = store.map_err(|e| eprintln!("highlights: {e}")).ok();
-        let saved =
-            store.as_ref().and_then(|(s, id)| s.annotations(*id).map_err(|e| eprintln!("highlights: {e}")).ok());
-        let saved = saved.unwrap_or_default().into_iter().filter(|a| is_drawn(a.data.kind)).collect();
+        let (store, saved) = match store {
+            Ok((store, saved)) => (Some(store), saved),
+            Err(e) => {
+                eprintln!("highlights: {e}");
+                (None, Vec::new())
+            }
+        };
         Highlights { store, saved, ..Highlights::default() }
     }
 

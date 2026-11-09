@@ -24,7 +24,7 @@ use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::reader::SWIPE;
 use crate::toc::{self, next_button, prev_button, BACK_W, FOOTER_H};
 use crate::ui::{rounded_outline, rounded_rect, Label, INK, INK_SOFT, LINE, PAPER};
-use crate::{Ctx, H, W};
+use crate::{Action, Ctx, H, W};
 
 /// Hits kept per search.
 // ponytail: a common word in a long book has thousands of hits and nobody pages through them;
@@ -95,6 +95,34 @@ impl Search {
 
     pub fn is_running(&self) -> bool {
         self.run.is_some()
+    }
+
+    /// Opens the search in `slot`, on the last results (or the search under way) when there
+    /// are some.
+    pub fn show(slot: &mut Option<Search>) {
+        match slot {
+            Some(s) if !s.results.is_empty() || s.is_running() => s.open = true,
+            _ => *slot = Some(Search::new()),
+        }
+    }
+
+    /// A tap as the view over the search sees it: what to redraw, or (`Err`) the hit to open.
+    /// Leaving or opening a hit closes the search.
+    pub fn tap_view(&mut self, start: (i32, i32), x: i32) -> Result<Action, Found> {
+        Ok(match self.tap(start, x) {
+            Tap::None => Action::None,
+            Tap::Redraw => Action::Redraw { turn: None },
+            Tap::Typed(t) => Action::Typed(t),
+            Tap::Close => {
+                self.open = false;
+                Action::Redraw { turn: None }
+            }
+            Tap::Open(i) => {
+                let Some(hit) = self.results.get(i).cloned() else { return Ok(Action::None) };
+                self.open = false;
+                return Err(hit);
+            }
+        })
     }
 
     fn pages(&self) -> usize {

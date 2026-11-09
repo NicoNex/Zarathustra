@@ -11,13 +11,13 @@ use zarathustra_device::{Canvas, Rect};
 use zarathustra_engine::image::{self, GrayImage};
 use zarathustra_engine::pdf::{PageText, Pdf};
 
+use crate::highlight::mark;
 use crate::keyboard::Keyboard;
 use crate::menu::{self, Control};
 use crate::pdfmarks::{bands, PdfMarks, Place};
 use crate::reader::{footer, header, Position, BACK_ZONE, MARGIN_BOTTOM, MARGIN_TOP, SWIPE, TOP_BAND};
-use crate::search::{self, Found, Search};
+use crate::search::{Found, Search};
 use crate::toc::{self, Toc};
-use crate::ui::INK;
 use crate::{Action, Ctx, H, W};
 
 /// Space left and right of the page: cropped pages run almost edge to edge.
@@ -39,15 +39,20 @@ pub struct PdfView {
     // ponytail: renders on the turn; pre-rendering the next page while idle would hide the
     // MuPDF time on heavy (scanned) pages.
     rendered: Option<Rendered>,
-    /// The search (kept while closed, for its results) and the hit opened from it: its page
-    /// and byte range in the page's text, marked until the next turn.
+    /// The search (kept while closed, for its results) and the hit opened from it: its
+    /// byte range in the page's text, marked until the next turn.
     search: Option<Search>,
-    found: Option<(usize, Range<usize>)>,
+    found: Option<Range<usize>>,
     marks: PdfMarks,
     /// Where the page read is saved, and the book's key there.
     store: Option<std::rc::Rc<zarathustra_store::Store>>,
     path: PathBuf,
     pub clock: bool,
+}
+
+/// The title of the outline entry `page` is in: the last one starting on or before it.
+fn entry_at(contents: &[toc::Entry], page: usize) -> Option<&str> {
+    contents.iter().rev().find(|e| e.chapter <= page).map(|e| e.title.as_str())
 }
 
 /// A page as shown: its image, where the image is, and its text.
@@ -149,24 +154,13 @@ impl PdfView {
                 }
             };
         }
-        if let Some(s) = self.search.as_mut().filter(|s| s.open) {
-            return match s.tap((x0, y0), x) {
-                search::Tap::None => Action::None,
-                search::Tap::Redraw => Action::Redraw { turn: None },
-                search::Tap::Typed(t) => Action::Typed(t),
-                search::Tap::Close => {
-                    s.open = false;
-                    Action::Redraw { turn: None }
-                }
-                search::Tap::Open(i) => {
-                    let Some(hit) = s.results.get(i).cloned() else { return Action::None };
-                    s.open = false;
-                    self.menu = false;
-                    self.goto(hit.chapter);
-                    self.found = Some((hit.chapter, hit.range));
-                    Action::Redraw { turn: None }
-                }
-            };
+        if let Some(s) = self.search_open_mut() {
+            return s.tap_view((x0, y0), x).unwrap_or_else(|hit| {
+                self.menu = false;
+                self.goto(hit.chapter);
+                self.found = Some(hit.range);
+                Action::Redraw { turn: None }
+            });
         }
         if self.menu {
             let hit = menu::controls(false).into_iter().find(|(_, r)| r.contains(x0, y0));
@@ -192,11 +186,12 @@ impl PdfView {
                 }
             };
         }
-        // A tap on a highlight, or anywhere while text is selected, is the highlights'.
-        if (x - x0).abs() <= SWIPE {
-            let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.clone());
-            if let Some(r) = self.rendered.as_ref().filter(|r| r.page == self.page) {
-                if let Some(rect) = self.marks.tap(&r.text, &r.place, (x0, y0), chapter.as_deref()) {
+        // A tap anywhere while text is selected, or on a highlight below the menu band, is the
+        // highlights'.
+        if (x - x0).abs() <= SWIPE && (self.marks.is_active() || y0 >= TOP_BAND) {
+            let chapter = entry_at(&self.contents, self.page);
+            if let Some(r) = &self.rendered {
+                if let Some(rect) = self.marks.tap(&r.text, &r.place, (x0, y0), chapter) {
                     return Action::Region(rect);
                 }
             }
@@ -218,7 +213,7 @@ impl PdfView {
         }
     }
 
-    /// The outline entry being read: the last one starting on or before this page.
+    /// The index of the outline entry being read: the last one starting on or before this page.
     fn current_entry(&self) -> Option<usize> {
         self.contents.iter().rposition(|e| e.chapter <= self.page)
     }
@@ -229,14 +224,15 @@ impl PdfView {
 
     /// Opens the search over the page, on the last results when there are some.
     pub fn show_search(&mut self) {
-        match &mut self.search {
-            Some(s) if !s.results.is_empty() => s.open = true,
-            _ => self.search = Some(Search::new()),
-        }
+        Search::show(&mut self.search);
     }
 
     fn search_open(&self) -> Option<&Search> {
         self.search.as_ref().filter(|s| s.open)
+    }
+
+    fn search_open_mut(&mut self) -> Option<&mut Search> {
+        self.search.as_mut().filter(|s| s.open)
     }
 
     /// A search shown is under way: call [`PdfView::search_step`] until it is not.
@@ -250,8 +246,10 @@ impl PdfView {
         self.search.as_mut().filter(|s| s.open)?.step_with(pdf.page_count(), |query, page, limit| {
             let Ok(text) = pdf.text(page) else { return Vec::new() };
             let hits = query.find(&text.text, limit);
-            let entry = contents.iter().rev().find(|e| e.chapter <= page).map(|e| e.title.as_str());
-            let title = match entry {
+            if hits.is_empty() {
+                return Vec::new();
+            }
+            let title = match entry_at(contents, page) {
                 Some(e) => format!("{e} · p. {}", page + 1),
                 None => format!("p. {}", page + 1),
             };
@@ -266,31 +264,31 @@ impl PdfView {
 
     /// The finger went down: a key of the search keyboard shows pressed. Returns its area.
     pub fn press(&mut self, at: (i32, i32)) -> Option<Rect> {
-        self.search.as_mut().filter(|s| s.open)?.press(at)
+        self.search_open_mut()?.press(at)
     }
 
     /// A finger held still: a key's accents on the search keyboard, else the word under it
     /// selected on the page. The area to refresh.
     pub fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
-        if let Some(s) = self.search.as_mut().filter(|s| s.open) {
+        if let Some(s) = self.search_open_mut() {
             return s.long_press(at);
         }
         if self.menu || self.toc.is_some() {
             return None;
         }
-        let r = self.rendered.as_ref().filter(|r| r.page == self.page)?;
+        let r = self.rendered.as_ref()?;
         self.marks.long_press(&r.text, &r.place, at)
     }
 
     /// The finger moved while selecting.
     pub fn drag(&mut self, at: (i32, i32)) -> Option<Rect> {
-        let r = self.rendered.as_ref().filter(|r| r.page == self.page)?;
+        let r = self.rendered.as_ref()?;
         self.marks.drag(&r.text, &r.place, at)
     }
 
     /// The finger lifted after a long press: the actions for the selection.
     pub fn release(&mut self) -> Option<Rect> {
-        let r = self.rendered.as_ref().filter(|r| r.page == self.page)?;
+        let r = self.rendered.as_ref()?;
         self.marks.release(&r.text, &r.place)
     }
 
@@ -302,14 +300,10 @@ impl PdfView {
         }
         let t = std::time::Instant::now();
         let (w, h) = (W - 2 * GUTTER, H - MARGIN_TOP - MARGIN_BOTTOM);
-        self.rendered = match self.pdf.render_framed(self.page, w as u32, h as u32, true) {
-            Ok((img, frame)) => {
+        self.rendered = match self.pdf.render_with_text(self.page, w as u32, h as u32, true) {
+            Ok((img, frame, text)) => {
                 let x = GUTTER + (w - img.width as i32) / 2;
                 let y = MARGIN_TOP + (h - img.height as i32) / 2;
-                let text = self.pdf.text(self.page).unwrap_or_else(|e| {
-                    eprintln!("page {} text: {e}", self.page);
-                    PageText::default()
-                });
                 self.marks.page_loaded(self.page, &text);
                 Some(Rendered { page: self.page, img, place: Place { x, y, frame }, text })
             }
@@ -333,23 +327,17 @@ impl PdfView {
         if let Some(r) = &self.rendered {
             image::draw(c, &r.img, r.place.x, r.place.y);
             // An opened search hit: gray over the text and a rule beneath, as in the reader.
-            if let Some((_, range)) = self.found.as_ref().filter(|(p, _)| *p == r.page) {
-                for b in bands(&r.text, &r.place, range) {
-                    c.darken(b, 215);
-                    c.fill(Rect::new(b.x, b.bottom() + 2, b.w, 4), INK);
-                }
+            if let Some(range) = &self.found {
+                bands(&r.text, &r.place, range).into_iter().for_each(|b| mark(c, b));
             }
-            if !self.menu {
-                self.marks.render(c, ctx, &r.text, &r.place);
-            }
+            self.marks.render(c, ctx, &r.text, &r.place);
         }
         if self.clock {
             header(c, ctx);
         }
         footer(c, ctx, FOOTER_MARGIN, self.progress(), (self.page, self.pages()));
         if self.menu {
-            let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
-            let chapter = chapter.or((!self.contents.is_empty()).then_some(""));
+            let chapter = entry_at(&self.contents, self.page).or((!self.contents.is_empty()).then_some(""));
             menu::render(c, ctx, None, &self.title, chapter);
         }
     }

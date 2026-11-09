@@ -55,6 +55,59 @@ impl Screen {
         }
     }
 
+    /// A finger held still at `at`: a word selected (or a key's accents). The area to refresh.
+    fn long_press(&mut self, at: (i32, i32)) -> Option<Rect> {
+        match self {
+            Screen::Reader(r) => r.long_press(at),
+            Screen::Pdf(p) => p.long_press(at),
+            Screen::Home(_) => None,
+        }
+    }
+
+    /// The finger moved while selecting.
+    fn drag(&mut self, at: (i32, i32)) -> Option<Rect> {
+        match self {
+            Screen::Reader(r) => r.drag(at),
+            Screen::Pdf(p) => p.drag(at),
+            Screen::Home(_) => None,
+        }
+    }
+
+    /// The finger lifted after a long press: the actions for the selection.
+    fn release(&mut self, ctx: &mut Ctx) -> Option<Rect> {
+        match self {
+            Screen::Reader(r) => r.release(ctx),
+            Screen::Pdf(p) => p.release(),
+            Screen::Home(_) => None,
+        }
+    }
+
+    /// The finger went down: a keyboard key under it shows pressed.
+    fn press(&mut self, at: (i32, i32)) -> Option<Rect> {
+        match self {
+            Screen::Reader(r) => r.press(at),
+            Screen::Home(h) => h.press(at),
+            Screen::Pdf(p) => p.press(at),
+        }
+    }
+
+    /// A book search is under way: the loop calls [`Screen::search_step`] between events.
+    fn is_searching(&self) -> bool {
+        match self {
+            Screen::Reader(r) => r.is_searching(),
+            Screen::Pdf(p) => p.is_searching(),
+            Screen::Home(_) => false,
+        }
+    }
+
+    fn search_step(&mut self) -> Option<Rect> {
+        match self {
+            Screen::Reader(r) => r.search_step(),
+            Screen::Pdf(p) => p.search_step(),
+            Screen::Home(_) => None,
+        }
+    }
+
     /// Reading stops for now (sleep, USB, exit): the page's time so far is logged and its
     /// clock paused until the loop's next [`Reader::clock`].
     fn away(&mut self) {
@@ -122,12 +175,7 @@ impl Press {
     fn fire(&mut self, screen: &mut Screen, start: (i32, i32), selection: &mut Option<Rect>) {
         self.at = None;
         let typing = screen.keyboard().is_some();
-        let rect = match screen {
-            Screen::Reader(r) => r.long_press(start),
-            Screen::Pdf(p) => p.long_press(start),
-            Screen::Home(_) => None,
-        };
-        if let Some(rect) = rect {
+        if let Some(rect) = screen.long_press(start) {
             // Accents on the search keyboard are tapped next, not dragged over.
             self.select(rect, !typing, selection);
         }
@@ -442,7 +490,9 @@ fn main() -> Result<()> {
             let centre = |r: Rect| (r.x + r.w / 2, r.y + r.h / 2);
             let keys = zarathustra::keyboard::Keyboard::default().keys();
             let key = |k: zarathustra::keyboard::Key| keys.iter().find(|(key, _)| *key == k).map(|(_, r)| centre(*r));
-            let typed = query.chars().map(zarathustra::keyboard::Key::Char).chain([zarathustra::keyboard::Key::Enter]);
+            let typed = (query.chars())
+                .map(|c| if c == ' ' { zarathustra::keyboard::Key::Space } else { zarathustra::keyboard::Key::Char(c) })
+                .chain([zarathustra::keyboard::Key::Enter]);
             for at in typed.filter_map(key) {
                 p.tap(at, at.0);
             }
@@ -615,11 +665,7 @@ fn main() -> Result<()> {
             _ => None,
         };
         // A search under way only peeks at the input queue between chapters.
-        let searching = match &screen {
-            Screen::Reader(r) => r.is_searching(),
-            Screen::Pdf(p) => p.is_searching(),
-            Screen::Home(_) => false,
-        } && !quick.is_open();
+        let searching = screen.is_searching() && !quick.is_open();
         // The send-books screen checks for arriving books every second; the home looks for
         // new books every half minute (a walk and a stat per file).
         if let Screen::Home(h) = &mut screen {
@@ -813,12 +859,7 @@ fn main() -> Result<()> {
                         }
                     }
                     // A search keyboard key under the finger inverts at once, black and white.
-                    let pressed = match &mut screen {
-                        Screen::Reader(r) => r.press((t.x, t.y)),
-                        Screen::Home(h) => h.press((t.x, t.y)),
-                        Screen::Pdf(p) => p.press((t.x, t.y)),
-                    };
-                    if let Some(rect) = pressed {
+                    if let Some(rect) = screen.press((t.x, t.y)) {
                         // Copied from the keyboard's own image: nothing else is drawn.
                         if !screen.keyboard().is_some_and(|kb| kb.draw_key(&mut typing.canvas(), rect)) {
                             screen.render(&mut typing.canvas(), &mut ctx, quick.settings().clock);
@@ -830,12 +871,7 @@ fn main() -> Result<()> {
                 Phase::Move => {
                     let Some(start) = down else { continue };
                     if press.selecting {
-                        let dragged = match &mut screen {
-                            Screen::Reader(r) => r.drag((t.x, t.y)),
-                            Screen::Pdf(p) => p.drag((t.x, t.y)),
-                            Screen::Home(_) => None,
-                        };
-                        if let Some(rect) = dragged {
+                        if let Some(rect) = screen.drag((t.x, t.y)) {
                             selection = Some(selection.map_or(rect, |s| s.union(&rect)));
                         }
                     } else if (t.x - start.0).abs() > SLOP || (t.y - start.1).abs() > SLOP {
@@ -860,12 +896,7 @@ fn main() -> Result<()> {
             lifted.frames.log();
             if lifted.fired {
                 // The end of a long press: show the actions for the selection, if any.
-                let released = match &mut screen {
-                    Screen::Reader(r) => r.release(&mut ctx),
-                    Screen::Pdf(p) => p.release(),
-                    Screen::Home(_) => None,
-                };
-                if let Some(rect) = released {
+                if let Some(rect) = screen.release(&mut ctx) {
                     // Drag frames of this batch are not drawn yet: cover them too.
                     let rect = selection.map_or(rect, |s| s.union(&rect));
                     let rect = if lifted.turned { full } else { rect };
@@ -1028,12 +1059,7 @@ fn main() -> Result<()> {
                 marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
-        let stepped = match (&mut screen, quick.is_open()) {
-            (Screen::Reader(r), false) => r.search_step(),
-            (Screen::Pdf(p), false) => p.search_step(),
-            _ => None,
-        };
-        if let Some(rect) = stepped {
+        if let Some(rect) = (!quick.is_open()).then(|| screen.search_step()).flatten() {
             ready(&mut dev, &mut typing, &mut marker)?;
             screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
             marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;

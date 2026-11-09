@@ -14,8 +14,7 @@ use zarathustra_engine::library::{BookEntry, Format};
 use zarathustra_engine::pdf::{Frame, PageText};
 use zarathustra_store::{book_key, Annotation, AnnotationData, BookId, Color, Kind, Store};
 
-use crate::highlight::{word_at, Button, Popup, HIGHLIGHT_GRAY, SELECTION_BAR};
-use crate::ui::INK;
+use crate::highlight::{load, mark, word_at, Button, Popup, HIGHLIGHT_GRAY};
 use crate::Ctx;
 
 /// How far (screen pixels) from a line of text a press still lands on it.
@@ -45,8 +44,9 @@ impl Place {
     }
 }
 
-/// The byte offset of the character nearest `at`, if a line of text is within reach.
-fn hit(text: &PageText, place: &Place, at: (i32, i32)) -> Option<usize> {
+/// The byte offset of the character nearest `at`, if a line of text is within reach (and,
+/// with `near`, the character itself: a tap in the margin beside a line is not on it).
+fn hit(text: &PageText, place: &Place, at: (i32, i32), near: bool) -> Option<usize> {
     let (x, y) = place.to_page(at);
     let off = |lo: f32, hi: f32, v: f32| if v < lo { lo - v } else { (v - hi).max(0.0) };
     let d = |r: &[f32; 4]| (off(r[1], r[3], y), off(r[0], r[2], x));
@@ -54,7 +54,8 @@ fn hit(text: &PageText, place: &Place, at: (i32, i32)) -> Option<usize> {
         let (da, db) = (d(&a.rect), d(&b.rect));
         da.0.total_cmp(&db.0).then(da.1.total_cmp(&db.1))
     })?;
-    (d(&best.rect).0 * place.frame.scale <= REACH).then_some(best.at)
+    let (dy, dx) = d(&best.rect);
+    (dy * place.frame.scale <= REACH && (!near || dx * place.frame.scale <= REACH)).then_some(best.at)
 }
 
 /// The parts of byte `range` on each line, on screen.
@@ -103,25 +104,30 @@ impl PdfMarks {
             modified: std::time::SystemTime::UNIX_EPOCH,
             cover_thumb: None,
         };
-        let store = store.and_then(|s| {
-            let id = s.ensure_book(&book_key(None, path.as_os_str().as_encoded_bytes()), &entry);
-            id.map_err(|e| eprintln!("pdf highlights: {e}")).ok().map(|id| (s, id))
-        });
-        let saved =
-            store.as_ref().and_then(|(s, id)| s.annotations(*id).map_err(|e| eprintln!("pdf highlights: {e}")).ok());
-        let saved = saved.unwrap_or_default().into_iter().filter(|a| a.data.kind == Kind::Highlight).collect();
-        PdfMarks { store, saved, ..PdfMarks::default() }
+        let key = book_key(None, path.as_os_str().as_encoded_bytes());
+        let Some(store) = store else { return PdfMarks::default() };
+        match load(&store, &key, &entry) {
+            Ok((id, saved)) => PdfMarks { store: Some((store, id)), saved, ..PdfMarks::default() },
+            Err(e) => {
+                eprintln!("pdf highlights: {e}");
+                PdfMarks::default()
+            }
+        }
     }
 
     /// Finds page `page`'s highlights in its `text`; drops any selection.
     pub fn page_loaded(&mut self, page: usize, text: &PageText) {
         self.page = page;
-        self.selection = None;
-        self.popup = None;
+        self.dismiss();
         self.resolved = (self.saved.iter().enumerate())
             .filter(|(_, a)| a.data.start.spine as usize == page)
             .filter_map(|(i, a)| Some((i, resolve(&text.text, &a.data)?)))
             .collect();
+    }
+
+    /// A selection or its action bar is showing: every tap is for them.
+    pub fn is_active(&self) -> bool {
+        self.selection.is_some() || self.popup.is_some()
     }
 
     /// Drops the selection and the action bar (the menu opened).
@@ -135,7 +141,7 @@ impl PdfMarks {
         if self.popup.as_ref().is_some_and(|p| p.rect.contains(at.0, at.1)) {
             return None;
         }
-        let pos = hit(text, place, at)?;
+        let pos = hit(text, place, at, false)?;
         let mut damage = self.popup.take().map_or(Rect::default(), |p| p.rect);
         if let Some((_, old)) = self.selection.take() {
             damage = damage.union(&union(&bands(text, place, &old)));
@@ -148,7 +154,7 @@ impl PdfMarks {
 
     /// The finger moved while selecting: the free end follows it, word by word.
     pub fn drag(&mut self, text: &PageText, place: &Place, at: (i32, i32)) -> Option<Rect> {
-        let pos = hit(text, place, at)?;
+        let pos = hit(text, place, at, false)?;
         let (anchor, range) = self.selection.as_mut()?;
         let word = word_at(&text.text, pos);
         let new =
@@ -195,7 +201,7 @@ impl PdfMarks {
         if let Some((_, range)) = self.selection.take() {
             return Some(union(&bands(text, place, &range)));
         }
-        let pos = hit(text, place, at)?;
+        let pos = hit(text, place, at, true)?;
         let (i, range) = self.resolved.iter().find(|(_, r)| r.contains(&pos)).cloned()?;
         let popup = Popup::new(Some(i), &[Button::Delete, Button::Cancel], &bands(text, place, &range));
         let damage = popup.rect;
@@ -251,10 +257,7 @@ impl PdfMarks {
             }
         }
         if let Some((_, range)) = &self.selection {
-            for r in bands(text, place, range) {
-                c.darken(r, HIGHLIGHT_GRAY);
-                c.fill(Rect::new(r.x, r.bottom() + 2, r.w, SELECTION_BAR), INK);
-            }
+            bands(text, place, range).into_iter().for_each(|r| mark(c, r));
         }
         if let Some(popup) = &self.popup {
             popup.render(c, ctx);

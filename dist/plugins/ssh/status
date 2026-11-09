@@ -3,8 +3,6 @@
 # "Label: value" for people to read.
 DIR=$(cd "$(dirname "$0")" && pwd)
 PORT=${ZARATHUSTRA_SETTING_PORT:-22}
-case $PORT in "" | *[!0-9]*) PORT=22 ;; esac # as run does
-[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || PORT=22
 DATA=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}
 # Labels in the app's language (Italian unless it says English).
 if [ "$ZARATHUSTRA_LANGUAGE" = en ]; then

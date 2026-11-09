@@ -705,10 +705,7 @@ impl Reader {
 
     /// Opens the search over the page, on the last results when there are some.
     pub fn show_search(&mut self) {
-        match &mut self.search {
-            Some(s) if !s.results.is_empty() || s.is_running() => s.open = true,
-            _ => self.search = Some(Search::new()),
-        }
+        Search::show(&mut self.search);
     }
 
     /// The search screen (and its keyboard) is shown over the page.
@@ -738,21 +735,10 @@ impl Reader {
 
     fn search_tap(&mut self, start: (i32, i32), x: i32, ctx: &mut Ctx) -> Action {
         let Some(s) = &mut self.search else { return Action::None };
-        match s.tap(start, x) {
-            search::Tap::None => Action::None,
-            search::Tap::Redraw => Action::Redraw { turn: None },
-            search::Tap::Typed(t) => Action::Typed(t),
-            search::Tap::Close => {
-                s.open = false;
-                Action::Redraw { turn: None }
-            }
-            search::Tap::Open(i) => {
-                let Some(hit) = s.results.get(i).cloned() else { return Action::None };
-                s.open = false;
-                self.open_hit(&hit, ctx);
-                Action::Redraw { turn: None }
-            }
-        }
+        s.tap_view(start, x).unwrap_or_else(|hit| {
+            self.open_hit(&hit, ctx);
+            Action::Redraw { turn: None }
+        })
     }
 
     /// Shows the page with search hit `hit`, marked; stays put when its chapter doesn't load.

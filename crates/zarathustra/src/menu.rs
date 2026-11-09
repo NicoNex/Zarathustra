@@ -203,18 +203,16 @@ fn draw_segments(c: &mut Canvas, r: Rect) {
 /// the search and the contents only.
 pub fn controls(typography: bool) -> Vec<(Control, Rect)> {
     let l = Layout::new(typography);
-    if !typography {
-        return vec![
-            (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
-            (Control::Search, SEARCH),
-            (Control::Contents, l.contents),
-        ];
-    }
-    let (size, weight, font) = (segments(l.size, 3), segments(l.weight, 3), font_segments(l.font));
     let mut out = vec![
         (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
         (Control::Search, SEARCH),
         (Control::Contents, l.contents),
+    ];
+    if !typography {
+        return out;
+    }
+    let (size, weight, font) = (segments(l.size, 3), segments(l.weight, 3), font_segments(l.font));
+    out.extend([
         (Control::Smaller, size[0]),
         (Control::Larger, size[2]),
         (Control::Lighter, weight[0]),
@@ -222,7 +220,7 @@ pub fn controls(typography: bool) -> Vec<(Control, Rect)> {
         (Control::Font(false), font[0]),
         // The name steps forward too: the bigger target for the common move.
         (Control::Font(true), font[1].union(&font[2])),
-    ];
+    ]);
     out.extend(segments(l.spacing, SPACINGS.len()).into_iter().enumerate().map(|(i, r)| (Control::Spacing(i), r)));
     out.extend(segments(l.margin, MARGINS.len()).into_iter().enumerate().map(|(i, r)| (Control::Margin(i), r)));
     out.extend(segments(l.align, ALIGNS.len()).into_iter().enumerate().map(|(i, r)| (Control::Align(i), r)));

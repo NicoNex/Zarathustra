@@ -137,6 +137,13 @@ impl fmt::Debug for Images {
     }
 }
 
+impl Keyboard {
+    /// Opened on the numbers and symbols, with `enter` as the enter key's label.
+    pub fn numbers(enter: &'static str) -> Keyboard {
+        Keyboard { symbols: true, enter: Some(enter), ..Keyboard::default() }
+    }
+}
+
 /// Left edge of half-key column `u`.
 fn unit_x(u: i32) -> i32 {
     SIDE + u * (W - 2 * SIDE) / UNITS

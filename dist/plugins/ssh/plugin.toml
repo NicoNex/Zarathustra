@@ -16,9 +16,11 @@ executable = "status"
 
 [[setting]]
 id = "port"
-kind = "text"
+kind = "number"
 label = "Port"
-default_value = "22"
+minimum = 1
+maximum = 65535
+default_value = 22
 
 [[setting]]
 id = "authorized_keys"

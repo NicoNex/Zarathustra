@@ -117,51 +117,75 @@ impl Pdf {
     /// Page `n` fitted into `max_w`×`max_h`, aspect kept (the image is at most that big, one
     /// side exactly). With `crop`, the white margins around the content are cut first.
     pub fn render(&self, n: usize, max_w: u32, max_h: u32, crop: bool) -> Result<GrayImage, PdfError> {
-        Ok(self.render_framed(n, max_w, max_h, crop)?.0)
+        let page = self.doc.load_page(i32::try_from(n).unwrap_or(i32::MAX))?;
+        let list = page.to_display_list(false)?;
+        Ok(fit(&list, page.bounds()?, n, max_w, max_h, crop)?.0)
     }
 
-    /// [`Pdf::render`], with where the image sits on the page.
-    pub fn render_framed(&self, n: usize, max_w: u32, max_h: u32, crop: bool) -> Result<(GrayImage, Frame), PdfError> {
+    /// [`Pdf::render`], with where the image sits on the page and the page's text, both from
+    /// one reading of the page.
+    pub fn render_with_text(
+        &self,
+        n: usize,
+        max_w: u32,
+        max_h: u32,
+        crop: bool,
+    ) -> Result<(GrayImage, Frame, PageText), PdfError> {
         let page = self.doc.load_page(i32::try_from(n).unwrap_or(i32::MAX))?;
-        let bounds = page.bounds()?;
-        // Interpreted once: cropping rasterizes the page twice (preview, then the page).
         let list = page.to_display_list(false)?;
-        let area = if crop { content_box(&list, bounds)? } else { bounds };
-        let (aw, ah) = (area.x1 - area.x0, area.y1 - area.y0);
-        if aw <= 0.0 || ah <= 0.0 || max_w == 0 || max_h == 0 {
-            return Err(PdfError::InvalidArgument(format!("page {n} has no area")));
-        }
-        let scale = (max_w as f32 / aw).min(max_h as f32 / ah);
-        let w = ((aw * scale).round() as u32).clamp(1, max_w);
-        let h = ((ah * scale).round() as u32).clamp(1, max_h);
-        Ok((draw(&list, &area, scale, w, h)?, Frame { x0: area.x0, y0: area.y0, scale }))
+        let (img, frame) = fit(&list, page.bounds()?, n, max_w, max_h, crop)?;
+        Ok((img, frame, page_text(&list.to_text_page(TextPageFlags::empty())?)))
     }
 
     /// Page `n`'s text, a character box per character. Empty for a scanned page.
     pub fn text(&self, n: usize) -> Result<PageText, PdfError> {
         let page = self.doc.load_page(i32::try_from(n).unwrap_or(i32::MAX))?;
-        let stext = page.to_text_page(TextPageFlags::empty())?;
-        let mut out = PageText::default();
-        let mut line = 0;
-        for block in stext.blocks() {
-            for l in block.lines() {
-                for ch in l.chars() {
-                    let Some(c) = ch.char() else { continue };
-                    let q = ch.quad();
-                    let xs = [q.ul.x, q.ur.x, q.ll.x, q.lr.x];
-                    let ys = [q.ul.y, q.ur.y, q.ll.y, q.lr.y];
-                    let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
-                    let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
-                    let rect = [min(xs), min(ys), max(xs), max(ys)];
-                    out.chars.push(CharBox { at: out.text.len(), line, rect });
-                    out.text.push(c);
-                }
-                out.text.push('\n');
-                line += 1;
-            }
-        }
-        Ok(out)
+        Ok(page_text(&page.to_text_page(TextPageFlags::empty())?))
     }
+}
+
+/// A page's display `list` fitted into `max_w`×`max_h` (see [`Pdf::render`]). The list is
+/// interpreted once: cropping rasterizes it twice (preview, then the page).
+fn fit(
+    list: &DisplayList,
+    bounds: Rect,
+    n: usize,
+    max_w: u32,
+    max_h: u32,
+    crop: bool,
+) -> Result<(GrayImage, Frame), PdfError> {
+    let area = if crop { content_box(list, bounds)? } else { bounds };
+    let (aw, ah) = (area.x1 - area.x0, area.y1 - area.y0);
+    if aw <= 0.0 || ah <= 0.0 || max_w == 0 || max_h == 0 {
+        return Err(PdfError::InvalidArgument(format!("page {n} has no area")));
+    }
+    let scale = (max_w as f32 / aw).min(max_h as f32 / ah);
+    let w = ((aw * scale).round() as u32).clamp(1, max_w);
+    let h = ((ah * scale).round() as u32).clamp(1, max_h);
+    Ok((draw(list, &area, scale, w, h)?, Frame { x0: area.x0, y0: area.y0, scale }))
+}
+
+/// The characters of a text page in reading order, with their boxes.
+fn page_text(stext: &mupdf::TextPage) -> PageText {
+    let mut out = PageText::default();
+    let mut line = 0;
+    for block in stext.blocks() {
+        for l in block.lines() {
+            for ch in l.chars() {
+                let Some(c) = ch.char() else { continue };
+                let q = ch.quad();
+                let xs = [q.ul.x, q.ur.x, q.ll.x, q.lr.x];
+                let ys = [q.ul.y, q.ur.y, q.ll.y, q.lr.y];
+                let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
+                let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
+                out.chars.push(CharBox { at: out.text.len(), line, rect: [min(xs), min(ys), max(xs), max(ys)] });
+                out.text.push(c);
+            }
+            out.text.push('\n');
+            line += 1;
+        }
+    }
+    out
 }
 
 /// Renders the `area` of a page's `list` (page space) at `scale` into a white `w`×`h` gray image.
@@ -295,7 +319,8 @@ pub(crate) mod tests {
         let blank = Pdf::from_bytes(&sample_pdf()).expect("open");
         assert!(blank.text(1).expect("blank").text.is_empty());
         // Uncropped A4 (595 × 842 pt) into 421 px high: half size, from the page's corner.
-        let (img, frame) = pdf.render_framed(0, 1000, 421, false).expect("render");
+        let (img, frame, text) = pdf.render_with_text(0, 1000, 421, false).expect("render");
+        assert_eq!(text, page);
         assert_eq!((frame.x0, frame.y0, img.height), (0.0, 0.0, 421));
         assert!((frame.scale - 0.5).abs() < 0.001, "{frame:?}");
     }
