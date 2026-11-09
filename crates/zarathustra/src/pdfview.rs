@@ -1,6 +1,6 @@
 //! The reading view for PDFs: fixed-layout pages rendered by MuPDF, one per screen, white
 //! margins cropped. Taps and swipes turn pages as in the [`Reader`](crate::reader::Reader);
-//! the menu offers the library and the contents (its typography controls do nothing here).
+//! the menu offers the library and the contents.
 //! No highlights.
 
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use zarathustra_device::Canvas;
 use zarathustra_engine::image::{self, GrayImage};
 use zarathustra_engine::pdf::Pdf;
 
-use crate::menu::{self, Control, Typography};
+use crate::menu::{self, Control};
 use crate::reader::{footer, header, Position, BACK_ZONE, MARGIN_BOTTOM, MARGIN_TOP, SWIPE, TOP_BAND};
 use crate::toc::{self, Toc};
 use crate::{Action, Ctx, H, W};
@@ -27,8 +27,6 @@ pub struct PdfView {
     author: Option<String>,
     pub page: usize,
     pub menu: bool,
-    /// Shown in the menu only; its controls are ignored.
-    typo: Typography,
     /// The outline as table-of-contents entries, `chapter` holding the page index.
     contents: Vec<toc::Entry>,
     toc: Option<Toc>,
@@ -60,7 +58,6 @@ impl PdfView {
             pdf,
             page,
             menu: false,
-            typo: Typography::load(&ctx.state_dir),
             contents,
             toc: None,
             rendered: None,
@@ -125,7 +122,7 @@ impl PdfView {
             };
         }
         if self.menu {
-            let hit = menu::controls().into_iter().find(|(_, r)| r.contains(x0, y0));
+            let hit = menu::controls(false).into_iter().find(|(_, r)| r.contains(x0, y0));
             return match hit {
                 Some((Control::Library, _)) => {
                     self.save();
@@ -137,7 +134,7 @@ impl PdfView {
                     Action::Redraw { turn: None }
                 }
                 Some(_) => Action::None,
-                None if menu::covers(y0) => Action::None,
+                None if menu::covers(y0, false) => Action::None,
                 None => {
                     self.menu = false;
                     Action::Redraw { turn: None }
@@ -206,7 +203,7 @@ impl PdfView {
         if self.menu {
             let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
             let chapter = chapter.or((!self.contents.is_empty()).then_some(""));
-            menu::render(c, ctx, &self.typo, &self.title, chapter);
+            menu::render(c, ctx, None, &self.title, chapter);
         }
     }
 

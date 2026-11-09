@@ -57,7 +57,7 @@ Merged (not yet on the device): review fixes (2de82c5 reviewed), library sort, b
 
 Power-button branch merged (2026-11-06). Book menu (`bookmenu.rs`, long press on a book): open, contents, bookmarks, search (open the book with that reader overlay via `Action::OpenOn`), about, highlights, mark read/unread, delete (second tap confirms). Device offline at last try: `scripts/fetch-dicts.sh push`, deploy, let the user test everything.
 
-Known gaps: PDF menu shows typography/search controls that do nothing; stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
+Known gaps: stats miss the last page's time before leaving a book and count time in menus; Wikipedia skipped (ureq+rustls +1.3 MB, plan in dict.rs ponytail).
 Review rule: next review+simplify from 14c975b when `git diff --shortstat 14c975b..HEAD -- crates` passes ~2000 added lines.
 
 ## 2026-11-06 evening: state

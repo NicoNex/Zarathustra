@@ -581,7 +581,7 @@ impl Reader {
     }
 
     fn menu_tap(&mut self, (x, y): (i32, i32), ctx: &mut Ctx) -> Action {
-        let hit = menu::controls().into_iter().find(|(_, r)| r.contains(x, y));
+        let hit = menu::controls(true).into_iter().find(|(_, r)| r.contains(x, y));
         match hit {
             Some((Control::Library, _)) => {
                 self.save();
@@ -607,7 +607,7 @@ impl Reader {
                 }
                 Action::None
             }
-            None if menu::covers(y) => Action::None,
+            None if menu::covers(y, true) => Action::None,
             None => {
                 self.menu = false;
                 Action::Redraw { turn: None }
@@ -914,7 +914,7 @@ impl Reader {
         if self.menu {
             let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
             let chapter = chapter.or((!self.contents.is_empty()).then_some(""));
-            menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""), chapter);
+            menu::render(c, ctx, Some(&self.typo), self.book.title().unwrap_or(""), chapter);
             let f = self.scrub.unwrap_or_else(|| self.progress());
             let chapters = self.book.chapters.len();
             let title = nav::chapter_title(&self.contents, nav::target(f, chapters).0).unwrap_or("");

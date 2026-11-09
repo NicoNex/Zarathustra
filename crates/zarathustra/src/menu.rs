@@ -160,9 +160,11 @@ struct Layout {
 }
 
 impl Layout {
-    fn new() -> Layout {
-        let height =
-            SHEET_PAD_TOP + CONTENTS_H + ROW_GAP + SCRUB_H + ROW_GAP + 3 * ROW_H + 2 * ROW_GAP + SHEET_PAD_BOTTOM;
+    /// Without `typography` (PDFs) the sheet holds the contents row alone; the other rows'
+    /// rectangles fall below the screen, unused.
+    fn new(typography: bool) -> Layout {
+        let rows = if typography { ROW_GAP + SCRUB_H + ROW_GAP + 3 * ROW_H + 2 * ROW_GAP } else { 0 };
+        let height = SHEET_PAD_TOP + CONTENTS_H + rows + SHEET_PAD_BOTTOM;
         let top = H - height;
         let w = W - 2 * PAD;
         let mut y = top + SHEET_PAD_TOP;
@@ -197,9 +199,13 @@ fn draw_segments(c: &mut Canvas, r: Rect) {
     c.fill(Rect::new(mid.right() - 2, r.y, 2, r.h), INK);
 }
 
-/// Every control with its rectangle, top to bottom.
-pub fn controls() -> Vec<(Control, Rect)> {
-    let l = Layout::new();
+/// Every control with its rectangle, top to bottom; without `typography` (PDFs) the library
+/// and the contents only.
+pub fn controls(typography: bool) -> Vec<(Control, Rect)> {
+    let l = Layout::new(typography);
+    if !typography {
+        return vec![(Control::Library, Rect::new(0, 0, 360, TOPBAR_H)), (Control::Contents, l.contents)];
+    }
     let (size, weight, font) = (segments(l.size, 3), segments(l.weight, 3), font_segments(l.font));
     let mut out = vec![
         (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
@@ -221,18 +227,18 @@ pub fn controls() -> Vec<(Control, Rect)> {
 
 /// Where the position scrubber goes in the sheet.
 pub fn scrubber() -> Rect {
-    Layout::new().scrubber
+    Layout::new(true).scrubber
 }
 
 /// Whether a tap at height `y` lands on the menu's chrome (top bar or sheet).
-pub fn covers(y: i32) -> bool {
-    y < TOPBAR_H || y >= Layout::new().top
+pub fn covers(y: i32, typography: bool) -> bool {
+    y < TOPBAR_H || y >= Layout::new(typography).top
 }
 
 /// Draws the menu over the page. `chapter` is the current table-of-contents entry, `None`
-/// when the book has no table of contents.
-pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, chapter: Option<&str>) {
-    let l = Layout::new();
+/// when the book has no table of contents. Without `typo` (PDFs) no search and no typography.
+pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: Option<&Typography>, title: &str, chapter: Option<&str>) {
+    let l = Layout::new(typo.is_some());
     let Ctx { fonts, raster, .. } = ctx;
     let (Some(sans), Some(sans_bold), Some(serif_bold)) =
         (crate::sans(fonts, false), crate::sans(fonts, true), crate::serif(fonts, true))
@@ -241,9 +247,11 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     };
 
     topbar(c, raster, sans, serif_bold, t().back_library, title);
-    // ponytail: also drawn over PDFs, where search is not wired; MuPDF can search page text.
-    let icon = Rect::new(SEARCH.x + (SEARCH.w - 52) / 2, SEARCH.y + (SEARCH.h - 52) / 2 + 4, 52, 52);
-    crate::search::icon(c, icon, INK, PAPER);
+    // shortcut: no search in PDFs, add it with MuPDF's page text search when asked.
+    if typo.is_some() {
+        let icon = Rect::new(SEARCH.x + (SEARCH.w - 52) / 2, SEARCH.y + (SEARCH.h - 52) / 2 + 4, 52, 52);
+        crate::search::icon(c, icon, INK, PAPER);
+    }
 
     // Sheet: rounded top corners over a black edge, like the quick panel.
     rounded_rect(c, Rect::new(0, l.top - 3, W, H - l.top + 40), 32, INK);
@@ -262,6 +270,7 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: &Typography, title: &str, cha
     let sub = Label { face: sans, size: 30.0, ink: INK_SOFT };
     let text = sub.fit(chapter.unwrap_or(t().no_contents), chevron_x - 32.0 - x);
     sub.draw(c, raster, &text, x, sub.baseline(r));
+    let Some(typo) = typo else { return };
 
     // Size: a stepper, the current step between a small and a large "A".
     let segs = segmented(c, l.size, 3, None);
