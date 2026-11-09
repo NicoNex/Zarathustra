@@ -24,8 +24,9 @@ use crate::{screen_h, screen_w, Ctx};
 pub fn panel() -> Rect {
     Rect { x: 0, y: 0, w: screen_w(), h: 1016 }
 }
-/// A downward swipe that starts this close to the top edge opens the panel.
-pub const EDGE: i32 = 60;
+/// A downward swipe that starts this close to the top edge opens the panel. Generous: the
+/// Kobo Clara 2E's panel first senses a finger coming off the bezel some 65 px down.
+pub const EDGE: i32 = 100;
 /// Minimum travel for a swipe; less is a tap.
 const SWIPE: i32 = 100;
 const SLOP: i32 = 40;
