@@ -26,8 +26,8 @@ impl DeviceInfo {
         if !ctx.device.is_empty() {
             rows.push((s.device_model, ctx.device.clone()));
         }
-        // "Kindle 5.17.1.0.4 (…)" on Kindles.
-        if let Some(v) = first_line("/etc/prettyversion.txt") {
+        // "Kindle 5.17.1.0.4 (…)" on Kindles, "Kobo 4.38.23852" on a Kobo.
+        if let Some(v) = zarathustra_device::platform().system_version() {
             rows.push((s.device_system, v));
         }
         rows.push((s.device_app, format!("Zarathustra {}", env!("CARGO_PKG_VERSION"))));

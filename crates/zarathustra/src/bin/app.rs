@@ -189,9 +189,10 @@ impl Press {
     }
 }
 
-/// The binary run.sh copies to /tmp and runs (size, modification time); `None` off the device.
+/// The binary the launch script copies to /tmp and runs (size, modification time); `None` off
+/// the device.
 fn installed_binary() -> Option<(u64, std::time::SystemTime)> {
-    let meta = std::fs::metadata("/mnt/us/zarathustra/bin/zarathustra").ok()?;
+    let meta = std::fs::metadata(zarathustra_device::platform().installed_binary()?).ok()?;
     Some((meta.len(), meta.modified().ok()?))
 }
 
@@ -270,7 +271,8 @@ fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::i
                 Rect::new(0, 480, screen_w(), 100),
             );
             let body = Label { face: sans, size: 34.0, ink: INK_SOFT };
-            for (i, line) in body.wrap(s.usb_body, (screen_w() - 320) as f32, 5).iter().enumerate() {
+            let usb_body = s.usb_body.replace("{device}", zarathustra_device::platform().name);
+            for (i, line) in body.wrap(&usb_body, (screen_w() - 320) as f32, 5).iter().enumerate() {
                 body.centered(&mut c, raster, line, Rect::new(0, 620 + i as i32 * 52, screen_w(), 52));
             }
             button(&mut c, transfer, true);

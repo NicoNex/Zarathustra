@@ -58,14 +58,14 @@ section, div { margin: 0 }
 
 static DICTS: OnceLock<Dictionaries> = OnceLock::new();
 
-/// The dictionaries on the device (`/mnt/us/dictionaries`, or `dev-dicts/` on a desktop),
+/// The dictionaries on the device (the platform's dictionaries folder, `dev-dicts/` on a desktop),
 /// opened on first use; their index tables are then built (or read back from the state
 /// dir) on a background thread, so the first lookup does not pay for it.
 pub fn dictionaries(state_dir: &Path) -> &'static Dictionaries {
     let mut opened = false;
     let dicts = DICTS.get_or_init(|| {
         opened = true;
-        let dirs = vec![crate::first_existing(&["/mnt/us/dictionaries", "dev-dicts"])];
+        let dirs = vec![zarathustra_device::platform().dictionaries.clone()];
         let cache: PathBuf = state_dir.join("dict-cache");
         let d = Dictionaries::open(&dirs, Some(&cache));
         eprintln!("dictionaries: {:?}", d.names().collect::<Vec<_>>());
@@ -118,7 +118,9 @@ impl Card {
         let mut defs = dicts.define(word, lang);
         let looked_up = t0.elapsed();
         if defs.is_empty() {
-            let note = if dicts.is_empty() { t().no_dictionaries } else { t().no_definition };
+            let missing =
+                t().no_dictionaries.replace("{dir}", &zarathustra_device::platform().dictionaries.to_string_lossy());
+            let note = if dicts.is_empty() { missing.as_str() } else { t().no_definition };
             let article = Article { headword: word.into(), body: note.into(), html: false };
             defs.push(Definition { dict: String::new(), article });
         }

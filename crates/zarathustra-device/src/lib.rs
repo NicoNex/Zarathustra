@@ -5,6 +5,7 @@ pub mod geom;
 pub mod input;
 pub mod kindle;
 mod night;
+pub mod platform;
 mod sys;
 pub mod sysfs;
 pub mod wifi;
@@ -20,6 +21,7 @@ pub use canvas::Canvas;
 pub use geom::Rect;
 pub use input::{Phase, Touch};
 pub use night::{night, set_night, Night};
+pub use platform::{platform, Kind, Platform};
 pub use wifi::Wifi;
 
 /// What a refresh is for; each backend maps it to its own waveforms.

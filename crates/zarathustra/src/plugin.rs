@@ -202,21 +202,10 @@ pub struct Dirs {
 impl Dirs {
     pub fn new(state_dir: &Path) -> Dirs {
         let database = crate::db_path(state_dir);
-        if crate::on_device() {
-            Dirs {
-                installed: PathBuf::from("/mnt/us/zarathustra/plugins"),
-                runtime: Some(PathBuf::from("/var/local/zarathustra/plugins")),
-                data: PathBuf::from("/var/local/zarathustra/data"),
-                database,
-            }
-        } else {
-            Dirs {
-                installed: crate::first_existing(&["dist/plugins"]),
-                runtime: None,
-                data: state_dir.join("plugins"),
-                database,
-            }
-        }
+        let p = zarathustra_device::platform();
+        // On a desktop the data follows the state dir, which tests point elsewhere.
+        let data = if p.plugin_runtime.is_some() { p.plugin_data.clone() } else { state_dir.join("plugins") };
+        Dirs { installed: p.plugins.clone(), runtime: p.plugin_runtime.clone(), data, database }
     }
 }
 

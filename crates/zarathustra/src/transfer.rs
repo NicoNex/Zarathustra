@@ -102,11 +102,11 @@ impl Drop for Server {
 }
 
 /// Kindle firmware drops incoming TCP by default (KOReader opens its SSH port the same way):
-/// let the port through while the screen is open. Desktops are left alone.
+/// let the port through while the screen is open. Other systems are left alone.
 // ponytail: if the app dies with the screen open, the rule stays until reboot (one port of
 // `PORTS`, only this server ever listens there).
 fn firewall(open: bool, port: u16) {
-    if !crate::on_device() {
+    if zarathustra_device::platform().kind != zarathustra_device::Kind::Kindle {
         return;
     }
     let port = port.to_string();
@@ -246,7 +246,8 @@ impl Transfer {
         if self.url.is_empty() {
             let head = Label { face: serif_bold, size: 50.0, ink: INK };
             head.draw_centred(c, raster, s.no_wifi, screen_w() as f32 / 2.0, 560);
-            for (n, line) in soft.wrap(s.no_wifi_hint, width - 120.0, 4).iter().enumerate() {
+            let hint = s.no_wifi_hint.replace("{device}", zarathustra_device::platform().name);
+            for (n, line) in soft.wrap(&hint, width - 120.0, 4).iter().enumerate() {
                 soft.draw_centred(c, raster, line, screen_w() as f32 / 2.0, 650 + n as i32 * 44);
             }
             rounded_outline(c, retry(), retry().h / 2, 3, INK, PAPER);

@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use zarathustra_device::{platform, Kind};
 use zarathustra_engine::font::{Face, Rasterizer};
 use zarathustra_engine::fonts::FontLibrary;
 use zarathustra_engine::layout::hyphen::Hyphenators;
@@ -82,19 +83,15 @@ pub fn first_existing(candidates: &[&str]) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(candidates[0]))
 }
 
-/// Running on the Kindle (its userstore is mounted), not a desktop.
+/// Running on a reader, not a desktop.
 pub fn on_device() -> bool {
-    Path::new("/mnt/us").exists()
+    platform().kind != Kind::Desktop
 }
 
 /// The books the home shows: library/ on the device (by hand or sent over Wi-Fi), the
 /// repo's dev-books/ on a desktop.
 pub fn library_dir() -> PathBuf {
-    if on_device() {
-        PathBuf::from("/mnt/us/library")
-    } else {
-        first_existing(&["dev-books"])
-    }
+    platform().library.clone()
 }
 
 /// The reading font, regular or bold; a free function so drawing code can hold the
@@ -124,11 +121,10 @@ pub struct Ctx {
 impl Ctx {
     pub fn new() -> Ctx {
         let mut fonts = FontLibrary::new("Bookerly");
-        for dir in ["/mnt/us/fonts", "/usr/java/lib/fonts"] {
-            fonts.add_dir(Path::new(dir));
+        for dir in &platform().fonts {
+            fonts.add_dir(dir);
         }
-        fonts.add_dir(&first_existing(&["dev-fonts"]));
-        let ts = Typesetter::new(Hyphenators::new(first_existing(&["/mnt/us/zarathustra/hyph", "assets/hyphenation"])));
+        let ts = Typesetter::new(Hyphenators::new(platform().hyphenation.clone()));
         let state_dir = state_dir();
         i18n::set_lang(settings::Settings::load(&state_dir).lang);
         Ctx { fonts, ts, raster: Rasterizer::new(1.3), state_dir, device: String::new(), dpi: 0 }
@@ -194,11 +190,7 @@ pub(crate) fn legacy_position_file(state_dir: &Path, book: &Path) -> PathBuf {
 
 /// Where positions, preferences and the database live (created if missing).
 pub fn state_dir() -> PathBuf {
-    let dir = if on_device() {
-        PathBuf::from("/mnt/us/zarathustra/state")
-    } else {
-        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/zarathustra-state")).to_path_buf()
-    };
+    let dir = platform().state.clone();
     std::fs::create_dir_all(&dir).ok();
     dir
 }
