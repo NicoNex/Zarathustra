@@ -121,14 +121,12 @@ impl Ctx {
     // ponytail: a moved book whose position is still in an old build's file loses it (the
     // file name hashes the old path); fine once a device has run this build.
     pub fn adopt_orphan_positions(&self, store: &zarathustra_store::Store, books: &[&Path]) {
-        // One look at the state dir: once the old files are taken in, nothing more to do.
-        let legacy = std::fs::read_dir(&self.state_dir)
-            .map(|d| d.flatten().any(|e| e.path().extension().is_some_and(|x| x == "pos")))
-            .unwrap_or(false);
-        if legacy {
-            for book in books {
-                reader::Position::load(store, &self.state_dir, book);
-            }
+        // One look at the state dir: only books whose old file is there are taken in.
+        let legacy: std::collections::HashSet<PathBuf> = std::fs::read_dir(&self.state_dir)
+            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "pos")).collect())
+            .unwrap_or_default();
+        for book in books.iter().filter(|b| legacy.contains(&legacy_position_file(&self.state_dir, b))) {
+            reader::Position::load(store, &self.state_dir, book);
         }
         let Ok(saved) = store.positions() else { return };
         let key = |p: &Path| p.to_string_lossy().into_owned();

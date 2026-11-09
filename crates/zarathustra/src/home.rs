@@ -1,6 +1,7 @@
 //! Home: the book being read on top (first page only), filter chips, then the library as a
 //! gallery of covers or as a list, a page at a time.
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -71,12 +72,21 @@ struct Entry {
     book: BookEntry,
     /// Reading progress 0–1 and when it was saved, if the book was opened.
     progress: Option<(f32, SystemTime)>,
-    /// Cover at grid size (the list scales it down at draw time).
-    cover: Option<GrayImage>,
-    small: Option<GrayImage>,
+    /// Covers at grid and list size, decoded the first time they are drawn: decoding all of
+    /// them up front took ~5 s with 95 books.
+    cover: OnceCell<Option<GrayImage>>,
+    small: OnceCell<Option<GrayImage>>,
 }
 
 impl Entry {
+    fn cover(&self) -> Option<&GrayImage> {
+        self.cover.get_or_init(|| cover(self.book.cover_thumb.as_deref(), (CELL_W, COVER_H))).as_ref()
+    }
+
+    fn small(&self) -> Option<&GrayImage> {
+        self.small.get_or_init(|| cover(self.book.cover_thumb.as_deref(), ROW_COVER)).as_ref()
+    }
+
     fn status(&self) -> Filter {
         match self.progress {
             None => Filter::Unread,
@@ -201,7 +211,7 @@ fn band_data(ctx: &Ctx, current: Option<(&Path, &str)>) -> (stats::Summary, Opti
 }
 
 /// A book's file time and its grid and list covers, kept across a refresh.
-type Covers = (SystemTime, Option<GrayImage>, Option<GrayImage>);
+type Covers = (SystemTime, OnceCell<Option<GrayImage>>, OnceCell<Option<GrayImage>>);
 
 fn library(dirs: &[PathBuf], ctx: &Ctx) -> Library {
     let paths: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
@@ -297,10 +307,7 @@ impl Home {
                 let progress = saved.get(book.path.to_string_lossy().as_ref()).and_then(saved_progress);
                 let (cover, small) = match covers.remove(&book.path).filter(|c| c.0 == book.modified) {
                     Some((_, cover, small)) => (cover, small),
-                    None => {
-                        let thumb = book.cover_thumb.as_deref();
-                        (cover(thumb, (CELL_W, COVER_H)), cover(thumb, ROW_COVER))
-                    }
+                    None => Default::default(),
                 };
                 Entry { book, progress, cover, small }
             })
@@ -445,7 +452,7 @@ impl Home {
                 menu.render(c, ctx);
             }
             Some(Overlay::Notebook(_, nb)) => nb.render(c, ctx),
-            Some(Overlay::About(i, about)) => about.render(c, ctx, self.books[*i].cover.as_ref()),
+            Some(Overlay::About(i, about)) => about.render(c, ctx, self.books[*i].cover()),
             Some(Overlay::Stats(stats)) => stats.render(c, ctx),
             Some(Overlay::Prefs(p)) => p.render(c, ctx),
             Some(Overlay::Power) => {
@@ -1125,7 +1132,7 @@ struct Faces<'a> {
 /// A grid cell: the cover with a soft offset shadow, then title (two lines) and author.
 fn grid_cell(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r: Rect) {
     let cover = Rect::new(r.x, r.y, CELL_W, COVER_H);
-    let drawn = draw_cover(c, raster, f, cover, book.cover.as_ref(), book, PAPER);
+    let drawn = draw_cover(c, raster, f, cover, book.cover(), book, PAPER);
     let mut y = drawn.bottom() + 20;
     match (book.status(), book.progress) {
         (Filter::Finished, _) => {
@@ -1156,7 +1163,7 @@ fn grid_cell(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r
 /// A list row: cover, title, author, status on the right.
 fn list_row(c: &mut Canvas, raster: &mut Rasterizer, f: &Faces, book: &Entry, r: Rect) {
     let cover = Rect::new(r.x, r.y + 20, ROW_COVER.0, ROW_COVER.1);
-    draw_cover(c, raster, f, cover, book.small.as_ref(), book, PAPER);
+    draw_cover(c, raster, f, cover, book.small(), book, PAPER);
     let x = (cover.right() + 36) as f32;
     let right = r.right() as f32;
     let soft = Label { face: f.sans, size: 28.0, ink: INK_SOFT };
