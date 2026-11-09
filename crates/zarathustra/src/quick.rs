@@ -589,6 +589,16 @@ impl QuickPanel {
         self.settings.save(&self.state_dir);
     }
 
+    /// The light off while the storage is with a computer: the app quits meanwhile and, when
+    /// it starts again, puts back the levels saved here.
+    pub fn light_off_for_usb(&self, dev: &mut dyn Device) {
+        self.save();
+        let light = Light { brightness: 0, warmth: self.has_warmth.then_some(self.warmth) };
+        if let Err(e) = dev.set_light(light) {
+            eprintln!("quick settings: light off: {e}");
+        }
+    }
+
     /// Draws the whole panel over whatever is on the canvas.
     // ponytail: a slider drag repaints the whole panel (only its rect is refreshed); clip to
     // the slider if the render time ever shows up next to the ~100 ms fast waveform.

@@ -803,6 +803,7 @@ fn main() -> Result<()> {
                     quick.close();
                     screen.away();
                     if usb_prompt(&mut dev, &mut ctx)? {
+                        quick.light_off_for_usb(&mut dev);
                         std::process::exit(USB_EXIT);
                     }
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)

@@ -1,11 +1,15 @@
 #!/bin/sh
-# Writes what explains a refused login to the userstore, readable over USB.
+# Writes what explains a refused login (or no server at all) into the plugin's folder on the
+# device's storage, readable over USB.
 DATA=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}
-OUT=/mnt/us/zarathustra/ssh-diagnostica.txt
+USER_DIR=${ZARATHUSTRA_USER_DIR:-/mnt/us/zarathustra/plugins/ssh}
+OUT="$USER_DIR/ssh-diagnostica.txt"
 {
 	date
 	echo "== id"; id
-	echo "== folders"; ls -ld / /var /var/local /var/local/zarathustra /var/local/zarathustra/data "$DATA"
+	echo "== folders"; ls -ld / /var "$(dirname "$(dirname "$DATA")")" "$(dirname "$DATA")" "$DATA" /var/zarathustra-ssh
+	echo "== network"; ip -4 -o addr 2>&1; netstat -ltn 2>&1 | grep ':22 \|:2222 '
+	echo "== env"; env | grep '^ZARATHUSTRA_' | grep -v -i key
 	echo "== data"; ls -la "$DATA"
 	echo "== keys"; cat "$DATA/authorized_keys"
 	echo "== root"; grep '^root:' /etc/passwd
@@ -14,4 +18,4 @@ OUT=/mnt/us/zarathustra/ssh-diagnostica.txt
 	echo "== firewall"; iptables -L INPUT -n 2>&1 | head -20
 	echo "== log"; tail -n 30 "$DATA/service.log"
 } >"$OUT" 2>&1
-echo "Salvata in zarathustra/ssh-diagnostica.txt"
+echo "Salvata in plugins/ssh/ssh-diagnostica.txt"

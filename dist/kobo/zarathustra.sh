@@ -53,6 +53,9 @@ usb_session() {
 	# (next to MODELS in kobo/mod.rs) when another Kobo is ported.
 	PRODUCT_ID=0x4235
 	export VERSION SN PRODUCT_ID
+	# The log so far, readable from the computer.
+	cp "$LOG" "$APP/$NAME.log" 2>/dev/null
+	sync
 	ACTION=add /usr/local/Kobo/udev/usb >>"$LOG" 2>&1
 	# Each udev line is one write; read one line per open.
 	while :; do
