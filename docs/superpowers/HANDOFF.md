@@ -13,7 +13,7 @@
 
 ## 2026-11-08 (evening): state — SSH plugin works on the device
 
-- **Last reviewed: 26b1a78** (simplify of 7b5105e..HEAD applied; code-review findings in the commit after it). Next review from there.
+- **Last reviewed: HEAD after "fix: code review of 7b5105e..HEAD"** (simplify + code-review applied). Next review from there.
 - On the device and verified: prefs + positions in the DB (schema v3), plugin system, SSH plugin (ssh, scp, sftp; keys served from /var/zarathustra-ssh because /var/local belongs to Amazon's `framework` user and Dropbear checks folder owners), `make update` (app restarts into the new build in seconds, Amazon UI stays stopped), restart after a USB install on unplug, back pill with % and ×, drop knobs, no double edge turn, quote every 15 min, light after USB.
 - a03e9e3 itself is NOT on the device yet (Kindle asleep): `make update` when it's awake.
 - Deploy: `make update` / `make install-ssh` find the Kindle with `scripts/find-kindle.sh` (DHCP moves it: .31/.32/.33 in one afternoon); port 22 = our SSH plugin. `scripts/build-ssh.sh` must be run by the user (`! scripts/build-ssh.sh`): the auto-mode classifier blocks building downloaded code.
