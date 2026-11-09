@@ -64,7 +64,7 @@ pub fn block_height(n: usize, run: Option<&LastRun>) -> i32 {
 }
 
 /// The block's parts at `top` across `x..x+w`: one button per action of `shown`, then the run
-/// line (Stop while running, else the whole line opens the output).
+/// line, which opens the output (with Stop at its right while running).
 pub fn block_layout(x: i32, top: i32, w: i32, shown: &[usize], run: Option<&LastRun>) -> Vec<(Hit, Rect)> {
     let bw = (w - GAP) / 2;
     let mut out: Vec<(Hit, Rect)> = (shown.iter().enumerate())
@@ -75,11 +75,12 @@ pub fn block_layout(x: i32, top: i32, w: i32, shown: &[usize], run: Option<&Last
         .collect();
     if let Some(r) = run {
         let y = top + shown.len().div_ceil(2) as i32 * (BUTTON_H + GAP);
+        // Stop first, so a tap on it isn't taken by the line around it; the line last, as
+        // [`draw_block`] expects.
         if r.running() {
             out.push((Hit::Stop, Rect::new(x + w - RUN_BUTTON_W, y + 6, RUN_BUTTON_W, RUN_H - 12)));
-        } else {
-            out.push((Hit::Sheet, Rect::new(x, y, w, RUN_H)));
         }
+        out.push((Hit::Sheet, Rect::new(x, y, w, RUN_H)));
     }
     out
 }
