@@ -14,6 +14,7 @@ use zarathustra_engine::search::fold;
 
 use crate::about::About;
 use crate::bookmenu::{self, BookMenu, Item};
+use crate::extensions::{book_actions, Extensions};
 use crate::i18n::t;
 use crate::keyboard::{self, Key, Keyboard, Typed};
 use crate::notebook::{self, Notebook};
@@ -110,6 +111,8 @@ enum Overlay {
     /// Suspend, exit, restart, power off.
     Power,
     Transfer(Transfer),
+    /// Opened by a plugin action from the book menu, to show it running.
+    Extensions(Box<Extensions>),
 }
 
 /// Library order: title, author, or recently read first (then recently added).
@@ -460,6 +463,7 @@ impl Home {
                 power_menu(c, ctx);
             }
             Some(Overlay::Transfer(tr)) => tr.render(c, ctx),
+            Some(Overlay::Extensions(e)) => e.render(c, ctx),
         }
     }
 
@@ -697,6 +701,10 @@ impl Home {
             highlights,
             reflowable,
             anchor,
+            book_actions(ctx)
+                .iter()
+                .map(|(p, a)| p.manifest.as_ref().map_or_else(|_| String::new(), |m| p.action_label(&m.action[*a])))
+                .collect(),
         );
         self.overlay = Some(Overlay::Menu(i, menu));
         Action::Redraw { turn: None }
@@ -735,6 +743,17 @@ impl Home {
                     bookmenu::Tap::Item(Item::Highlights) => {
                         let list = notebook::load(&ctx.state_dir, &b.book.path);
                         self.overlay = Some(Overlay::Notebook(i, Notebook::new(ctx, &b.book.title, &b.author(), list)));
+                    }
+                    bookmenu::Tap::Item(Item::Plugin(k)) => {
+                        // The Extensions screen then shows it running and how it ended.
+                        if let Some((p, a)) = book_actions(ctx).into_iter().nth(k) {
+                            let pos = ctx.store().and_then(|s| s.position(&b.book.path.to_string_lossy()).ok()?);
+                            let pos = pos.map(|(text, _)| text).unwrap_or_default();
+                            if let Err(e) = p.run(&ctx.state_dir, a, Some((&b.book.path, &pos))) {
+                                eprintln!("plugin {}: {e}", p.id);
+                            }
+                        }
+                        self.overlay = Some(Overlay::Extensions(Box::new(Extensions::new(ctx))));
                     }
                     bookmenu::Tap::Item(Item::MarkRead(read)) => {
                         self.overlay = None;
@@ -793,6 +812,12 @@ impl Home {
                     redraw
                 }
             },
+            Overlay::Extensions(e) => {
+                if !e.tap(start, ctx) {
+                    self.overlay = None;
+                }
+                redraw
+            }
             Overlay::About(..) | Overlay::Stats(_) => Action::None,
         }
     }
@@ -885,6 +910,7 @@ impl Home {
         match &self.overlay {
             Some(Overlay::Transfer(_)) => true,
             Some(Overlay::Prefs(p)) => p.actions_running(),
+            Some(Overlay::Extensions(e)) => e.running(),
             _ => false,
         }
     }
@@ -894,6 +920,7 @@ impl Home {
         match &mut self.overlay {
             Some(Overlay::Transfer(tr)) => tr.poll(),
             Some(Overlay::Prefs(p)) => p.poll(),
+            Some(Overlay::Extensions(e)) => e.poll(),
             _ => false,
         }
     }

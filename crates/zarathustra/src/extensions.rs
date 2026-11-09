@@ -49,6 +49,14 @@ pub fn actions_in(plugin: &Plugin, place: Option<Place>) -> Vec<usize> {
     (0..m.action.len()).filter(|&i| place.is_none_or(|p| m.action[i].shown_in.contains(&p))).collect()
 }
 
+/// Every plugin action offered in the book menu: the plugin and the action's index.
+pub fn book_actions(ctx: &Ctx) -> Vec<(Plugin, usize)> {
+    let plugins = discover(&Dirs::new(&ctx.state_dir));
+    (plugins.into_iter())
+        .flat_map(|p| actions_in(&p, Some(Place::Book)).into_iter().map(move |i| (p.clone(), i)))
+        .collect()
+}
+
 /// Height of an action block with `n` buttons.
 pub fn block_height(n: usize, run: Option<&LastRun>) -> i32 {
     let rows = n.div_ceil(2) as i32;

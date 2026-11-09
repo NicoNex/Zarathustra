@@ -31,6 +31,8 @@ pub enum Item {
     MarkRead(bool),
     /// Delete the file: the first tap arms it, the second deletes.
     Delete,
+    /// The `n`th plugin action offered for books.
+    Plugin(usize),
 }
 
 /// What a tap on the open menu asks for.
@@ -50,6 +52,8 @@ pub struct BookMenu {
     author: String,
     progress: Option<f32>,
     highlights: usize,
+    /// Plugin actions' labels, for the `Plugin` rows.
+    actions: Vec<String>,
     rows: Vec<(Item, Rect)>,
     card: Rect,
     /// The book held, framed while the card is up.
@@ -60,7 +64,8 @@ pub struct BookMenu {
 
 impl BookMenu {
     /// `anchor` is the book's cover or row; `reflowable`: not a PDF, so it has bookmarks and
-    /// search.
+    /// search; `actions`: the plugin actions offered for books.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: &str,
         author: &str,
@@ -69,6 +74,7 @@ impl BookMenu {
         highlights: usize,
         reflowable: bool,
         anchor: Rect,
+        actions: Vec<String>,
     ) -> BookMenu {
         let mut items = vec![Item::Open, Item::Contents];
         if reflowable {
@@ -82,12 +88,23 @@ impl BookMenu {
             // Unread starts over: nothing to undo on a book never opened.
             items.push(Item::MarkRead(false));
         }
+        items.extend((0..actions.len()).map(Item::Plugin));
         items.push(Item::Delete);
         let card = place(anchor, HEAD_H + items.len() as i32 * ROW_H + BOTTOM);
         let rows = (items.iter().enumerate())
             .map(|(i, &it)| (it, Rect::new(card.x, card.y + HEAD_H + i as i32 * ROW_H, card.w, ROW_H)))
             .collect();
-        BookMenu { title: title.into(), author: author.into(), progress, highlights, rows, card, anchor, armed: false }
+        BookMenu {
+            title: title.into(),
+            author: author.into(),
+            progress,
+            highlights,
+            actions,
+            rows,
+            card,
+            anchor,
+            armed: false,
+        }
     }
 
     pub fn rect(&self) -> Rect {
@@ -156,6 +173,7 @@ impl BookMenu {
                 Item::MarkRead(false) => s.mark_unread,
                 Item::Delete if self.armed => s.delete_confirm,
                 Item::Delete => s.delete_book,
+                Item::Plugin(k) => self.actions.get(*k).map_or("", String::as_str),
             };
             let base = r.y + r.h / 2 + 12;
             label.draw(c, raster, text, x as f32, base);
@@ -199,7 +217,7 @@ mod tests {
 
     #[test]
     fn rows_hit_and_outside_closes() {
-        let mut m = BookMenu::new("Inferno", "Dante", Some(0.4), false, 3, true, BOOK);
+        let mut m = BookMenu::new("Inferno", "Dante", Some(0.4), false, 3, true, BOOK, vec!["Send".into()]);
         let r = m.rect();
         assert!(r.x > BOOK.right() && r.right() <= W && r.y >= 0 && r.bottom() <= H, "beside the book, on screen");
         let rows = m.rows.clone();
@@ -210,9 +228,10 @@ mod tests {
         assert_eq!(m.tap(mid(row(3))), Tap::Item(Item::Search));
         assert_eq!(m.tap(mid(row(6))), Tap::Item(Item::MarkRead(true)));
         assert_eq!(m.tap(mid(row(7))), Tap::Item(Item::MarkRead(false)), "in progress: both");
-        assert_eq!(m.tap(mid(row(8))), Tap::Redraw, "the first tap arms");
-        assert_eq!(m.tap(mid(row(8))), Tap::Item(Item::Delete));
-        let pdf = BookMenu::new("Inferno", "Dante", None, false, 0, false, BOOK);
+        assert_eq!(m.tap(mid(row(8))), Tap::Item(Item::Plugin(0)), "plugin actions before Delete");
+        assert_eq!(m.tap(mid(row(9))), Tap::Redraw, "the first tap arms");
+        assert_eq!(m.tap(mid(row(9))), Tap::Item(Item::Delete));
+        let pdf = BookMenu::new("Inferno", "Dante", None, false, 0, false, BOOK, Vec::new());
         assert!(!pdf.rows.iter().any(|&(it, _)| it == Item::MarkRead(false)), "never opened");
         assert!(pdf.rows.iter().all(|&(it, _)| !matches!(it, Item::Bookmarks | Item::Search)));
         assert_eq!(m.tap((r.x + r.w / 2, r.y + 20)), Tap::None, "the head");

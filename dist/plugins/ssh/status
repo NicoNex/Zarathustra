@@ -3,17 +3,23 @@
 DIR=$(cd "$(dirname "$0")" && pwd)
 PORT=${ZARATHUSTRA_SETTING_PORT:-22}
 DATA=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}
+# Labels in the app's language (Italian unless it says English).
+if [ "$ZARATHUSTRA_LANGUAGE" = en ]; then
+	L_ADDR=Address L_NOWIFI="no Wi-Fi" L_HOST="Kindle key" L_FIRST="created at first start" L_KEYS="Authorized keys" L_LAST="Last event"
+else
+	L_ADDR=Indirizzo L_NOWIFI="senza Wi-Fi" L_HOST="Chiave del Kindle" L_FIRST="creata al primo avvio" L_KEYS="Chiavi autorizzate" L_LAST="Ultimo evento"
+fi
 IP=$(ip -4 addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
-if [ -n "$IP" ]; then echo "Indirizzo=root@$IP -p $PORT"; else echo "Indirizzo=senza Wi-Fi"; fi
+if [ -n "$IP" ]; then echo "$L_ADDR=root@$IP -p $PORT"; else echo "$L_ADDR=$L_NOWIFI"; fi
 if [ -f "$DATA/host_key_ed25519" ]; then
 	FP=$("$DIR/dropbearmulti" dropbearkey -y -f "$DATA/host_key_ed25519" 2>/dev/null | sed -n 's/^Fingerprint: //p')
-	echo "Chiave del Kindle=${FP:-?}"
+	echo "$L_HOST=${FP:-?}"
 else
-	echo "Chiave del Kindle=creata al primo avvio"
+	echo "$L_HOST=$L_FIRST"
 fi
 N=$(grep -c '^[^#]' "$DATA/authorized_keys" 2>/dev/null || true)
-echo "Chiavi autorizzate=${N:-0}"
+echo "$L_KEYS=${N:-0}"
 # Dropbear's last log line: why a login was refused, without needing a way in.
 LAST=$(grep -v -e 'Not backgrounding' -e 'Exit before auth' -e 'Child connection' "$DATA/service.log" 2>/dev/null | tail -n 1 | sed 's/^\[[0-9]*\] //')
-[ -n "$LAST" ] && echo "Ultimo evento=$LAST"
+[ -n "$LAST" ] && echo "$L_LAST=$LAST"
 exit 0
