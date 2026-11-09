@@ -87,7 +87,7 @@ A plugin is a folder: a `plugin.toml` and executables in any language. Drop it i
 - **In your language.** Plugins translate their strings with standard [Fluent](https://projectfluent.org) files (`locales/it.ftl`, `locales/en.ftl`).
 - **SSH ships as the first plugin**: Dropbear and OpenSSH's `sftp-server`, built from source, public keys only, off until you switch it on.
 
-The plugin format is described in `docs/superpowers/specs/2026-11-08-plugins-design.md` and `docs/superpowers/specs/2026-11-09-extensions-stats-design.md`.
+**[Writing a plugin](docs/plugins.md)** explains the format, what every executable gets, and how to make your own.
 
 ### Send your books across the abyss
 
