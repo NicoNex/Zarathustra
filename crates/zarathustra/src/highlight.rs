@@ -377,10 +377,11 @@ impl Highlights {
         self.store.as_ref().map(|(s, b)| (s, *b))
     }
 
-    /// Logs `secs` of reading and one page for today in the reading statistics.
-    pub fn log_page(&self, secs: u32) {
+    /// Logs `secs` of reading and `pages` pages read (1 for a forward turn, else 0) for today
+    /// in the reading statistics.
+    pub fn log_page(&self, secs: u32, pages: u32) {
         let Some((store, book)) = &self.store else { return };
-        if let Err(e) = store.add_reading(*book, crate::clock::local_now().0, secs, 1) {
+        if let Err(e) = store.add_reading(*book, crate::clock::local_now().0, secs, pages) {
             eprintln!("stats: {e}");
         }
     }
