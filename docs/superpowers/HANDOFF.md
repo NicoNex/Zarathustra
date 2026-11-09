@@ -1,12 +1,23 @@
-# Handoff — 2026-11-08
+# Handoff — 2026-11-09
+
+## 2026-11-09: Extensions, plugin actions, Fluent plugin strings, reading clock
+
+- Spec `specs/2026-11-09-extensions-stats-design.md`, plan `plans/2026-11-09-extensions-stats.md`.
+- Settings → **Extensions** (`extensions.rs`): per plugin its service switch, action buttons, last-run line (Error chip on failure; tap → `outsheet.rs` full stdout/stderr, paged). Same block on the plugin page.
+- Actions (`plugin/action.rs`) run detached in their own process group via an `sh` wrapper writing the exit status; files `data/<id>/action.*`; Stop (TERM, KILL after 3 s); optional `timeout_seconds`; `output = quiet|show`; `shown_in = ["book"]` puts one in the book menu (`ZARATHUSTRA_BOOK`, `ZARATHUSTRA_POSITION`, `{book}`). Polled every 1 s while running (home `transferring()`).
+- Plugin strings via Fluent (`plugin_i18n.rs`, `locales/<lang>.ftl`, ids `display-name`, `description`, `action-<id|exe>`, `setting-<id>[-empty|-option-<v>]`); `ZARATHUSTRA_LANGUAGE` for executables; SSH manifest now English with it/en .ftl.
+- Reading time like KOReader (`pace.rs`): skim < 5 s ignored, page capped at 120 s, clock paused in overlays, selection, quick panel, sleep; flushed on any turn, close (Drop), sleep, USB, update restart.
+- Home covers decoded on a low-priority thread right after the home shows (`Home::prefetch`).
+- Simplify skips, worth doing when touching this again: an `ActionBlock` struct owning run/sheet/poll (Extensions and PluginPage duplicate the glue); a `Live` trait for screens the app polls (home → prefs → extensions → page, by hand today); an app-level "away" state instead of `screen.away()` at each exit path; one plugin list cached across screens (each screen calls `discover`).
+- Amazon services inventory for de-Amazon phase A: `research/2026-11-09-amazon-services-inventory.md` (when the agent finishes).
 
 ## 2026-11-08 (evening): state — SSH plugin works on the device
 
-- **Last reviewed: HEAD of 2026-11-09** (perf: back buffer, lazy covers, drag cache, popup; inline review, no findings to apply). Next review from there.
+- **Last reviewed: 26b1a78** (simplify of 7b5105e..HEAD applied; code-review findings in the commit after it). Next review from there.
 - On the device and verified: prefs + positions in the DB (schema v3), plugin system, SSH plugin (ssh, scp, sftp; keys served from /var/zarathustra-ssh because /var/local belongs to Amazon's `framework` user and Dropbear checks folder owners), `make update` (app restarts into the new build in seconds, Amazon UI stays stopped), restart after a USB install on unplug, back pill with % and ×, drop knobs, no double edge turn, quote every 15 min, light after USB.
 - a03e9e3 itself is NOT on the device yet (Kindle asleep): `make update` when it's awake.
 - Deploy: `make update` / `make install-ssh` find the Kindle with `scripts/find-kindle.sh` (DHCP moves it: .31/.32/.33 in one afternoon); port 22 = our SSH plugin. `scripts/build-ssh.sh` must be run by the user (`! scripts/build-ssh.sh`): the auto-mode classifier blocks building downloaded code.
-- Next: (1) maybe drop the selection drag cache (`Reader::drag_base`, `Canvas::snapshot/restore`): it predates the back buffer and may no longer pay for itself, measure the `selection:` log line without it first; (2) check every screen still updates fully with the back buffer (user saw no problem so far); (3) the white Amazon USB screen after "eject" (stays until the cable is pulled); (4) boot hook for `--start-services` (de-Amazon phase A), then show the "start at power-on" row (`plugin_page::BOOT_HOOK`); (5) positions stay keyed by path, like Kobo (user's decision 2026-11-09; if ever changed: book_key falling back to KOReader's partial MD5 instead of the path, v4 migration, enables KOReader progress sync); (6) plugin actions in home/book/selection menus.
+- Next: (1) maybe drop the selection drag cache (`Reader::drag_base`, `Canvas::snapshot/restore`): it predates the back buffer and may no longer pay for itself, measure the `selection:` log line without it first; (2) check every screen still updates fully with the back buffer (user saw no problem so far); (3) the white Amazon USB screen after "eject" (stays until the cable is pulled); (4) boot hook for `--start-services` (de-Amazon phase A), then show the "start at power-on" row (`plugin_page::BOOT_HOOK`); (5) positions stay keyed by path, like Kobo (user's decision 2026-11-09; if ever changed: book_key falling back to KOReader's partial MD5 instead of the path, v4 migration, enables KOReader progress sync); (6) plugin actions in the selection popup (`{selection}`).
 - Perf 2026-11-09: startup 5.5 s → 0.1 s ("home ready"; covers decoded when first drawn). The MTK framebuffer mapping is uncached (reading it ~0.3 µs/byte, writing fast), so `MtkFb` now draws into a RAM back buffer and `refresh()` copies the rectangle out: a selection frame went 60–130 ms → 16 ms. A page-long selection's popup now goes mid-screen.
 - Flaky hyphenation test still open (see below).
 
