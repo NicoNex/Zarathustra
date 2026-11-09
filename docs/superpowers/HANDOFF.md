@@ -8,6 +8,8 @@
 - Plugin strings via Fluent (`plugin_i18n.rs`, `locales/<lang>.ftl`, ids `display-name`, `description`, `action-<id|exe>`, `setting-<id>[-empty|-option-<v>]`); `ZARATHUSTRA_LANGUAGE` for executables; SSH manifest now English with it/en .ftl.
 - Reading time like KOReader (`pace.rs`): skim < 5 s ignored, page capped at 120 s, clock paused in overlays, selection, quick panel, sleep; flushed on any turn, close (Drop), sleep, USB, update restart.
 - Home covers decoded on a low-priority thread right after the home shows (`Home::prefetch`).
+- User confirmed 2026-11-09: highlights across pages with knobs, reading figures look right.
+- SSH plugin: "Connection info" action (manifest only: runs `status` with `output = "show"`), because the plugin page (port, address, host key) is reached only by tapping the plugin's name in Extensions and nothing hints at it. Open: a `›` beside the name, if the user wants it.
 - Simplify skips, worth doing when touching this again: an `ActionBlock` struct owning run/sheet/poll (Extensions and PluginPage duplicate the glue); a `Live` trait for screens the app polls (home → prefs → extensions → page, by hand today); an app-level "away" state instead of `screen.away()` at each exit path; one plugin list cached across screens (each screen calls `discover`).
 - Amazon services inventory for de-Amazon phase A: `research/2026-11-09-amazon-services-inventory.md` (when the agent finishes).
 
@@ -21,7 +23,7 @@
 - Perf 2026-11-09: startup 5.5 s → 0.1 s ("home ready"; covers decoded when first drawn). The MTK framebuffer mapping is uncached (reading it ~0.3 µs/byte, writing fast), so `MtkFb` now draws into a RAM back buffer and `refresh()` copies the rectangle out: a selection frame went 60–130 ms → 16 ms. A page-long selection's popup now goes mid-screen.
 - Flaky hyphenation test still open (see below).
 
-## Highlights across pages: DONE 2026-11-08, not yet tried on the device
+## Highlights across pages: DONE 2026-11-08, confirmed on the device 2026-11-09 (knobs too)
 
 - While selecting, holding the finger 600 ms below the last line or above the first line turns the page (same chapter only; `highlight::EDGE_DWELL`, `Reader::edge_turn`); the selection stretches to that page's last/first word and keeps following the finger.
 - A selection ending on a word takes the closing punctuation after it (`highlight::with_punct`).

@@ -31,3 +31,10 @@ empty_label = "No keys. Copy your public key into an authorized_keys file in the
 [[action]]
 menu_label = "Save diagnostics"
 executable = "diagnose"
+
+# The status lines (address with port, host key, keys) as a button: the first line, the address,
+# shows under it; a tap on that line opens the rest.
+[[action]]
+menu_label = "Connection info"
+executable = "status"
+output = "show"
