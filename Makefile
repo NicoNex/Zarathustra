@@ -23,8 +23,17 @@ UNTAR_USB := tar -xf - --no-same-owner --no-same-permissions -m
 .PHONY: install install-ssh install-usb update run-ssh build stage dicts
 install: install-ssh
 
+# Each device built for its own core, Rust and C dependencies (SQLite, MuPDF) alike; the musl
+# toolchain's gcc would otherwise default to armv5te.
+#   Kindle PW5: MediaTek MT8113, Cortex-A53 (AArch32): hardware divide, VFPv4/ARMv8 NEON.
+#   Kobo Clara 2E: i.MX6 SoloLite, Cortex-A9 r4p1: NEON + VFPv3-D32, no hardware divide.
+CFLAGS_VAR := CFLAGS_armv7_unknown_linux_musleabihf
+CXXFLAGS_VAR := CXXFLAGS_armv7_unknown_linux_musleabihf
+KINDLE_CPU := RUSTFLAGS="-C target-cpu=cortex-a53" $(CFLAGS_VAR)="-mcpu=cortex-a53 -mfpu=neon-fp-armv8" $(CXXFLAGS_VAR)="-mcpu=cortex-a53 -mfpu=neon-fp-armv8"
+KOBO_CPU := RUSTFLAGS="-C target-cpu=cortex-a9" $(CFLAGS_VAR)="-mcpu=cortex-a9 -mfpu=neon" $(CXXFLAGS_VAR)="-mcpu=cortex-a9 -mfpu=neon"
+
 build:
-	cargo build --release --target $(TARGET) -p zarathustra
+	$(KINDLE_CPU) cargo build --release --target $(TARGET) -p zarathustra
 
 # The device layout: zarathustra/{bin,hyph}, the KUAL extension, and library/ created empty
 # (books go there by hand or over Wi-Fi; nothing is ever copied into it).
@@ -88,12 +97,16 @@ run-ssh: stage
 KOBO ?= /run/media/$(USER)/KOBOeReader
 KOBO_STAGE := target/kobo-stage
 KOBO_APP := $(KOBO_STAGE)/.adds/zarathustra
+KOBO_BIN_DIR := target/kobo/$(TARGET)/release
 
-.PHONY: stage-kobo install-kobo-usb
-stage-kobo: build
+.PHONY: build-kobo stage-kobo install-kobo-usb
+build-kobo:
+	$(KOBO_CPU) cargo build --release --target $(TARGET) --target-dir target/kobo -p zarathustra
+
+stage-kobo: build-kobo
 	rm -rf $(KOBO_STAGE)
 	mkdir -p $(KOBO_APP)/bin $(KOBO_APP)/hyph $(KOBO_APP)/dictionaries $(KOBO_STAGE)/.adds/nm $(KOBO_STAGE)/library
-	cp $(BIN_DIR)/zarathustra $(KOBO_APP)/bin/
+	cp $(KOBO_BIN_DIR)/zarathustra $(KOBO_APP)/bin/
 	cp dist/kobo/zarathustra.sh dist/kobo/probe.sh $(KOBO_APP)/
 	cp assets/hyphenation/*.bincode $(KOBO_APP)/hyph/
 	cp dist/kobo/nm/zarathustra $(KOBO_STAGE)/.adds/nm/

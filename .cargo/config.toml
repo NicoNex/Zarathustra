@@ -1,7 +1,8 @@
 # Fully static build: no coupling to the device's glibc (or a future distro's).
 [target.armv7-unknown-linux-musleabihf]
 linker = "rust-lld"
-rustflags = ["-C", "target-cpu=cortex-a53"]
+# No target-cpu here: plain armv7, which runs on every device. The Makefile builds each device
+# for its own core (Rust and C alike), in its own target dir.
 
 # C dependencies (SQLite, MuPDF) for the device: musl.cc GCC toolchain (AUR arm-linux-musleabihf-cross-bin).
 [env]

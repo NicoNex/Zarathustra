@@ -18,7 +18,7 @@ Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 
 
 ## Build, deploy, test
 
-- Device build: `cargo build --release --target armv7-unknown-linux-musleabihf` (static musl, linked with `rust-lld`). C deps use the AUR `arm-linux-musleabihf-cross-bin` toolchain via `.cargo/config.toml`.
+- Device build: `make build` (Kindle, Cortex-A53) / `make build-kobo` (Kobo, Cortex-A9, in `target/kobo`): each device gets its own CPU flags for Rust and the C deps (static musl, linked with `rust-lld`). C deps use the AUR `arm-linux-musleabihf-cross-bin` toolchain via `.cargo/config.toml`.
 - Emulator: `cargo run -p zarathustra --features emulator --bin zarathustra-probe`.
 - Deploy over SSH (Zarathustra's SSH plugin, port 22, key auth; the address is found on the network by `scripts/find-kindle.sh`): `make update` (app only, the running app restarts into it in seconds), `make install-ssh` (with dictionaries), `make run-ssh BIN=zarathustra-probe` runs another binary. Over USB: `make install-usb` (the app restarts into the new binary when the cable comes out).
 - Screenshot of the device: `KINDLE_HOST=… scripts/screenshot.sh out.png`.
