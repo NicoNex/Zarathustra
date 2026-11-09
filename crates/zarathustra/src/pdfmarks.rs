@@ -53,25 +53,16 @@ fn hit(text: &PageText, place: &Place, at: (i32, i32), near: bool) -> Option<usi
     let (x, y) = place.to_page(at);
     let reach = REACH / place.frame.scale;
     let off = |lo: f32, hi: f32, v: f32| if v < lo { lo - v } else { (v - hi).max(0.0) };
-    // Each line's box; the characters come grouped by line.
-    let mut lines: Vec<(u32, [f32; 4])> = Vec::new();
-    for c in &text.chars {
-        match lines.last_mut() {
-            Some((line, r)) if *line == c.line => {
-                *r = [r[0].min(c.rect[0]), r[1].min(c.rect[1]), r[2].max(c.rect[2]), r[3].max(c.rect[3])];
-            }
-            _ => lines.push((c.line, c.rect)),
-        }
-    }
     let middle = |r: &[f32; 4]| (y - (r[1] + r[3]) / 2.0).abs();
-    let (line, r) = (lines.iter())
+    let (line, r) = (0u32..)
+        .zip(&text.lines)
         .filter(|(_, r)| off(r[0], r[2], x) <= reach)
-        .min_by(|a, b| middle(&a.1).total_cmp(&middle(&b.1)))?;
+        .min_by(|a, b| middle(a.1).total_cmp(&middle(b.1)))?;
     if off(r[1], r[3], y) > reach {
         return None;
     }
     let centre = |c: &&CharBox| (x - (c.rect[0] + c.rect[2]) / 2.0).abs();
-    let c = text.chars.iter().filter(|c| c.line == *line).min_by(|a, b| centre(a).total_cmp(&centre(b)))?;
+    let c = text.chars.iter().filter(|c| c.line == line).min_by(|a, b| centre(a).total_cmp(&centre(b)))?;
     (!near || off(c.rect[0], c.rect[2], x) <= reach).then_some(c.at)
 }
 
@@ -320,7 +311,7 @@ mod tests {
         for (i, at) in [6usize, 7].into_iter().enumerate() {
             chars.push(CharBox { at, line: 1, rect: [i as f32 * 10.0, 20.0, i as f32 * 10.0 + 10.0, 30.0] });
         }
-        PageText { text: "ab cd\nef".into(), chars }
+        PageText { text: "ab cd\nef".into(), chars, lines: vec![[0.0, 0.0, 50.0, 10.0], [0.0, 20.0, 20.0, 30.0]] }
     }
 
     const PLACE: Place = Place { x: 100, y: 200, frame: Frame { x0: 0.0, y0: 0.0, scale: 2.0 } };
@@ -336,6 +327,7 @@ mod tests {
                 c(2, 0, [10.0, 0.0, 15.0, 12.0]),
                 c(4, 1, [8.0, 8.0, 12.0, 20.0]),
             ],
+            lines: vec![[0.0, 0.0, 15.0, 12.0], [8.0, 8.0, 12.0, 20.0]],
         };
         // Page (9, 9): inside both lines' boxes, on line 1's character, nearer line 0's middle.
         assert_eq!(hit(&text, &PLACE, (118, 218), false), Some(2));

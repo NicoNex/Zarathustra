@@ -117,7 +117,7 @@ fn firewall(open: bool, port: u16) {
 
 /// This device's address on the network with the default route; `None` without Wi-Fi.
 /// A UDP "connect" only picks the route: nothing is sent.
-fn local_ip() -> Option<IpAddr> {
+pub(crate) fn local_ip() -> Option<IpAddr> {
     let s = UdpSocket::bind("0.0.0.0:0").ok()?;
     s.connect("8.8.8.8:80").ok()?;
     Some(s.local_addr().ok()?.ip()).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())

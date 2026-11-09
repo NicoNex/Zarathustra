@@ -6,6 +6,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::i18n::{strings, Lang};
 
 /// Local wall-clock time now: (days since 1970-01-01, minutes since midnight).
+/// How long until the minute turns (and a moment more, to land after it).
+pub fn until_next_minute() -> std::time::Duration {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    std::time::Duration::from_millis(60_200 - (now.as_millis() % 60_000) as u64)
+}
+
 pub fn local_now() -> (i64, u32) {
     let utc = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     // The reader header asks on every page turn: re-read the zone file at most every 15

@@ -24,7 +24,7 @@ const ROWS: usize = 3;
 /// The device information row, at the top.
 const DEVICE_ROW: Rect = Rect { x: PAD, y: TOPBAR_H + 10, w: W - 2 * PAD, h: 120 };
 /// Where the rows of choices start, under it.
-const ROWS_TOP: i32 = TOPBAR_H + 10 + 120 + 30;
+const ROWS_TOP: i32 = DEVICE_ROW.y + DEVICE_ROW.h + 30;
 
 /// The Extensions row, under the choices.
 fn extensions_row() -> Rect {

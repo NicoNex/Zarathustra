@@ -35,14 +35,16 @@ impl DeviceInfo {
             let charging = if b.charging { format!(", {}", s.device_charging) } else { String::new() };
             rows.push((s.device_battery, format!("{} %{charging}", b.percent)));
         }
-        let books = if Path::new("/mnt/us").exists() { Path::new("/mnt/us") } else { ctx.state_dir.as_path() };
-        if let Some((free, total)) = storage(books) {
+        if let Some((free, total)) = storage(&crate::library_dir()) {
             rows.push((s.device_storage, fill(s.device_free_of, &[&size(free), &size(total)])));
         }
         if let Some((free, total)) = memory() {
             rows.push((s.device_memory, fill(s.device_free_of, &[&size(free), &size(total)])));
         }
-        rows.push((s.device_address, address().unwrap_or_else(|| s.wifi_not_connected.into())));
+        rows.push((
+            s.device_address,
+            crate::transfer::local_ip().map_or_else(|| s.wifi_not_connected.into(), |ip| ip.to_string()),
+        ));
         if let Some(mac) = first_line("/sys/class/net/wlan0/address") {
             rows.push((s.device_mac, mac.to_uppercase()));
         }
@@ -107,15 +109,6 @@ fn memory() -> Option<(u64, u64)> {
         Some(line.split_whitespace().nth(1)?.parse::<u64>().ok()? * 1024)
     };
     Some((kb("MemAvailable:")?, kb("MemTotal:")?))
-}
-
-/// The address the device reaches the network from. Connecting a UDP socket sends nothing;
-/// it only picks the route.
-fn address() -> Option<String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("192.0.2.1:9").ok()?;
-    let ip = socket.local_addr().ok()?.ip();
-    (!ip.is_unspecified() && !ip.is_loopback()).then(|| ip.to_string())
 }
 
 fn uptime() -> Option<String> {

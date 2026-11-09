@@ -54,6 +54,8 @@ pub struct CharBox {
 pub struct PageText {
     pub text: String,
     pub chars: Vec<CharBox>,
+    /// Each line's box, indexed by [`CharBox::line`].
+    pub lines: Vec<[f32; 4]>,
 }
 
 // ponytail: MuPDF's resource store (decoded images, fonts) is capped at its 256 MB default,
@@ -196,7 +198,7 @@ fn page_text(stext: &mupdf::TextPage) -> PageText {
 /// MuPDF's lines, in its order, joined into the lines a reader sees. Formulas come out of
 /// MuPDF as many short lines, often after the rest of the page (LaTeX subscripts, symbols,
 /// displayed equations): a line overlapping another by half its height, close beside it,
-/// joins that one, and is sorted into it left to right. A line on its own that comes late
+/// joins that one (closer than 0.6 of a line height: a two-column gutter is wider), and is sorted into it left to right. A line on its own that comes late
 /// goes before the first line already placed below it in the same column (horizontally
 /// overlapping); the rest keep MuPDF's order, which keeps columns apart. Selecting "from
 /// here to there" then follows the page, not the drawing order.
@@ -214,7 +216,7 @@ fn reading_order(lines: Vec<Vec<Glyph>>) -> PageText {
         let joins = |v: &[f32; 4]| {
             let overlap = b[3].min(v[3]) - b[1].max(v[1]);
             let gap = (b[0] - v[2]).max(v[0] - b[2]);
-            overlap >= 0.5 * h.min(v[3] - v[1]) && gap <= 1.5 * h.max(v[3] - v[1])
+            overlap >= 0.5 * h.min(v[3] - v[1]) && gap <= 0.6 * h.max(v[3] - v[1])
         };
         match seen.iter_mut().find(|(v, _)| joins(v)) {
             Some((v, chars)) => {
@@ -235,9 +237,10 @@ fn reading_order(lines: Vec<Vec<Glyph>>) -> PageText {
             None => placed.push(i),
         }
     }
-    let mut seen: Vec<Option<VisualLine>> = seen.into_iter().map(Some).collect();
     let mut out = PageText::default();
-    for (line, (b, mut chars)) in (0..).zip(placed.into_iter().filter_map(|i| seen[i].take())) {
+    for (line, i) in (0..).zip(placed) {
+        let (b, mut chars) = std::mem::take(&mut seen[i]);
+        out.lines.push(b);
         chars.sort_by(|a, c| (a.1[0] + a.1[2]).total_cmp(&(c.1[0] + c.1[2])));
         let space = 0.25 * (b[3] - b[1]);
         let mut last: Option<(char, f32)> = None;
