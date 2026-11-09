@@ -135,6 +135,13 @@ impl Position {
     }
 }
 
+/// Leaving the reader (home, another screen, the app quitting) logs the page in front.
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.flush_reading();
+    }
+}
+
 pub(crate) fn unix_secs(t: std::time::SystemTime) -> i64 {
     t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
@@ -182,7 +189,7 @@ impl Reader {
             found: None,
         };
         crate::dict::dictionaries(&ctx.state_dir); // opened now, indexed in the background
-        r.pace.restart(Instant::now());
+        r.pace.resume(Instant::now());
         // A cover-only, empty or broken chapter: start at the nearest one with pages.
         let start = r.chapter_index;
         if !r.load_readable(start, true, ctx) && !r.load_readable(start, false, ctx) {
@@ -223,6 +230,7 @@ impl Reader {
 
     /// A jump from `from` ended here: the back pill returns there, the position is saved.
     fn landed(&mut self, from: Mark) {
+        self.leave_page(false);
         self.back.jumped(from, self.mark());
         self.save();
     }
@@ -232,38 +240,36 @@ impl Reader {
         Mark { chapter: self.chapter_index, pos: self.start(), page: self.page, progress: self.progress() }
     }
 
-    /// The time on the page shown counts as read (a forward turn, the menu opening, leaving
-    /// the book): into the reading speed and today's statistics.
-    fn bank_page(&mut self) {
-        if let Some(d) = self.pace.turned(Instant::now()) {
-            self.hl.log_page(u32::try_from(d.as_secs()).unwrap_or(u32::MAX));
+    /// The page shown stops being in front (`forward`: turned to the next one): its time
+    /// goes into today's statistics, a forward turn counting one page read.
+    fn leave_page(&mut self, forward: bool) {
+        if let Some(d) = self.pace.leave(Instant::now(), forward) {
+            self.hl.log_page(u32::try_from(d.as_secs()).unwrap_or(u32::MAX), u32::from(forward));
         }
     }
 
-    /// Opens the menu; the time on the page so far is banked, and the time in the menu isn't.
-    fn open_menu(&mut self) {
-        self.bank_page();
-        self.menu = true;
+    /// Logs the time on the page shown so far (closing the book, sleep, exit); the page
+    /// stays and its clock starts over.
+    pub fn flush_reading(&mut self) {
+        self.leave_page(false);
     }
 
-    /// A list or the search opened straight from the home closed over the page: reading time
-    /// starts now, not when the book opened. (Under the menu, closing the menu restarts it.)
-    fn resume_pace(&mut self) {
-        if !self.menu {
-            self.pace.restart(Instant::now());
+    /// Runs the page's clock while the page is in front, pauses it while anything covers it:
+    /// an overlay, a selection or its popup, or `away` (the quick panel, the device asleep).
+    /// Idempotent: the app calls it after every batch of events.
+    pub fn clock(&mut self, away: bool) {
+        let now = Instant::now();
+        if away || self.overlay_open() || self.hl.is_active() {
+            self.pace.pause(now);
+        } else {
+            self.pace.resume(now);
         }
-    }
-
-    /// Closes the menu: reading time starts again from here.
-    fn close_menu(&mut self) {
-        self.menu = false;
-        self.pace.restart(Instant::now());
     }
 
     /// Back to where the reader was before the last jump.
     fn go_back(&mut self, ctx: &mut Ctx) {
         let Some(m) = self.back.take() else { return };
-        self.bank_page();
+        self.leave_page(false);
         self.found = None;
         if m.chapter != self.chapter_index {
             if let Err(e) = self.load(m.chapter, ctx) {
@@ -376,6 +382,7 @@ impl Reader {
             }
             self.page = if forward { 0 } else { self.chapter.pages.len() - 1 };
         }
+        self.leave_page(forward);
         self.turned();
         true
     }
@@ -416,7 +423,7 @@ impl Reader {
             && y0 - y > SWIPE;
         if opens {
             self.hl.dismiss();
-            self.open_menu();
+            self.menu = true;
         }
         opens
     }
@@ -493,7 +500,7 @@ impl Reader {
             dx if dx < -SWIPE => true,
             dx if dx > SWIPE => false,
             _ if y0 < TOP_BAND => {
-                self.open_menu();
+                self.menu = true;
                 return Action::Redraw { turn: None };
             }
             _ => x0 >= BACK_ZONE,
@@ -502,11 +509,6 @@ impl Reader {
         if !self.turn(forward, ctx) {
             // At either end of the book; a chapter reload on the way may have dropped the popup.
             return if active && !self.hl.is_active() { Action::Redraw { turn: None } } else { Action::None };
-        }
-        if forward {
-            self.bank_page();
-        } else {
-            self.pace.restart(Instant::now()); // re-reading a page isn't reading speed
         }
         Action::Redraw { turn: Some(forward) }
     }
@@ -575,7 +577,7 @@ impl Reader {
         match hit {
             Some((Control::Library, _)) => {
                 self.save();
-                self.close_menu();
+                self.menu = false;
                 Action::Home
             }
             Some((Control::Contents, _)) => {
@@ -599,7 +601,7 @@ impl Reader {
             }
             None if menu::covers(y) => Action::None,
             None => {
-                self.close_menu();
+                self.menu = false;
                 Action::Redraw { turn: None }
             }
         }
@@ -642,7 +644,7 @@ impl Reader {
         } else if self.chapter_index == chapter {
             self.page = nav::page_in(within, self.chapter.pages.len());
         }
-        self.close_menu();
+        self.menu = false;
         self.landed(from);
         Action::Redraw { turn: None }
     }
@@ -654,7 +656,6 @@ impl Reader {
             toc::Tap::Redraw => Action::Redraw { turn: None },
             toc::Tap::Back => {
                 self.toc = None;
-                self.resume_pace();
                 Action::Redraw { turn: None }
             }
             toc::Tap::Jump(i) => {
@@ -666,7 +667,7 @@ impl Reader {
                 let data = a.data.clone();
                 self.goto(&data, ctx);
                 self.toc = None;
-                self.close_menu();
+                self.menu = false;
                 Action::Redraw { turn: None }
             }
             toc::Tap::Remove(i) => {
@@ -690,7 +691,7 @@ impl Reader {
             self.page = block.map_or(0, |b| self.first_page_of(b));
         }
         self.toc = None;
-        self.close_menu();
+        self.menu = false;
         self.landed(from);
     }
 
@@ -735,7 +736,6 @@ impl Reader {
             search::Tap::Typed(t) => Action::Typed(t),
             search::Tap::Close => {
                 s.open = false;
-                self.resume_pace();
                 Action::Redraw { turn: None }
             }
             search::Tap::Open(i) => {
@@ -765,7 +765,7 @@ impl Reader {
         self.found = search::block_range(&map, &self.chapter.blocks, hit.range.clone());
         self.toc = None;
         self.page = self.found.as_ref().map_or(0, |r| self.page_of(r.start));
-        self.close_menu();
+        self.menu = false;
         self.landed(from);
     }
 
@@ -838,6 +838,7 @@ impl Reader {
     /// chapter, the selection carrying on there. True when the page turned.
     pub fn edge_turn(&mut self) -> bool {
         let Some(next) = self.hl.edge_turn(&self.chapter, self.page) else { return false };
+        self.leave_page(next > self.page);
         self.page = next;
         self.turned();
         true

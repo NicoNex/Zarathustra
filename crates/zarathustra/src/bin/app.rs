@@ -55,6 +55,15 @@ impl Screen {
         }
     }
 
+    /// Reading stops for now (sleep, USB, exit): the page's time so far is logged and its
+    /// clock paused until the loop's next [`Reader::clock`].
+    fn away(&mut self) {
+        if let Screen::Reader(r) = self {
+            r.flush_reading();
+            r.clock(true);
+        }
+    }
+
     /// The reading screen for the book at `path`: PDFs as pages, everything else reflowed.
     fn open(path: &std::path::Path, ctx: &mut Ctx) -> Result<Screen> {
         Ok(match Format::from_path(path) {
@@ -608,6 +617,7 @@ fn main() -> Result<()> {
             match ev {
                 PowerEvent::Sleep => {
                     asleep = true;
+                    screen.away();
                     quick.close();
                     let battery = dev.battery();
                     match &mut screen {
@@ -622,6 +632,7 @@ fn main() -> Result<()> {
                 }
                 PowerEvent::Usb(true) if !asleep => {
                     quick.close();
+                    screen.away();
                     if usb_prompt(&mut dev, &mut ctx)? {
                         std::process::exit(USB_EXIT);
                     }
@@ -641,6 +652,7 @@ fn main() -> Result<()> {
         // A new binary installed over USB: checked after any power event (the cable out, waking
         // up), since the USB prompt consumes the unplug event itself and the device may sleep.
         if power && !asleep && installed.is_some() && installed_binary() != installed {
+            screen.away();
             restart_into_update();
         }
         // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
@@ -1019,6 +1031,10 @@ fn main() -> Result<()> {
             quick.render(&mut dev.canvas(), &mut ctx);
             marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;
             eprintln!("panel drawn in {:?}", t0.elapsed());
+        }
+        // The page's reading clock runs only while it is in front.
+        if let Screen::Reader(r) = &mut screen {
+            r.clock(quick.is_open() || asleep);
         }
     }
 }
