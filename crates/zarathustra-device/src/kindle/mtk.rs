@@ -1,13 +1,12 @@
 //! MediaTek hwtcon e-ink framebuffer (Kindle PW5 and newer), via the mxcfb-style ioctls.
 //! Constants and layouts mirror KOReader's `ffi/mxcfb_kindle_h.lua`.
 
-use std::fs::File;
 use std::io;
 use std::mem::size_of;
-use std::os::fd::AsRawFd;
 
+use crate::fb::Framebuffer;
 use crate::sys::{ioc, ioctl, IOC_READ, IOC_WRITE};
-use crate::{Canvas, Rect, Refresh, Swipe, Waveform};
+use crate::{Refresh, Swipe, Waveform};
 
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -75,124 +74,29 @@ const FLAG_ENABLE_SWIPE: u32 = 0x10000;
 /// Stock reader value; valid 1–60. The driver crashes on regions smaller than this.
 const SWIPE_STEPS: u32 = 12;
 
-const FBIOGET_VSCREENINFO: u32 = 0x4600;
-const FBIOGET_FSCREENINFO: u32 = 0x4602;
-
-#[repr(C)]
-struct FixInfo {
-    id: [u8; 16],
-    smem_start: libc::c_ulong,
-    smem_len: u32,
-    ty: u32,
-    type_aux: u32,
-    visual: u32,
-    xpanstep: u16,
-    ypanstep: u16,
-    ywrapstep: u16,
-    line_length: u32,
-    mmio_start: libc::c_ulong,
-    mmio_len: u32,
-    accel: u32,
-    capabilities: u16,
-    reserved: [u16; 2],
-}
-
-/// `fb_var_screeninfo` is 40 u32s; we only read a few by index.
-const VAR_XRES: usize = 0;
-const VAR_YRES: usize = 1;
-const VAR_YOFFSET: usize = 5;
-const VAR_BPP: usize = 6;
-const VAR_ROTATE: usize = 34;
-
 pub struct MtkFb {
-    file: File,
-    map: *mut u8,
-    map_len: usize,
-    offset: usize,
-    pub width: i32,
-    pub height: i32,
-    stride: usize,
-    pub rotate: u32,
+    pub fb: Framebuffer,
     marker: u32,
-    /// What the app draws into. The mapping is uncached: a byte read there costs ~0.3 µs (a
-    /// third of the screen read-modify-written took 186 ms on a PW5, against 2 ms to write the
-    /// whole screen), and blending and tinting read every pixel. So drawing happens in RAM and
-    /// [`MtkFb::refresh`] copies the refreshed rectangle out, write-only.
-    back: Vec<u8>,
 }
 
 impl MtkFb {
     pub fn open(path: &str) -> io::Result<Self> {
-        let file = File::options().read(true).write(true).open(path)?;
-        let fd = file.as_raw_fd();
-        let mut var = [0u32; 40];
-        // SAFETY: fb_var_screeninfo is 40 u32s.
-        unsafe { ioctl(fd, FBIOGET_VSCREENINFO, var.as_mut_ptr())? };
-        // SAFETY: FixInfo is plain old data; all-zero is valid.
-        let mut fix: FixInfo = unsafe { std::mem::zeroed() };
-        // SAFETY: FixInfo mirrors fb_fix_screeninfo.
-        unsafe { ioctl(fd, FBIOGET_FSCREENINFO, &mut fix)? };
-        if var[VAR_BPP] != 8 {
-            // ponytail: 8-bit gray only (what MTK Kindles expose); add a converter if a device needs 16/32 bpp.
-            return Err(io::Error::new(io::ErrorKind::Unsupported, format!("{} bpp framebuffer", var[VAR_BPP])));
-        }
-        let map_len = fix.smem_len as usize;
-        // SAFETY: mapping the framebuffer device's whole memory, shared, read/write.
-        let map = unsafe {
-            libc::mmap(std::ptr::null_mut(), map_len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, 0)
-        };
-        if map == libc::MAP_FAILED {
-            return Err(io::Error::last_os_error());
-        }
-        let mut fb = MtkFb {
-            map: map.cast(),
-            map_len,
-            offset: var[VAR_YOFFSET] as usize * fix.line_length as usize,
-            width: var[VAR_XRES] as i32,
-            height: var[VAR_YRES] as i32,
-            stride: fix.line_length as usize,
-            rotate: var[VAR_ROTATE],
-            marker: 0,
-            back: Vec::new(),
-            file,
-        };
-        // Start from what the screen shows, so a partial refresh never copies out stale zeros.
-        fb.back = fb.visible().to_vec();
+        let fb = Framebuffer::open(path, false)?;
         // Keep the driver from silently promoting refreshes to slow REAGL.
         let mut fast = 0x8000_0000u32 | 1;
         // SAFETY: the request takes one u32.
-        if let Err(e) = unsafe { ioctl(fd, SET_UPDATE_FLAGS_MTK, &mut fast) } {
+        if let Err(e) = unsafe { ioctl(fb.fd(), SET_UPDATE_FLAGS_MTK, &mut fast) } {
             // Best effort: refreshes still work, the driver may just pick slower REAGL.
             eprintln!("MTK fast mode unavailable: {e}");
         }
-        Ok(fb)
-    }
-
-    /// The visible area of the mapping.
-    fn visible(&mut self) -> &mut [u8] {
-        let len = self.stride * self.height as usize;
-        assert!(self.offset + len <= self.map_len);
-        // SAFETY: the visible area lies inside the mapping (asserted) and we hold &mut self.
-        unsafe { std::slice::from_raw_parts_mut(self.map.add(self.offset), len) }
-    }
-
-    pub fn canvas(&mut self) -> Canvas<'_> {
-        Canvas { width: self.width, height: self.height, stride: self.stride, pixels: &mut self.back }
+        Ok(MtkFb { fb, marker: 0 })
     }
 
     pub fn refresh(&mut self, r: &Refresh) -> io::Result<u32> {
-        let rect = r.rect.intersect(&Rect::new(0, 0, self.width, self.height));
+        let rect = self.fb.flush(r.rect);
         if rect.is_empty() {
             return Ok(0);
         }
-        let (x, w, stride) = (rect.x as usize, rect.w as usize, self.stride);
-        let back = std::mem::take(&mut self.back);
-        let fb = self.visible();
-        for y in rect.y as usize..rect.bottom() as usize {
-            let row = y * stride + x..y * stride + x + w;
-            fb[row.clone()].copy_from_slice(&back[row]);
-        }
-        self.back = back;
         self.marker = self.marker.wrapping_add(1).max(1);
         let (waveform_mode, mut flags) = match r.waveform {
             Waveform::Full => (WAVEFORM_GC16, 0),
@@ -225,7 +129,7 @@ impl MtkFb {
             ..Default::default()
         };
         // SAFETY: UpdateDataMtk mirrors mxcfb_update_data_mtk (size checked in tests).
-        unsafe { ioctl(self.file.as_raw_fd(), SEND_UPDATE_MTK, &mut data)? };
+        unsafe { ioctl(self.fb.fd(), SEND_UPDATE_MTK, &mut data)? };
         Ok(self.marker)
     }
 
@@ -235,14 +139,7 @@ impl MtkFb {
         }
         let mut data = MarkerData { marker, collision_test: 0 };
         // SAFETY: MarkerData mirrors mxcfb_update_marker_data.
-        unsafe { ioctl(self.file.as_raw_fd(), WAIT_FOR_UPDATE_COMPLETE, &mut data) }
-    }
-}
-
-impl Drop for MtkFb {
-    fn drop(&mut self) {
-        // SAFETY: unmapping exactly what open() mapped.
-        unsafe { libc::munmap(self.map.cast(), self.map_len) };
+        unsafe { ioctl(self.fb.fd(), WAIT_FOR_UPDATE_COMPLETE, &mut data) }
     }
 }
 

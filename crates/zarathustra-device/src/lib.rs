@@ -1,6 +1,7 @@
 //! Hardware abstraction: everything device-specific lives behind [`Device`].
 
 pub mod canvas;
+mod fb;
 pub mod geom;
 pub mod input;
 pub mod kindle;

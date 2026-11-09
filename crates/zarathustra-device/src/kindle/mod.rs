@@ -76,14 +76,14 @@ impl Kindle {
             .find(|m| Path::new(m.white_led).exists())
             .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "unknown Kindle model"))?;
         let fb = mtk::MtkFb::open("/dev/fb0")?;
-        let touch = TouchPanel::find(Path::new("/dev/input"), (fb.width, fb.height), model.touch)?;
+        let touch = TouchPanel::find(Path::new("/dev/input"), (fb.fb.width, fb.fb.height), model.touch)?;
         let light = Led::open(model.white_led).ok().map(|white| SysfsLight {
             white,
             warm: model.warm_led.and_then(|p| Led::open(p).ok()),
             mix: model.light_mix.and_then(sysfs::Mix::parse),
         });
         // ponytail: one-time bring-up log; drop once more models are verified.
-        eprintln!("{} {}x{} rotate={}", model.name, fb.width, fb.height, fb.rotate);
+        eprintln!("{} {}x{} rotate={}", model.name, fb.fb.width, fb.fb.height, fb.fb.rotate);
         let powerd = power::Powerd::spawn().map_err(|e| eprintln!("powerd events unavailable: {e}")).ok();
         let _kaf = power::KafStub::spawn().map_err(|e| eprintln!("kaf stub: {e}")).ok().flatten();
         Ok(Kindle {
@@ -196,11 +196,11 @@ impl Device for Kindle {
     }
 
     fn size(&self) -> (i32, i32) {
-        (self.fb.width, self.fb.height)
+        (self.fb.fb.width, self.fb.fb.height)
     }
 
     fn canvas(&mut self) -> Canvas<'_> {
-        self.fb.canvas()
+        self.fb.fb.canvas()
     }
 
     fn refresh(&mut self, r: &Refresh) -> io::Result<u32> {
