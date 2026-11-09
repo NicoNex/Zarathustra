@@ -28,10 +28,10 @@ pub const LONG_PRESS: Duration = Duration::from_millis(500);
 pub const SLOP: i32 = 24;
 
 /// Background of saved highlights: light enough for black text, dark enough to see.
-const HIGHLIGHT_GRAY: u8 = 215;
+pub(crate) const HIGHLIGHT_GRAY: u8 = 215;
 /// The live selection: highlight gray plus a bar under the line, which still shows with the
 /// black-and-white waveform used while dragging.
-const SELECTION_BAR: i32 = 5;
+pub(crate) const SELECTION_BAR: i32 = 5;
 const POPUP_H: i32 = 100;
 const BUTTON_W: i32 = 240;
 /// Clear of the selection knobs, which stick out 2 × HANDLE_R above and below the text.
@@ -277,7 +277,7 @@ pub struct Popup {
 impl Popup {
     /// Centred over the bands, above them when there is room, else below, else (a page-long
     /// selection) in the middle of the screen, over the text.
-    fn new(target: Option<usize>, buttons: &[Button], bands: &[Rect]) -> Popup {
+    pub(crate) fn new(target: Option<usize>, buttons: &[Button], bands: &[Rect]) -> Popup {
         let w = BUTTON_W * buttons.len() as i32;
         let union = bands.iter().fold(Rect::default(), |u, r| u.union(r));
         let x = (union.x + union.w / 2 - w / 2).clamp(16, W - 16 - w);
@@ -299,7 +299,7 @@ impl Popup {
         Popup { target, rect, buttons }
     }
 
-    fn button_at(&self, (x, y): (i32, i32)) -> Option<Button> {
+    pub(crate) fn button_at(&self, (x, y): (i32, i32)) -> Option<Button> {
         self.buttons.iter().find(|(_, r)| r.contains(x, y)).map(|&(b, _)| b)
     }
 }
@@ -679,11 +679,18 @@ impl Highlights {
                 crate::ui::drop_knob(c, (x, y), HANDLE_R, end, INK);
             }
         }
-        rounded_rect(c, popup.rect, 20, INK);
+        popup.render(c, ctx);
+    }
+}
+
+impl Popup {
+    /// The black bar and its buttons.
+    pub(crate) fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        rounded_rect(c, self.rect, 20, INK);
         let Ctx { fonts, raster, .. } = ctx;
         let Some(face) = crate::sans(fonts, true) else { return };
         let label = Label { face, size: 36.0, ink: PAPER };
-        for (i, (b, r)) in popup.buttons.iter().enumerate() {
+        for (i, (b, r)) in self.buttons.iter().enumerate() {
             if i > 0 {
                 c.fill(Rect::new(r.x, r.y + 24, 2, r.h - 48), 120);
             }

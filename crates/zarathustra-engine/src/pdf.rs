@@ -1,9 +1,10 @@
-//! PDF (and other fixed-layout documents MuPDF opens): metadata, outline and pages rendered
-//! to 8-bit gray. Pages are pictures here, not reflowed text.
+//! PDF (and other fixed-layout documents MuPDF opens): metadata, outline, pages rendered
+//! to 8-bit gray, and each page's text with where every character is (for search and
+//! highlights). Pages are pictures here, not reflowed text.
 
 use std::path::Path;
 
-use mupdf::{Colorspace, Device, DisplayList, Document, Matrix, MetadataName, Outline, Pixmap, Rect};
+use mupdf::{Colorspace, Device, DisplayList, Document, Matrix, MetadataName, Outline, Pixmap, Rect, TextPageFlags};
 
 use crate::image::GrayImage;
 
@@ -26,6 +27,33 @@ pub struct OutlineEntry {
     pub depth: usize,
     /// Page index (0-based) the entry points at.
     pub page: usize,
+}
+
+/// Where a rendered image sits on its page: page point `(x, y)` is image pixel
+/// `((x - x0) * scale, (y - y0) * scale)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub x0: f32,
+    pub y0: f32,
+    pub scale: f32,
+}
+
+/// A character of a page's text and its box in page points: left, top, right, bottom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharBox {
+    /// Byte offset of the character in [`PageText::text`].
+    pub at: usize,
+    /// The line it is on, counted over the page.
+    pub line: u32,
+    pub rect: [f32; 4],
+}
+
+/// A page's text in reading order, a `\n` after each line, with every character's box
+/// (the line breaks have none).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PageText {
+    pub text: String,
+    pub chars: Vec<CharBox>,
 }
 
 // ponytail: MuPDF's resource store (decoded images, fonts) is capped at its 256 MB default,
@@ -89,6 +117,11 @@ impl Pdf {
     /// Page `n` fitted into `max_w`×`max_h`, aspect kept (the image is at most that big, one
     /// side exactly). With `crop`, the white margins around the content are cut first.
     pub fn render(&self, n: usize, max_w: u32, max_h: u32, crop: bool) -> Result<GrayImage, PdfError> {
+        Ok(self.render_framed(n, max_w, max_h, crop)?.0)
+    }
+
+    /// [`Pdf::render`], with where the image sits on the page.
+    pub fn render_framed(&self, n: usize, max_w: u32, max_h: u32, crop: bool) -> Result<(GrayImage, Frame), PdfError> {
         let page = self.doc.load_page(i32::try_from(n).unwrap_or(i32::MAX))?;
         let bounds = page.bounds()?;
         // Interpreted once: cropping rasterizes the page twice (preview, then the page).
@@ -101,7 +134,33 @@ impl Pdf {
         let scale = (max_w as f32 / aw).min(max_h as f32 / ah);
         let w = ((aw * scale).round() as u32).clamp(1, max_w);
         let h = ((ah * scale).round() as u32).clamp(1, max_h);
-        draw(&list, &area, scale, w, h)
+        Ok((draw(&list, &area, scale, w, h)?, Frame { x0: area.x0, y0: area.y0, scale }))
+    }
+
+    /// Page `n`'s text, a character box per character. Empty for a scanned page.
+    pub fn text(&self, n: usize) -> Result<PageText, PdfError> {
+        let page = self.doc.load_page(i32::try_from(n).unwrap_or(i32::MAX))?;
+        let stext = page.to_text_page(TextPageFlags::empty())?;
+        let mut out = PageText::default();
+        let mut line = 0;
+        for block in stext.blocks() {
+            for l in block.lines() {
+                for ch in l.chars() {
+                    let Some(c) = ch.char() else { continue };
+                    let q = ch.quad();
+                    let xs = [q.ul.x, q.ur.x, q.ll.x, q.lr.x];
+                    let ys = [q.ul.y, q.ur.y, q.ll.y, q.lr.y];
+                    let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
+                    let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
+                    let rect = [min(xs), min(ys), max(xs), max(ys)];
+                    out.chars.push(CharBox { at: out.text.len(), line, rect });
+                    out.text.push(c);
+                }
+                out.text.push('\n');
+                line += 1;
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -218,6 +277,27 @@ pub(crate) mod tests {
         assert_eq!(pdf.author().as_deref(), Some("Ann Author"));
         let titles: Vec<_> = pdf.outline().into_iter().map(|e| (e.title, e.depth, e.page)).collect();
         assert_eq!(titles, [("One".to_string(), 0, 0), ("Two".to_string(), 0, 1)]);
+    }
+
+    #[test]
+    fn page_text_has_lines_and_boxes() {
+        // Two lines of Nimbus Sans 24 at y 700 and 670, the font embedded (this build of MuPDF
+        // has no base-14 fonts). Made with `gs -sDEVICE=pdfwrite` from text.ps next to it.
+        let pdf = Pdf::from_bytes(include_bytes!("../tests/data/text.pdf")).expect("open");
+        let page = pdf.text(0).expect("text");
+        assert_eq!(page.text, "Hello world\nSecond\n");
+        assert_eq!(page.chars.len(), "Hello worldSecond".len());
+        let h = page.chars[0];
+        let second = page.chars.iter().find(|c| c.at == 12).expect("S");
+        assert_eq!((h.line, second.line), (0, 1));
+        // PDF y grows upward, MuPDF's downward: the first line is above the second, near x 72.
+        assert!(h.rect[1] < second.rect[1] && (h.rect[0] - 72.0).abs() < 2.0, "{h:?} {second:?}");
+        let blank = Pdf::from_bytes(&sample_pdf()).expect("open");
+        assert!(blank.text(1).expect("blank").text.is_empty());
+        // Uncropped A4 (595 × 842 pt) into 421 px high: half size, from the page's corner.
+        let (img, frame) = pdf.render_framed(0, 1000, 421, false).expect("render");
+        assert_eq!((frame.x0, frame.y0, img.height), (0.0, 0.0, 421));
+        assert!((frame.scale - 0.5).abs() < 0.001, "{frame:?}");
     }
 
     #[test]

@@ -53,6 +53,14 @@ pub struct Found {
     bold: Range<usize>,
 }
 
+impl Found {
+    /// A hit at `range` of `text`, the text of `chapter` (a page, for PDFs), listed under `title`.
+    pub fn new(chapter: usize, range: Range<usize>, title: String, text: &str) -> Found {
+        let (snippet, bold) = snippet(text, range.clone(), CONTEXT.0, CONTEXT.1);
+        Found { chapter, range, title, snippet, bold }
+    }
+}
+
 /// What a tap on the search screen asks for.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Tap {
@@ -181,30 +189,40 @@ impl Search {
     /// Searches on for a while. Returns the area to refresh when the hits on screen changed
     /// or the search finished.
     pub fn step(&mut self, book: &Book, entries: &[toc::Entry]) -> Option<Rect> {
+        self.step_with(book.chapters.len(), |query, i, limit| {
+            let Ok(dom) = book.chapter_dom(i) else { return Vec::new() };
+            let map = TextMap::new(&dom);
+            let hits = query.find(map.text(), limit);
+            if hits.is_empty() {
+                return Vec::new();
+            }
+            let marks = titles(&dom, &map, entries, i);
+            let title = |at| marks.iter().rev().find(|m| m.0 <= at).map_or("", |m| m.1).to_string();
+            hits.into_iter().map(|range| Found::new(i, range.clone(), title(range.start), map.text())).collect()
+        })
+    }
+
+    /// [`Search::step`] over `units` chapters or pages, `find(query, unit, limit)` giving
+    /// at most `limit` hits of one.
+    pub fn step_with(
+        &mut self,
+        units: usize,
+        mut find: impl FnMut(&Query, usize, usize) -> Vec<Found>,
+    ) -> Option<Rect> {
         let (query, next) = self.run.as_mut()?;
         let t0 = Instant::now();
         let before = self.results.len();
         let screen_end = (self.page + 1) * ROWS;
-        while *next < book.chapters.len() && self.results.len() < MAX_HITS && t0.elapsed() < BUDGET {
+        while *next < units && self.results.len() < MAX_HITS && t0.elapsed() < BUDGET {
             let i = *next;
             *next += 1;
-            let Ok(dom) = book.chapter_dom(i) else { continue };
-            let map = TextMap::new(&dom);
-            let hits = query.find(map.text(), MAX_HITS - self.results.len());
-            if !hits.is_empty() {
-                let marks = titles(&dom, &map, entries, i);
-                for range in hits {
-                    let title = marks.iter().rev().find(|m| m.0 <= range.start).map_or("", |m| m.1);
-                    let (snippet, bold) = snippet(map.text(), range.clone(), CONTEXT.0, CONTEXT.1);
-                    self.results.push(Found { chapter: i, range, title: title.to_string(), snippet, bold });
-                }
-            }
+            self.results.extend(find(query, i, MAX_HITS - self.results.len()));
             // The screen shown just filled up: draw it now, search on afterwards.
             if before < screen_end && self.results.len() >= screen_end {
                 break;
             }
         }
-        let done = *next >= book.chapters.len() || self.results.len() >= MAX_HITS;
+        let done = *next >= units || self.results.len() >= MAX_HITS;
         if done {
             eprintln!("search: {} hits in {next} chapters", self.results.len());
             self.run = None;

@@ -51,7 +51,7 @@ impl Screen {
         match self {
             Screen::Home(h) => h.keyboard(),
             Screen::Reader(r) => r.keyboard(),
-            Screen::Pdf(_) => None,
+            Screen::Pdf(p) => p.keyboard(),
         }
     }
 
@@ -119,10 +119,15 @@ impl Press {
 
     /// Turns the press into a long press at `start` when there is a word there to select;
     /// otherwise the lift stays a plain tap (menu controls, margins, the popup's buttons).
-    fn fire(&mut self, r: &mut Reader, start: (i32, i32), selection: &mut Option<Rect>) {
+    fn fire(&mut self, screen: &mut Screen, start: (i32, i32), selection: &mut Option<Rect>) {
         self.at = None;
-        let typing = r.search_shown();
-        if let Some(rect) = r.long_press(start) {
+        let typing = screen.keyboard().is_some();
+        let rect = match screen {
+            Screen::Reader(r) => r.long_press(start),
+            Screen::Pdf(p) => p.long_press(start),
+            Screen::Home(_) => None,
+        };
+        if let Some(rect) = rect {
             // Accents on the search keyboard are tapped next, not dragged over.
             self.select(rect, !typing, selection);
         }
@@ -432,6 +437,34 @@ fn main() -> Result<()> {
             p.menu = true;
             p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
             write_pgm(dir.join("menu.pgm"), &px)?;
+            // Search: typed, run, the first hit opened; then a word there selected.
+            p.show_search();
+            let centre = |r: Rect| (r.x + r.w / 2, r.y + r.h / 2);
+            let keys = zarathustra::keyboard::Keyboard::default().keys();
+            let key = |k: zarathustra::keyboard::Key| keys.iter().find(|(key, _)| *key == k).map(|(_, r)| centre(*r));
+            let typed = query.chars().map(zarathustra::keyboard::Key::Char).chain([zarathustra::keyboard::Key::Enter]);
+            for at in typed.filter_map(key) {
+                p.tap(at, at.0);
+            }
+            while p.is_searching() {
+                p.search_step();
+            }
+            let mut shot = |p: &mut PdfView, name: &str| -> Result<()> {
+                p.render(&mut Canvas { width: W, height: H, stride: W as usize, pixels: &mut px }, &mut ctx);
+                write_pgm(dir.join(name), &px)
+            };
+            shot(p, "pdf_search_results.pgm")?;
+            let row = zarathustra::search::LIST_TOP + zarathustra::search::ROW_H / 2;
+            p.tap((W / 2, row), W / 2);
+            shot(p, "pdf_search_hit.pgm")?;
+            for at in [(W / 3, H / 3), (W / 2, H / 2)] {
+                if p.long_press(at).is_some() {
+                    p.drag((W * 2 / 3, at.1 + 120));
+                    p.release();
+                    break;
+                }
+            }
+            shot(p, "pdf_selection.pgm")?;
         }
         if let Screen::Reader(r) = &mut screen {
             zarathustra_device::set_night(true);
@@ -576,15 +609,17 @@ fn main() -> Result<()> {
         // Wake every few minutes so automatic warmth follows the clock, or when a finger held
         // still on a page becomes a long press.
         let long_press = match (&screen, press.pending()) {
-            (Screen::Reader(_) | Screen::Home(_), Some(at)) if !quick.is_open() => {
-                Some(LONG_PRESS.saturating_sub(at.elapsed()))
-            }
+            (_, Some(at)) if !quick.is_open() => Some(LONG_PRESS.saturating_sub(at.elapsed())),
             // The Wi-Fi password's keys have accents too.
             (_, Some(at)) if quick.keyboard().is_some() => Some(LONG_PRESS.saturating_sub(at.elapsed())),
             _ => None,
         };
         // A search under way only peeks at the input queue between chapters.
-        let searching = matches!(&screen, Screen::Reader(r) if r.is_searching()) && !quick.is_open();
+        let searching = match &screen {
+            Screen::Reader(r) => r.is_searching(),
+            Screen::Pdf(p) => p.is_searching(),
+            Screen::Home(_) => false,
+        } && !quick.is_open();
         // The send-books screen checks for arriving books every second; the home looks for
         // new books every half minute (a walk and a stat per file).
         if let Screen::Home(h) = &mut screen {
@@ -781,7 +816,7 @@ fn main() -> Result<()> {
                     let pressed = match &mut screen {
                         Screen::Reader(r) => r.press((t.x, t.y)),
                         Screen::Home(h) => h.press((t.x, t.y)),
-                        Screen::Pdf(_) => None,
+                        Screen::Pdf(p) => p.press((t.x, t.y)),
                     };
                     if let Some(rect) = pressed {
                         // Copied from the keyboard's own image: nothing else is drawn.
@@ -795,17 +830,20 @@ fn main() -> Result<()> {
                 Phase::Move => {
                     let Some(start) = down else { continue };
                     if press.selecting {
-                        if let Screen::Reader(r) = &mut screen {
-                            if let Some(rect) = r.drag((t.x, t.y)) {
-                                selection = Some(selection.map_or(rect, |s| s.union(&rect)));
-                            }
+                        let dragged = match &mut screen {
+                            Screen::Reader(r) => r.drag((t.x, t.y)),
+                            Screen::Pdf(p) => p.drag((t.x, t.y)),
+                            Screen::Home(_) => None,
+                        };
+                        if let Some(rect) = dragged {
+                            selection = Some(selection.map_or(rect, |s| s.union(&rect)));
                         }
                     } else if (t.x - start.0).abs() > SLOP || (t.y - start.1).abs() > SLOP {
                         press.at = None; // moving: a swipe or a tap, not a long press
-                    } else if let Screen::Reader(r) = &mut screen {
-                        if press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS) {
-                            press.fire(r, start, &mut selection);
-                        }
+                    } else if !matches!(screen, Screen::Home(_))
+                        && press.pending().is_some_and(|at| at.elapsed() >= LONG_PRESS)
+                    {
+                        press.fire(&mut screen, start, &mut selection);
                     }
                     // Dragging the menu's scrubber: redrawn with the selection's fast waveform.
                     if let Screen::Reader(r) = &mut screen {
@@ -822,15 +860,18 @@ fn main() -> Result<()> {
             lifted.frames.log();
             if lifted.fired {
                 // The end of a long press: show the actions for the selection, if any.
-                if let Screen::Reader(r) = &mut screen {
-                    if let Some(rect) = r.release(&mut ctx) {
-                        // Drag frames of this batch are not drawn yet: cover them too.
-                        let rect = selection.map_or(rect, |s| s.union(&rect));
-                        let rect = if lifted.turned { full } else { rect };
-                        ready(&mut dev, &mut typing, &mut marker)?;
-                        r.render(&mut dev.canvas(), &mut ctx);
-                        marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
-                    }
+                let released = match &mut screen {
+                    Screen::Reader(r) => r.release(&mut ctx),
+                    Screen::Pdf(p) => p.release(),
+                    Screen::Home(_) => None,
+                };
+                if let Some(rect) = released {
+                    // Drag frames of this batch are not drawn yet: cover them too.
+                    let rect = selection.map_or(rect, |s| s.union(&rect));
+                    let rect = if lifted.turned { full } else { rect };
+                    ready(&mut dev, &mut typing, &mut marker)?;
+                    screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
+                    marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                 }
                 selection = None;
                 continue;
@@ -899,6 +940,8 @@ fn main() -> Result<()> {
                             (Screen::Reader(r), Landing::Bookmarks) => r.show_toc(Tab::Bookmarks),
                             (Screen::Reader(r), Landing::Search) => r.show_search(),
                             (Screen::Pdf(p), Landing::Contents) => p.show_contents(),
+                            (Screen::Pdf(p), Landing::Search) => p.show_search(),
+                            (Screen::Pdf(p), Landing::At(data)) => p.goto(data.start.spine as usize),
                             _ => {}
                         }
                         if let Screen::Home(h) = std::mem::replace(&mut screen, s) {
@@ -952,7 +995,7 @@ fn main() -> Result<()> {
             }
         } else if let Some(start) = down.filter(|_| held) {
             match &mut screen {
-                Screen::Reader(r) => press.fire(r, start, &mut selection),
+                Screen::Reader(_) | Screen::Pdf(_) => press.fire(&mut screen, start, &mut selection),
                 // On a book: its menu, while the finger is still down. Elsewhere (chips, page
                 // turns) the press stays a tap.
                 Screen::Home(h) => {
@@ -976,7 +1019,6 @@ fn main() -> Result<()> {
                         marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
                     }
                 }
-                Screen::Pdf(_) => {}
             }
         }
         if let (Screen::Home(h), false) = (&mut screen, quick.is_open() || asleep) {
@@ -986,12 +1028,15 @@ fn main() -> Result<()> {
                 marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Text, flash: false, swipe: None })?;
             }
         }
-        if let (Screen::Reader(r), false) = (&mut screen, quick.is_open()) {
-            if let Some(rect) = r.search_step() {
-                ready(&mut dev, &mut typing, &mut marker)?;
-                r.render(&mut dev.canvas(), &mut ctx);
-                marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
-            }
+        let stepped = match (&mut screen, quick.is_open()) {
+            (Screen::Reader(r), false) => r.search_step(),
+            (Screen::Pdf(p), false) => p.search_step(),
+            _ => None,
+        };
+        if let Some(rect) = stepped {
+            ready(&mut dev, &mut typing, &mut marker)?;
+            screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock);
+            marker = dev.refresh(&Refresh { rect, waveform: Waveform::Text, flash: false, swipe: None })?;
         }
         if let Screen::Reader(r) = &mut screen {
             if press.selecting && r.edge_turn() {

@@ -15,6 +15,7 @@ pub mod nav;
 pub mod notebook;
 pub mod outsheet;
 pub mod pace;
+pub mod pdfmarks;
 pub mod pdfview;
 pub mod plugin;
 pub mod plugin_i18n;

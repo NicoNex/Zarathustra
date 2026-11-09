@@ -199,12 +199,16 @@ fn draw_segments(c: &mut Canvas, r: Rect) {
     c.fill(Rect::new(mid.right() - 2, r.y, 2, r.h), INK);
 }
 
-/// Every control with its rectangle, top to bottom; without `typography` (PDFs) the library
-/// and the contents only.
+/// Every control with its rectangle, top to bottom; without `typography` (PDFs) the library,
+/// the search and the contents only.
 pub fn controls(typography: bool) -> Vec<(Control, Rect)> {
     let l = Layout::new(typography);
     if !typography {
-        return vec![(Control::Library, Rect::new(0, 0, 360, TOPBAR_H)), (Control::Contents, l.contents)];
+        return vec![
+            (Control::Library, Rect::new(0, 0, 360, TOPBAR_H)),
+            (Control::Search, SEARCH),
+            (Control::Contents, l.contents),
+        ];
     }
     let (size, weight, font) = (segments(l.size, 3), segments(l.weight, 3), font_segments(l.font));
     let mut out = vec![
@@ -236,7 +240,7 @@ pub fn covers(y: i32, typography: bool) -> bool {
 }
 
 /// Draws the menu over the page. `chapter` is the current table-of-contents entry, `None`
-/// when the book has no table of contents. Without `typo` (PDFs) no search and no typography.
+/// when the book has no table of contents. Without `typo` (PDFs) no typography.
 pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: Option<&Typography>, title: &str, chapter: Option<&str>) {
     let l = Layout::new(typo.is_some());
     let Ctx { fonts, raster, .. } = ctx;
@@ -247,11 +251,8 @@ pub fn render(c: &mut Canvas, ctx: &mut Ctx, typo: Option<&Typography>, title: &
     };
 
     topbar(c, raster, sans, serif_bold, t().back_library, title);
-    // shortcut: no search in PDFs, add it with MuPDF's page text search when asked.
-    if typo.is_some() {
-        let icon = Rect::new(SEARCH.x + (SEARCH.w - 52) / 2, SEARCH.y + (SEARCH.h - 52) / 2 + 4, 52, 52);
-        crate::search::icon(c, icon, INK, PAPER);
-    }
+    let icon = Rect::new(SEARCH.x + (SEARCH.w - 52) / 2, SEARCH.y + (SEARCH.h - 52) / 2 + 4, 52, 52);
+    crate::search::icon(c, icon, INK, PAPER);
 
     // Sheet: rounded top corners over a black edge, like the quick panel.
     rounded_rect(c, Rect::new(0, l.top - 3, W, H - l.top + 40), 32, INK);
