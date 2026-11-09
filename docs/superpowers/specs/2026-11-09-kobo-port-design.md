@@ -153,3 +153,52 @@ compiling with its tests green (it is not deployed or tried today). A short guid
 - What the Kobo launch script stops and restarts around Zarathustra so Nickel comes back
   cleanly.
 - Fixing layouts that only fit 1236 px wide.
+
+## Clara 2E facts (probe of 2026-11-09, `dist/kobo/probe.sh`)
+
+- Kernel 4.1.15, i.MX6 SoloLite, 512 MB RAM, firmware 4.38.23852. `/bin/kobo_config.sh` prints
+  `goldfinch`; version file code `…386`.
+- Environment from rcS (in **Nickel's** environ; udevd only has the first two):
+  `PLATFORM=mx6sll-ntx`, `PRODUCT=goldfinch`, `WIFI_MODULE=moal`, `INTERFACE=mlan0`.
+- Framebuffer `mxc_epdc_fb`: Nickel leaves it at **32 bpp**, rotate 3, visible 1072×1448,
+  virtual 1088×1536, stride 4352 bytes. KOReader switches to 8 bpp and restores 32 bpp/rotate 3
+  on exit; we do the same (save the var info at open, put it back on drop). FBInk reports a
+  native viewport offset of 4 rows at the top (`viewVertOrigin=4`); check whether the top 4
+  rows are hidden by the bezel before compensating. Waveform modes (sysfs
+  `waveform_mode_*`, kernel value): DU 1, GC16 2, GL16 3, REAGL 4, A2 6, DU4 7, GCK16 8,
+  GLKW16 9 (the last two are the Eclipse/night waveforms). FBInk: Mark 10 platform,
+  `unreliableWaitFor=1`, `canHWInvert=1`.
+- Input: `event0` gpio-keys = sleep cover (KEY_F1, 59); `event1` `fts_ts` touch, multitouch
+  protocol B (tracking id, x 53, y 54, pressure 58, touch major 48, BTN_TOUCH 330);
+  `event2` `bd71828-pwrkey` = power button (KEY_POWER, 116).
+- Touch mapping, measured: top-left corner → raw (66, 1008), bottom-right → raw (1401, 55),
+  a left-to-right swipe moves raw y from 1012 down to 31. So screen x = 1072 − raw y and
+  screen y = raw x: `Transform { swap_xy: true, mirror_x: true, mirror_y: false }` (FBInk
+  agrees: `touchSwapAxes=1 touchMirrorX=1`).
+- Light: `/sys/class/backlight/mxc_msp430.0/brightness` 0–100 (Nickel's `FrontLightLevel`);
+  warmth `/sys/class/leds/aw99703-bl_FL1/color` 0–`max_color` 10. Nickel stores
+  `ColorSetting=4440` (kelvin). Direction (0 = warm or cold) to confirm in Task 5.
+- Power supplies: `/sys/class/power_supply/battery` (capacity, status), `usb/online`,
+  `ac/online`.
+- Suspend: `/sys/power/state` offers `freeze standby mem`; `/sys/power/state-extended` exists.
+  RTC `rtc0` (`bd70528`).
+- USB: Kobo's udev scripts write `usb plug add|remove` (`/usr/local/Kobo/udev/plug`) and
+  `usb ac add|remove` (`…/udev/ac`) to the FIFO `/tmp/nickel-hardware-status`. The vendor's
+  own export script is `/usr/local/Kobo/udev/usb`, run with `ACTION=add|remove`: on this
+  platform it unmounts `/mnt/onboard`, loads `g_file_storage` from
+  `/drivers/mx6sll-ntx/usb/gadget/` on the vfat partitions, and on remove unloads it, runs
+  `dosfsck -a -w /dev/mmcblk0p3` (reboots if still dirty) and remounts. UDC `ci_hdrc.0`.
+  **Decision:** the launch script calls that vendor script instead of shipping our own
+  gadget scripts *(my call: it is the firmware's own code path for this kernel)*.
+- Wi-Fi with Nickel's radio on: modules `mlan` + `moal` loaded; `wpa_supplicant -D nl80211 -s
+  -i mlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf -C /var/run/wpa_supplicant -B`;
+  `dhcpcd -d -z mlan0`; ctrl socket `/var/run/wpa_supplicant/mlan0`. Modules in
+  `/drivers/mx6sll-ntx/wifi/` (`mlan.ko`, `moal.ko`, `sdio_wifi_pwr.ko`, `8189fs.ko`). Nickel's
+  `WifiRegulatoryDomain=IT`. Three saved networks in Nickel's config (`update_config=1`).
+- Tools on the device: `wpa_cli`, `dhcpcd`, `udhcpc`, `dosfsck`, `timeout`, `evtest`,
+  `killall`, `pkill`, `usleep`, `ip`, `iwconfig`, busybox with `fbset`; `sshd`, `telnetd`,
+  `tcpsvd` exist. FBInk binaries on the user's device (KOReader's, `/mnt/onboard/bin/fbink`).
+- Time zone: `/etc/localtime` → `/etc/zoneinfo/Europe/Rome` (TZif; `clock.rs` reads
+  `/etc/localtime`, so it works as is).
+- `/mnt/onboard` is vfat (`iocharset=iso8859-1,shortname=mixed,utf8,errors=remount-ro`),
+  `/tmp` tmpfs (248 MB), root fs ext4 with 77 MB free.
