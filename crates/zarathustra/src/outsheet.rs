@@ -8,9 +8,9 @@ use zarathustra_device::{Canvas, Rect};
 
 use crate::extensions::{duration_text, run_line};
 use crate::i18n::{fill, t};
-use crate::menu::{topbar, BACK_W, PAD, TOPBAR_H};
+use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::plugin::{LastRun, Outcome, Plugin};
-use crate::toc::{next_button, pager, prev_button, FOOTER_H};
+use crate::toc::{next_button, pager, prev_button, BACK_W, FOOTER_H};
 use crate::ui::{Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
@@ -23,6 +23,34 @@ enum Line {
     Heading(&'static str),
     Text(String),
     Gap,
+}
+
+/// `text` in lines no wider than `width` by `measure`: broken at a space when one fits,
+/// else mid-word, so paths, URLs and hashes show whole; leading spaces stay.
+fn hard_wrap(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        if measure(rest) <= width {
+            lines.push(rest.to_string());
+            break;
+        }
+        // Ends of the prefixes, one char at a time; the longest that fits (at least one char).
+        let ends: Vec<usize> = rest.char_indices().skip(1).map(|(i, _)| i).chain([rest.len()]).collect();
+        let fit = ends.partition_point(|&end| measure(&rest[..end]) <= width);
+        let mut end = ends[fit.saturating_sub(1)];
+        // Mid-word: back to the last space, unless it is part of the indentation.
+        let mid_word = !rest[end..].starts_with(' ');
+        if let Some(space) = rest[..end].rfind(' ').filter(|&sp| mid_word && !rest[..sp].trim().is_empty()) {
+            end = space + 1;
+        }
+        lines.push(rest[..end].trim_end().to_string());
+        rest = &rest[end..];
+        if !mid_word {
+            rest = rest.strip_prefix(' ').unwrap_or(rest);
+        }
+    }
+    lines
 }
 
 pub struct OutputSheet {
@@ -112,7 +140,7 @@ impl OutputSheet {
         let width = (W - 2 * PAD) as f32;
         if self.rows.borrow().is_empty() {
             let wrapped = (self.lines.iter()).flat_map(|line| match line {
-                Line::Text(t) => text.wrap(t, width, usize::MAX).into_iter().map(Line::Text).collect(),
+                Line::Text(t) => hard_wrap(t, width, |l| text.width(l)).into_iter().map(Line::Text).collect(),
                 other => vec![other.clone()],
             });
             *self.rows.borrow_mut() = wrapped.collect();
@@ -136,5 +164,19 @@ impl OutputSheet {
             y += LINE_H;
         }
         pager(c, raster, sans, page, pages);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_words_break_and_indentation_stays() {
+        let chars = |s: &str| s.chars().count() as f32;
+        assert_eq!(hard_wrap("ab cd ef", 5.0, chars), ["ab cd", "ef"]);
+        assert_eq!(hard_wrap("/mnt/us/very/long", 6.0, chars), ["/mnt/u", "s/very", "/long"]);
+        assert_eq!(hard_wrap("    at main.rs:12", 40.0, chars), ["    at main.rs:12"]);
+        assert_eq!(hard_wrap("    x y", 5.0, chars), ["    x", "y"]);
     }
 }

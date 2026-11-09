@@ -630,6 +630,10 @@ menu_label = "Env"
 executable = "env"
 arguments = ["{book}"]
 
+[[action]]
+menu_label = "Stubborn"
+executable = "stubborn"
+
 [[setting]]
 id = "port"
 kind = "number"
@@ -660,6 +664,7 @@ list_executable = "items"
         script(&installed, "say", r#"echo book; echo second"#);
         script(&installed, "fail", r#"echo partial; echo "first problem" >&2; echo "disk full" >&2; exit 3"#);
         script(&installed, "sleep", "sleep 30");
+        script(&installed, "stubborn", "trap '' TERM; sleep 30");
         script(&installed, "env", r#"echo "$1|$ZARATHUSTRA_BOOK|$ZARATHUSTRA_POSITION"; head -c 300000 /dev/urandom"#);
         script(
             &installed,

@@ -616,8 +616,9 @@ fn main() -> Result<()> {
             ready(&mut dev, &mut typing, &mut marker)?;
             match ev {
                 PowerEvent::Sleep => {
+                    // The page's clock pauses (the loop's `clock` call below) and goes on after
+                    // the wake: one page read across a sleep stays one visit.
                     asleep = true;
-                    screen.away();
                     quick.close();
                     let battery = dev.battery();
                     match &mut screen {

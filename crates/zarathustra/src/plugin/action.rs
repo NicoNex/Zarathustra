@@ -108,14 +108,14 @@ impl Plugin {
     /// Starts action `i` in the background. `book` is the book it acts on (book menu): its
     /// path and saved position, as `{book}`/`ZARATHUSTRA_BOOK` and `ZARATHUSTRA_POSITION`.
     pub fn run(&self, state_dir: &Path, i: usize, book: Option<(&Path, &str)>) -> Result<()> {
-        use std::os::unix::process::CommandExt;
         let Some(action) = self.manifest.as_ref().ok().and_then(|m| m.action.get(i)).cloned() else {
             return Ok(());
         };
         if self.action_pid().is_some() {
             return Err(PluginError::Busy);
         }
-        self.prepare()?;
+        // The run is recorded before anything can fail, so a failure shows on its line.
+        super::make_dirs(&self.data_dir())?;
         for f in ["pid", "status", "end", "out", "err"] {
             let _ = std::fs::remove_file(self.action_file(f));
         }
@@ -123,6 +123,40 @@ impl Plugin {
         let timeout = action.timeout_seconds.map(|s| s.to_string()).unwrap_or_default();
         let label = self.action_label(&action).replace('\n', " ");
         std::fs::write(self.action_file("run"), format!("{}\n{timeout}\n{i}\n{label}\n", millis(started)))?;
+        let mut child = match self.spawn_action(state_dir, &action, book) {
+            Ok(child) => child,
+            Err(e) => {
+                let _ = std::fs::write(self.action_file("end"), format!("error: {e}\n"));
+                return Err(e);
+            }
+        };
+        // Reaps the wrapper (no zombies) and enforces the timeout while the app runs; after a
+        // restart, [`Plugin::last_run`] enforces it.
+        let me = self.clone();
+        let limit = action.timeout_seconds.map(Duration::from_secs);
+        std::thread::spawn(move || loop {
+            match child.try_wait() {
+                Ok(None) => {
+                    if limit.is_some_and(|l| started.elapsed().unwrap_or_default() >= l) {
+                        me.end_action("timeout");
+                    }
+                    std::thread::sleep(REAP_EVERY);
+                }
+                _ => return,
+            }
+        });
+        Ok(())
+    }
+
+    /// Refreshes the runtime copy and starts the action's wrapper, its output in files.
+    fn spawn_action(
+        &self,
+        state_dir: &Path,
+        action: &super::Action,
+        book: Option<(&Path, &str)>,
+    ) -> Result<std::process::Child> {
+        use std::os::unix::process::CommandExt;
+        self.prepare()?;
 
         let book_path = book.map(|(p, _)| p.to_string_lossy().into_owned()).unwrap_or_default();
         let position = book.map_or("", |(_, pos)| pos);
@@ -144,28 +178,10 @@ impl Plugin {
         let out = std::fs::File::create(self.action_file("out"))?;
         let err = std::fs::File::create(self.action_file("err"))?;
         cmd.stdin(Stdio::null()).stdout(out).stderr(err).process_group(0);
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                std::fs::write(self.action_file("end"), format!("error: {e}\n"))?;
-                return Err(PluginError::Spawn { executable: action.run.executable, source: e });
-            }
-        };
+        let executable = || action.run.executable.clone();
+        let child = cmd.spawn().map_err(|source| PluginError::Spawn { executable: executable(), source })?;
         std::fs::write(self.action_file("pid"), format!("{}\n", child.id()))?;
-        // Reaps the wrapper (no zombies) and enforces the timeout while the app runs; after a
-        // restart, [`Plugin::last_run`] enforces it.
-        let me = self.clone();
-        let limit = action.timeout_seconds.map(Duration::from_secs);
-        std::thread::spawn(move || loop {
-            match child.try_wait() {
-                Ok(None) if limit.is_some_and(|l| started.elapsed().unwrap_or_default() >= l) => {
-                    me.end_action("timeout");
-                }
-                Ok(None) => std::thread::sleep(REAP_EVERY),
-                _ => return,
-            }
-        });
-        Ok(())
+        Ok(child)
     }
 
     /// Stops the running action: SIGTERM to its group, SIGKILL after the grace time. Returns
@@ -184,8 +200,10 @@ impl Plugin {
         if std::fs::write(self.action_file("end"), format!("{why}\n")).is_err() {
             eprintln!("plugin {}: can't record the action's end", self.id);
         }
-        let me = self.clone();
-        std::thread::spawn(move || terminate(pid, || me.action_pid() == Some(pid)));
+        // Alive while anything of its process group is: the wrapper dies at the first SIGTERM,
+        // an action that traps it must still get the SIGKILL.
+        let group = nix::unistd::Pid::from_raw(pid);
+        std::thread::spawn(move || terminate(pid, || nix::sys::signal::killpg(group, None).is_ok()));
     }
 
     /// The last action run, if any. Stops a run past its timeout (the app was not running
@@ -327,6 +345,22 @@ mod tests {
         assert!(r.stdout_head.starts_with(want), "{:?}", r.stdout_head);
         let (out, _) = p.action_output();
         assert!(out.len() as u64 <= SHEET_MAX * 3, "lossy text of at most SHEET_MAX bytes");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn stop_kills_an_action_that_ignores_sigterm() {
+        let (root, p) = setup("stubborn");
+        p.run(&root.join("state"), 5, None).expect("run");
+        std::thread::sleep(Duration::from_millis(200));
+        let pid: i32 = std::fs::read_to_string(p.action_file("pid")).expect("pid").trim().parse().expect("number");
+        let group = nix::unistd::Pid::from_raw(pid);
+        p.stop_action();
+        let gone = (0..100).any(|_| {
+            std::thread::sleep(Duration::from_millis(100));
+            nix::sys::signal::killpg(group, None).is_err()
+        });
+        assert!(gone, "the whole group is killed after the grace time");
         std::fs::remove_dir_all(root).ok();
     }
 }

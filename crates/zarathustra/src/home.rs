@@ -803,7 +803,7 @@ impl Home {
                                 eprintln!("plugin {}: {e}", p.id);
                             }
                         }
-                        self.overlay = Some(Overlay::Extensions(Box::new(Extensions::new(ctx))));
+                        self.overlay = Some(Overlay::Extensions(Box::new(Extensions::new(ctx, t().back_library))));
                     }
                     bookmenu::Tap::Item(Item::MarkRead(read)) => {
                         self.overlay = None;

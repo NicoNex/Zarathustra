@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use zarathustra_device::{Canvas, Rect};
 
-use crate::extensions::{actions_in, block_height, block_layout, draw_block, tap_block, Hit};
+use crate::extensions::{actions_in, block_height, block_layout, draw_block, run_line, tap_block, Hit};
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::outsheet::OutputSheet;
@@ -206,8 +206,9 @@ impl PluginPage {
         if self.sheet.is_some() || !self.running() {
             return false;
         }
+        let before = self.run.as_ref().map(|r| run_line(&self.plugin, r));
         self.run = self.plugin.last_run();
-        true
+        self.run.as_ref().map(|r| run_line(&self.plugin, r)) != before
     }
 
     /// A tap: `false` for the back link (leave the page), else `true` (redraw).

@@ -540,7 +540,6 @@ pub fn lang() -> Lang {
     }
 }
 
-/// The strings of the current language.
 /// `template` with each `{}` replaced by the next of `args`.
 pub fn fill(template: &str, args: &[&str]) -> String {
     let mut out = String::new();
@@ -553,6 +552,7 @@ pub fn fill(template: &str, args: &[&str]) -> String {
     out
 }
 
+/// The strings of the current language.
 pub fn t() -> &'static Strings {
     strings(lang())
 }

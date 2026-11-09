@@ -74,7 +74,7 @@ impl Prefs {
             return (x >= BACK_W).then_some(Action::None);
         }
         if extensions_row().contains(x, y) {
-            self.extensions = Some(Box::new(Extensions::new(ctx)));
+            self.extensions = Some(Box::new(Extensions::new(ctx, t().back_settings)));
             return Some(Action::Redraw { turn: None });
         }
         let hit = (0..ROWS).find_map(|i| {

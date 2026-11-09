@@ -12,11 +12,11 @@ use zarathustra_device::{Canvas, Rect};
 use zarathustra_engine::font::{Face, Rasterizer};
 
 use crate::i18n::{fill, t};
-use crate::menu::{topbar, BACK_W, PAD, TOPBAR_H};
+use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::outsheet::OutputSheet;
 use crate::plugin::{discover, Dirs, LastRun, Outcome, Output, Place, Plugin, ACTIVE};
 use crate::plugin_page::PluginPage;
-use crate::toc::{next_button, pager, prev_button, FOOTER_H};
+use crate::toc::{next_button, pager, prev_button, BACK_W, FOOTER_H};
 use crate::ui::{button, rounded_rect, segmented_labels, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
@@ -208,10 +208,13 @@ pub struct Extensions {
     detail: Option<Box<PluginPage>>,
     sheet: Option<OutputSheet>,
     state_dir: PathBuf,
+    /// The top bar's back link: to the settings, or to the library (opened from a book).
+    back: &'static str,
 }
 
 impl Extensions {
-    pub fn new(ctx: &Ctx) -> Extensions {
+    /// The screen; `back` names where its back link goes.
+    pub fn new(ctx: &Ctx, back: &'static str) -> Extensions {
         let plugins = discover(&Dirs::new(&ctx.state_dir));
         let mut e = Extensions {
             runs: Vec::new(),
@@ -221,6 +224,7 @@ impl Extensions {
             detail: None,
             sheet: None,
             state_dir: ctx.state_dir.clone(),
+            back,
         };
         e.reload();
         e
@@ -330,9 +334,12 @@ impl Extensions {
         true
     }
 
-    /// Some action shown here is running: the app polls every half second.
+    /// Some action shown here is running: the app polls every second.
     pub fn running(&self) -> bool {
-        self.runs.iter().flatten().any(LastRun::running) || self.detail.as_ref().is_some_and(|d| d.running())
+        match &self.detail {
+            Some(d) => d.running(),
+            None => self.runs.iter().flatten().any(LastRun::running),
+        }
     }
 
     /// Looks again at running actions; `true` when the screen must be redrawn.
@@ -343,14 +350,17 @@ impl Extensions {
         if self.sheet.is_some() || !self.running() {
             return false;
         }
-        // The elapsed time on the run line changes too: redraw while running. Only the
-        // running plugins are read again.
+        // Only the running plugins are read again; a redraw only when a run line's text
+        // changed (it ended, or its elapsed time ticked over).
+        let mut changed = false;
         for (p, run) in self.plugins.iter().zip(&mut self.runs) {
             if run.as_ref().is_some_and(LastRun::running) {
+                let before = run.as_ref().map(|r| run_line(p, r));
                 *run = p.last_run();
+                changed |= run.as_ref().map(|r| run_line(p, r)) != before;
             }
         }
-        true
+        changed
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
@@ -368,7 +378,7 @@ impl Extensions {
             return;
         };
         let s = t();
-        topbar(c, raster, sans, serif_bold, s.back_settings, s.extensions);
+        topbar(c, raster, sans, serif_bold, self.back, s.extensions);
         let name = Label { face: serif, size: 40.0, ink: INK };
         let about = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let parts = self.parts();
@@ -443,7 +453,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("zarathustra-extensions-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("dir");
         ctx.state_dir = root.clone();
-        let mut e = Extensions::new(&ctx);
+        let mut e = Extensions::new(&ctx, t().back_settings);
         let (part, r) = e.parts().into_iter().find(|(p, _)| matches!(p, Part::Open(_))).expect("a plugin");
         assert!(matches!(part, Part::Open(_)));
         assert!(e.tap((r.x + 10, r.y + 10), &ctx) && e.detail.is_some());
