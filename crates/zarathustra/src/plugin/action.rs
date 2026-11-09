@@ -11,10 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nix::sys::signal::{killpg, Signal};
-use nix::unistd::Pid;
-
-use super::{live_pid, Plugin, PluginError, Result, STOP_GRACE};
+use super::{live_pid, terminate, Plugin, PluginError, Result};
 
 /// Most of a stream the output sheet reads.
 const SHEET_MAX: u64 = 256 * 1024;
@@ -91,10 +88,19 @@ impl Plugin {
         self.data_dir().join(format!("action.{name}"))
     }
 
+    /// The last run's `action.run`: start, timeout, action index, label.
+    fn read_run(&self) -> Option<(SystemTime, Option<Duration>, usize, String)> {
+        let run = std::fs::read_to_string(self.action_file("run")).ok()?;
+        let mut lines = run.lines();
+        let started = UNIX_EPOCH + Duration::from_millis(lines.next()?.parse().ok()?);
+        let timeout = lines.next()?.parse().ok().map(Duration::from_secs);
+        let action = lines.next()?.parse().ok()?;
+        Some((started, timeout, action, lines.next().unwrap_or_default().to_string()))
+    }
+
     /// The running action's process (the `sh` wrapper, its group leader), if any.
     fn action_pid(&self) -> Option<i32> {
-        let run = std::fs::read_to_string(self.action_file("run")).ok()?;
-        let i: usize = run.lines().nth(2)?.parse().ok()?;
+        let (_, _, i, _) = self.read_run()?;
         let action = self.manifest.as_ref().ok()?.action.get(i)?;
         live_pid(&self.action_file("pid"), &self.plugin_dir().join(&action.run.executable))
     }
@@ -162,37 +168,30 @@ impl Plugin {
         Ok(())
     }
 
-    /// Stops the running action: SIGTERM to its group, SIGKILL after [`STOP_GRACE`]. Returns
+    /// Stops the running action: SIGTERM to its group, SIGKILL after the grace time. Returns
     /// at once.
     pub fn stop_action(&self) {
         self.end_action("stopped");
     }
 
+    /// Records why the run ends and terminates it in the background; once per run (the
+    /// reaper and [`Plugin::last_run`] may both ask).
     fn end_action(&self, why: &str) {
         let Some(pid) = self.action_pid() else { return };
+        if self.action_file("end").exists() {
+            return;
+        }
         if std::fs::write(self.action_file("end"), format!("{why}\n")).is_err() {
             eprintln!("plugin {}: can't record the action's end", self.id);
         }
-        let group = Pid::from_raw(pid);
-        let _ = killpg(group, Signal::SIGTERM);
         let me = self.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(STOP_GRACE);
-            if me.action_pid() == Some(pid) {
-                let _ = killpg(group, Signal::SIGKILL);
-            }
-        });
+        std::thread::spawn(move || terminate(pid, || me.action_pid() == Some(pid)));
     }
 
     /// The last action run, if any. Stops a run past its timeout (the app was not running
     /// when it expired).
     pub fn last_run(&self) -> Option<LastRun> {
-        let run = std::fs::read_to_string(self.action_file("run")).ok()?;
-        let mut lines = run.lines();
-        let started = UNIX_EPOCH + Duration::from_millis(lines.next()?.parse().ok()?);
-        let timeout = lines.next()?.parse().ok().map(Duration::from_secs);
-        let action = lines.next()?.parse().ok()?;
-        let label = lines.next().unwrap_or_default().to_string();
+        let (started, timeout, action, label) = self.read_run()?;
         let elapsed = started.elapsed().unwrap_or_default();
         let end = std::fs::read_to_string(self.action_file("end")).ok();
         let outcome = if self.action_pid().is_some() {

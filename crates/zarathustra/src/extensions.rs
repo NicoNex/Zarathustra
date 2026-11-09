@@ -16,7 +16,8 @@ use crate::menu::{topbar, BACK_W, PAD, TOPBAR_H};
 use crate::outsheet::OutputSheet;
 use crate::plugin::{discover, Dirs, LastRun, Outcome, Output, Place, Plugin, ACTIVE};
 use crate::plugin_page::PluginPage;
-use crate::ui::{button, rounded_rect, segmented_labels, segments, Label, INK, INK_SOFT, LINE, PAPER};
+use crate::toc::{next_button, pager, prev_button, FOOTER_H};
+use crate::ui::{button, rounded_rect, segmented_labels, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
 /// Action buttons: two per row.
@@ -32,8 +33,6 @@ const ABOUT_H: i32 = 56;
 const SWITCH_W: i32 = 380;
 /// Space after a plugin, its rule in the middle.
 const SPACE: i32 = 48;
-/// The pager under the list.
-const PAGER_H: i32 = 100;
 
 /// What a tap in an action block does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,11 +48,17 @@ pub fn actions_in(plugin: &Plugin, place: Option<Place>) -> Vec<usize> {
     (0..m.action.len()).filter(|&i| place.is_none_or(|p| m.action[i].shown_in.contains(&p))).collect()
 }
 
-/// Every plugin action offered in the book menu: the plugin and the action's index.
-pub fn book_actions(ctx: &Ctx) -> Vec<(Plugin, usize)> {
+/// Every plugin action offered in the book menu: the plugin, the action's index, its label.
+pub fn book_actions(ctx: &Ctx) -> Vec<(Plugin, usize, String)> {
     let plugins = discover(&Dirs::new(&ctx.state_dir));
     (plugins.into_iter())
-        .flat_map(|p| actions_in(&p, Some(Place::Book)).into_iter().map(move |i| (p.clone(), i)))
+        .flat_map(|p| {
+            let shown = actions_in(&p, Some(Place::Book));
+            shown.into_iter().filter_map(move |i| {
+                let label = p.action_label(p.manifest.as_ref().ok()?.action.get(i)?);
+                Some((p.clone(), i, label))
+            })
+        })
         .collect()
 }
 
@@ -75,8 +80,7 @@ pub fn block_layout(x: i32, top: i32, w: i32, shown: &[usize], run: Option<&Last
         .collect();
     if let Some(r) = run {
         let y = top + shown.len().div_ceil(2) as i32 * (BUTTON_H + GAP);
-        // Stop first, so a tap on it isn't taken by the line around it; the line last, as
-        // [`draw_block`] expects.
+        // Stop first, so a tap on it isn't taken by the line around it.
         if r.running() {
             out.push((Hit::Stop, Rect::new(x + w - RUN_BUTTON_W, y + 6, RUN_BUTTON_W, RUN_H - 12)));
         }
@@ -85,13 +89,11 @@ pub fn block_layout(x: i32, top: i32, w: i32, shown: &[usize], run: Option<&Last
     out
 }
 
-/// "3 s", "4 min", "2 h 5 min".
+/// "3 s" under a minute, else as the reading statistics write it ("4 min", "2 h 05 min").
 pub fn duration_text(d: Duration) -> String {
-    let s = d.as_secs();
-    match s {
-        0..60 => format!("{s} s"),
-        60..3600 => format!("{} min", s / 60),
-        _ => format!("{} h {} min", s / 3600, s / 60 % 60),
+    match d.as_secs() {
+        s @ 0..60 => format!("{s} s"),
+        s => crate::stats::duration(s as i64),
     }
 }
 
@@ -149,7 +151,8 @@ pub fn draw_block(
             Hit::Sheet => {}
         }
     }
-    let (Some(run), Some(&(_, line))) = (run, parts.last()) else { return };
+    let line = parts.iter().find(|(h, _)| *h == Hit::Sheet).map(|&(_, r)| r);
+    let (Some(run), Some(line)) = (run, line) else { return };
     let (failed, msg) = run_line(plugin, run);
     let mut x = line.x;
     let baseline = line.y + line.h / 2 + 11;
@@ -190,8 +193,8 @@ pub fn tap_block(plugin: &Plugin, state_dir: &Path, hit: Hit, run: Option<&LastR
 enum Part {
     /// The plugin's name and description: opens its page.
     Open(usize),
-    /// Its service switch: the segment's rect, on (true) or off.
-    Service(usize, bool),
+    /// Its service switch, Off then On.
+    Service(usize),
     Action(usize, Hit),
     Prev,
     Next,
@@ -244,7 +247,7 @@ impl Extensions {
 
     /// Plugins per page, filled by height.
     fn pages(&self) -> Vec<Vec<usize>> {
-        let room = H - TOPBAR_H - 30 - PAGER_H;
+        let room = H - TOPBAR_H - 30 - FOOTER_H;
         let mut pages = vec![Vec::new()];
         let mut used = 0;
         for i in 0..self.plugins.len() {
@@ -270,10 +273,7 @@ impl Extensions {
         for &i in &pages[page] {
             let mut open_w = w;
             if self.has_service(i) {
-                let sw = Rect::new(PAD + w - SWITCH_W, y + (HEAD_H - 84) / 2, SWITCH_W, 84);
-                let seg = segments(sw, 2);
-                out.push((Part::Service(i, false), seg[0]));
-                out.push((Part::Service(i, true), seg[1]));
+                out.push((Part::Service(i), Rect::new(PAD + w - SWITCH_W, y + (HEAD_H - 84) / 2, SWITCH_W, 84)));
                 open_w -= SWITCH_W + 24;
             }
             out.push((Part::Open(i), Rect::new(PAD, y, open_w, HEAD_H + ABOUT_H)));
@@ -285,19 +285,14 @@ impl Extensions {
             y += self.height(i);
         }
         if pages.len() > 1 {
-            let bar = H - PAGER_H;
-            out.push((Part::Prev, Rect::new(0, bar, W / 3, PAGER_H)));
-            out.push((Part::Next, Rect::new(W * 2 / 3, bar, W / 3, PAGER_H)));
+            out.extend([(Part::Prev, prev_button()), (Part::Next, next_button())]);
         }
         out
     }
 
     /// A tap: `false` for the back link (leave the screen), else `true` (redraw).
     pub fn tap(&mut self, (x, y): (i32, i32), ctx: &Ctx) -> bool {
-        if let Some(sheet) = &mut self.sheet {
-            if !sheet.tap((x, y)) {
-                self.sheet = None;
-            }
+        if OutputSheet::forward(&mut self.sheet, (x, y)) {
             return true;
         }
         if let Some(page) = &mut self.detail {
@@ -310,10 +305,11 @@ impl Extensions {
         if y < TOPBAR_H {
             return x >= BACK_W;
         }
-        let Some((part, _)) = self.parts().into_iter().find(|(_, r)| r.contains(x, y)) else { return true };
+        let Some((part, r)) = self.parts().into_iter().find(|(_, r)| r.contains(x, y)) else { return true };
         match part {
             Part::Open(i) => self.detail = Some(Box::new(PluginPage::open(self.plugins[i].clone(), ctx))),
-            Part::Service(i, on) => {
+            Part::Service(i) => {
+                let on = x >= r.x + r.w / 2;
                 let p = &self.plugins[i];
                 p.set_value(&self.state_dir, ACTIVE, if on { "true" } else { "false" });
                 if on {
@@ -347,8 +343,13 @@ impl Extensions {
         if self.sheet.is_some() || !self.running() {
             return false;
         }
-        // The elapsed time on the run line changes too: redraw while running.
-        self.reload();
+        // The elapsed time on the run line changes too: redraw while running. Only the
+        // running plugins are read again.
+        for (p, run) in self.plugins.iter().zip(&mut self.runs) {
+            if run.as_ref().is_some_and(LastRun::running) {
+                *run = p.last_run();
+            }
+        }
         true
     }
 
@@ -371,17 +372,14 @@ impl Extensions {
         let name = Label { face: serif, size: 40.0, ink: INK };
         let about = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let parts = self.parts();
-        let mut drawn = Vec::new();
         for &(part, r) in &parts {
             let Part::Open(i) = part else { continue };
-            drawn.push(i);
             let p = &self.plugins[i];
             name.draw(c, raster, &name.fit(&p.display_name(), r.w as f32), r.x as f32, r.y + 66);
             let text = p.description();
             about.draw(c, raster, &about.fit(&text, r.w as f32), r.x as f32, r.y + HEAD_H + 26);
             if self.has_service(i) {
-                let sw = parts.iter().filter(|(p, _)| matches!(p, Part::Service(j, _) if *j == i)).map(|&(_, r)| r);
-                let sw = sw.reduce(|a, b| a.union(&b)).unwrap_or_default();
+                let sw = parts.iter().find(|(p, _)| *p == Part::Service(i)).map_or_else(Rect::default, |&(_, r)| r);
                 let choices = [s.service_off, s.service_on];
                 segmented_labels(c, raster, sans, 28.0, sw, &choices, Some(usize::from(self.services[i])));
             }
@@ -396,11 +394,7 @@ impl Extensions {
             c.fill(Rect::new(PAD, bottom, W - 2 * PAD, 2), LINE);
         }
         let pages = self.pages().len();
-        if pages > 1 {
-            let label = Label { face: sans, size: 32.0, ink: INK };
-            let text = format!("‹   {} / {pages}   ›", self.page.min(pages - 1) + 1);
-            label.draw_centred(c, raster, &text, W as f32 / 2.0, H - PAGER_H / 2 + 12);
-        }
+        pager(c, raster, sans, self.page.min(pages - 1), pages);
         if self.plugins.is_empty() {
             about.draw(c, raster, s.nothing_listed, PAD as f32, TOPBAR_H + 80);
         }
@@ -419,7 +413,7 @@ mod tests {
         assert_eq!(parts[1].1.y, parts[0].1.y, "two per row");
         assert!(parts[2].1.y > parts[0].1.y);
         assert_eq!(block_height(3, None), 2 * (BUTTON_H + GAP));
-        assert_eq!(duration_text(Duration::from_secs(3725)), "1 h 2 min");
+        assert_eq!(duration_text(Duration::from_secs(3725)), "1 h 02 min");
     }
 
     #[test]

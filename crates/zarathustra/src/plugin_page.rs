@@ -212,10 +212,7 @@ impl PluginPage {
 
     /// A tap: `false` for the back link (leave the page), else `true` (redraw).
     pub fn tap(&mut self, (x, y): (i32, i32)) -> bool {
-        if let Some(sheet) = &mut self.sheet {
-            if !sheet.tap((x, y)) {
-                self.sheet = None;
-            }
+        if OutputSheet::forward(&mut self.sheet, (x, y)) {
             return true;
         }
         if y < TOPBAR_H {

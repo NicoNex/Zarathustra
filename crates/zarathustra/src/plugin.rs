@@ -496,15 +496,7 @@ impl Plugin {
     /// Stops the service: SIGTERM to its process group, SIGKILL after [`STOP_GRACE`].
     pub fn stop(&self) {
         let Some(pid) = self.running_pid() else { return };
-        let group = Pid::from_raw(pid);
-        let _ = killpg(group, Signal::SIGTERM);
-        let deadline = Instant::now() + STOP_GRACE;
-        while self.is_running() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        if self.is_running() {
-            let _ = killpg(group, Signal::SIGKILL);
-        }
+        terminate(pid, || self.is_running());
         let _ = std::fs::remove_file(self.pid_file());
     }
 
@@ -515,6 +507,20 @@ impl Plugin {
         }
         self.stop();
         self.start(state_dir)
+    }
+}
+
+/// Ends process group `pid`: SIGTERM, then SIGKILL if `alive` still says so after
+/// [`STOP_GRACE`]. Blocks for up to that long.
+fn terminate(pid: i32, alive: impl Fn() -> bool) {
+    let group = Pid::from_raw(pid);
+    let _ = killpg(group, Signal::SIGTERM);
+    let deadline = Instant::now() + STOP_GRACE;
+    while alive() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if alive() {
+        let _ = killpg(group, Signal::SIGKILL);
     }
 }
 

@@ -18,6 +18,7 @@ use crate::extensions::{book_actions, Extensions};
 use crate::i18n::t;
 use crate::keyboard::{self, Key, Keyboard, Typed};
 use crate::notebook::{self, Notebook};
+use crate::plugin::Plugin;
 use crate::prefs::Prefs;
 use crate::reader::Position;
 use crate::stats::{self, StatsScreen};
@@ -73,8 +74,9 @@ struct Entry {
     book: BookEntry,
     /// Reading progress 0–1 and when it was saved, if the book was opened.
     progress: Option<(f32, SystemTime)>,
-    /// Covers at grid and list size, decoded the first time they are drawn: decoding all of
-    /// them up front took ~5 s with 95 books.
+    /// Covers at grid and list size. Decoding all of them before the first draw took ~5 s
+    /// with 95 books, so a thread decodes the current view's after the home is up
+    /// ([`Home::prefetch`]); one drawn before its turn is decoded on the spot.
     cover: OnceCell<Option<GrayImage>>,
     small: OnceCell<Option<GrayImage>>,
 }
@@ -103,7 +105,8 @@ impl Entry {
 
 /// A screen or sheet over the library; `usize` is the book's index in `books`.
 enum Overlay {
-    Menu(usize, BookMenu),
+    /// The book's index, its menu, and the plugin actions the menu offers.
+    Menu(usize, BookMenu, Vec<(Plugin, usize, String)>),
     Notebook(usize, Notebook),
     About(usize, Box<About>),
     Stats(StatsScreen),
@@ -127,6 +130,8 @@ const SORTS: [Sort; 3] = [Sort::Title, Sort::Author, Sort::Recent];
 
 pub struct Home {
     books: Vec<Entry>,
+    /// Covers decoded in the background ([`Home::prefetch`]).
+    prefetched: std::cell::RefCell<Option<std::sync::mpsc::Receiver<Prefetched>>>,
     /// The book in the "continue reading" card, if any, and its card-size cover.
     current: Option<(usize, Option<GrayImage>)>,
     filter: Filter,
@@ -212,6 +217,9 @@ fn band_data(ctx: &Ctx, current: Option<(&Path, &str)>) -> (stats::Summary, Opti
     });
     (reading, quote)
 }
+
+/// A cover decoded in the background: book index, grid size (true) or list size, image.
+type Prefetched = (usize, bool, Option<GrayImage>);
 
 /// A book's file time and its grid and list covers, kept across a refresh.
 type Covers = (SystemTime, OnceCell<Option<GrayImage>>, OnceCell<Option<GrayImage>>);
@@ -330,6 +338,7 @@ impl Home {
         };
         let mut home = Home {
             books,
+            prefetched: Default::default(),
             current,
             filter: Filter::All,
             grid,
@@ -349,7 +358,49 @@ impl Home {
             quote_slot: quote_slot(),
         };
         home.set_filter(Filter::All);
+        home.prefetch();
         home
+    }
+
+    /// Decodes, on a background thread, every cover the current view will show that isn't
+    /// decoded yet, in the order the pages show them; [`Home::take_prefetched`] files them.
+    /// A new home (a refresh) drops the receiver, which stops the old thread.
+    fn prefetch(&mut self) {
+        let grid = self.grid;
+        let cells = |b: &Entry| if grid { b.cover.get().is_none() } else { b.small.get().is_none() };
+        let jobs: Vec<(usize, PathBuf)> = (self.shown.iter().copied().chain(0..self.books.len()))
+            .filter(|&i| cells(&self.books[i]))
+            .filter_map(|i| Some((i, self.books[i].book.cover_thumb.clone()?)))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let jobs: Vec<_> = jobs.into_iter().filter(|(i, _)| seen.insert(*i)).collect();
+        if jobs.is_empty() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let size = if grid { (CELL_W, COVER_H) } else { ROW_COVER };
+        std::thread::spawn(move || {
+            // SAFETY: setpriority on the calling thread (who = 0 is this thread on Linux); a
+            // nicer thread leaves the CPU to page turns and taps.
+            unsafe { nix::libc::setpriority(nix::libc::PRIO_PROCESS, 0, 10) };
+            for (i, thumb) in jobs {
+                if tx.send((i, grid, cover(Some(&thumb), size))).is_err() {
+                    return;
+                }
+            }
+        });
+        *self.prefetched.get_mut() = Some(rx);
+    }
+
+    /// Files the covers decoded so far into their books.
+    fn take_prefetched(&self) {
+        let rx = self.prefetched.borrow();
+        let Some(rx) = rx.as_ref() else { return };
+        for (i, grid, img) in rx.try_iter() {
+            if let Some(b) = self.books.get(i) {
+                let _ = if grid { b.cover.set(img) } else { b.small.set(img) };
+            }
+        }
     }
 
     fn set_filter(&mut self, filter: Filter) {
@@ -448,9 +499,10 @@ impl Home {
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        self.take_prefetched();
         match &self.overlay {
             None => self.render_library(c, ctx),
-            Some(Overlay::Menu(_, menu)) => {
+            Some(Overlay::Menu(_, menu, _)) => {
                 self.render_library(c, ctx);
                 menu.render(c, ctx);
             }
@@ -693,6 +745,7 @@ impl Home {
         let highlights = notebook::load(&ctx.state_dir, &b.book.path).len();
         let finished = b.status() == Filter::Finished;
         let reflowable = b.book.format != Format::Pdf;
+        let actions = book_actions(ctx);
         let menu = BookMenu::new(
             &b.book.title,
             &b.author(),
@@ -701,12 +754,9 @@ impl Home {
             highlights,
             reflowable,
             anchor,
-            book_actions(ctx)
-                .iter()
-                .map(|(p, a)| p.manifest.as_ref().map_or_else(|_| String::new(), |m| p.action_label(&m.action[*a])))
-                .collect(),
+            actions.iter().map(|(_, _, label)| label.clone()).collect(),
         );
-        self.overlay = Some(Overlay::Menu(i, menu));
+        self.overlay = Some(Overlay::Menu(i, menu, actions));
         Action::Redraw { turn: None }
     }
 
@@ -715,7 +765,7 @@ impl Home {
         let redraw = Action::Redraw { turn: None };
         let Some(overlay) = &mut self.overlay else { return Action::None };
         match overlay {
-            Overlay::Menu(i, menu) => {
+            Overlay::Menu(i, menu, actions) => {
                 let i = *i;
                 let b = &self.books[i];
                 match menu.tap(start) {
@@ -746,10 +796,10 @@ impl Home {
                     }
                     bookmenu::Tap::Item(Item::Plugin(k)) => {
                         // The Extensions screen then shows it running and how it ended.
-                        if let Some((p, a)) = book_actions(ctx).into_iter().nth(k) {
+                        if let Some((p, a, _)) = actions.get(k) {
                             let pos = ctx.store().and_then(|s| s.position(&b.book.path.to_string_lossy()).ok()?);
                             let pos = pos.map(|(text, _)| text).unwrap_or_default();
-                            if let Err(e) = p.run(&ctx.state_dir, a, Some((&b.book.path, &pos))) {
+                            if let Err(e) = p.run(&ctx.state_dir, *a, Some((&b.book.path, &pos))) {
                                 eprintln!("plugin {}: {e}", p.id);
                             }
                         }

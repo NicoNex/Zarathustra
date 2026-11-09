@@ -2,7 +2,7 @@
 //! took, then everything it printed and its error messages, a page at a time. The tool for
 //! finding out why a plugin failed without a computer.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use zarathustra_device::{Canvas, Rect};
 
@@ -10,11 +10,11 @@ use crate::extensions::{duration_text, run_line};
 use crate::i18n::{fill, t};
 use crate::menu::{topbar, BACK_W, PAD, TOPBAR_H};
 use crate::plugin::{LastRun, Outcome, Plugin};
+use crate::toc::{next_button, pager, prev_button, FOOTER_H};
 use crate::ui::{Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
 const LINE_H: i32 = 42;
-const PAGER_H: i32 = 100;
 
 /// One line of the sheet as drawn.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,8 +29,8 @@ pub struct OutputSheet {
     title: String,
     lines: Vec<Line>,
     page: usize,
-    /// Pages, known once laid out at the last render.
-    pages: Cell<usize>,
+    /// `lines` wrapped to the screen's width, at the first render (wrapping needs the font).
+    rows: RefCell<Vec<Line>>,
 }
 
 impl OutputSheet {
@@ -53,9 +53,24 @@ impl OutputSheet {
             if text.trim().is_empty() {
                 lines.push(Line::Text(s.no_output.into()));
             }
-            lines.extend(text.lines().map(|l| Line::Text(l.replace('\t', "    "))));
+            lines.extend(text.lines().map(|l| {
+                if l.trim().is_empty() {
+                    Line::Gap
+                } else {
+                    Line::Text(l.replace('\t', "    "))
+                }
+            }));
         }
-        OutputSheet { title: run.label.clone(), lines, page: 0, pages: Cell::new(1) }
+        OutputSheet { title: run.label.clone(), lines, page: 0, rows: RefCell::default() }
+    }
+
+    /// Screen lines per page.
+    fn per_page() -> usize {
+        ((H - TOPBAR_H - 40 - FOOTER_H) / LINE_H).max(1) as usize
+    }
+
+    fn pages(&self) -> usize {
+        self.rows.borrow().len().div_ceil(Self::per_page()).max(1)
     }
 
     /// A tap: `false` for the back link (close the sheet), else `true` (redraw).
@@ -63,12 +78,20 @@ impl OutputSheet {
         if y < TOPBAR_H {
             return x >= BACK_W;
         }
-        if y >= H - PAGER_H {
-            if x < W / 3 {
-                self.page = self.page.saturating_sub(1);
-            } else if x > W * 2 / 3 {
-                self.page = (self.page + 1).min(self.pages.get().saturating_sub(1));
-            }
+        if prev_button().contains(x, y) {
+            self.page = self.page.saturating_sub(1);
+        } else if next_button().contains(x, y) {
+            self.page = (self.page + 1).min(self.pages() - 1);
+        }
+        true
+    }
+
+    /// Sends a tap to the sheet open in `sheet`, closing it on its back link; `false` when no
+    /// sheet is open (the tap is the caller's).
+    pub fn forward(sheet: &mut Option<OutputSheet>, at: (i32, i32)) -> bool {
+        let Some(open) = sheet else { return false };
+        if !open.tap(at) {
+            *sheet = None;
         }
         true
     }
@@ -87,21 +110,17 @@ impl OutputSheet {
         let soft = Label { face: sans, size: 28.0, ink: INK_SOFT };
         let heading = Label { face: sans_bold, size: 30.0, ink: INK };
         let width = (W - 2 * PAD) as f32;
-        // Wrapped into screen lines, then cut into pages.
-        let mut rows: Vec<(Line, String)> = Vec::new();
-        for line in &self.lines {
-            match line {
-                Line::Text(t) if t.is_empty() => rows.push((Line::Gap, String::new())),
-                Line::Text(t) => rows.extend(text.wrap(t, width, usize::MAX).into_iter().map(|w| (line.clone(), w))),
-                _ => rows.push((line.clone(), String::new())),
-            }
+        if self.rows.borrow().is_empty() {
+            let wrapped = (self.lines.iter()).flat_map(|line| match line {
+                Line::Text(t) => text.wrap(t, width, usize::MAX).into_iter().map(Line::Text).collect(),
+                other => vec![other.clone()],
+            });
+            *self.rows.borrow_mut() = wrapped.collect();
         }
-        let per_page = ((H - TOPBAR_H - 40 - PAGER_H) / LINE_H).max(1) as usize;
-        let pages = rows.len().div_ceil(per_page).max(1);
-        self.pages.set(pages);
+        let (pages, per_page) = (self.pages(), Self::per_page());
         let page = self.page.min(pages - 1);
         let mut y = TOPBAR_H + 40 + LINE_H;
-        for (line, wrapped) in rows.iter().skip(page * per_page).take(per_page) {
+        for line in self.rows.borrow().iter().skip(page * per_page).take(per_page) {
             match line {
                 Line::Field(k, v) => {
                     soft.draw(c, raster, k, PAD as f32, y);
@@ -111,20 +130,11 @@ impl OutputSheet {
                     heading.draw(c, raster, h, PAD as f32, y);
                     c.fill(Rect::new(PAD, y + 12, W - 2 * PAD, 2), LINE);
                 }
-                Line::Text(_) => drop(text.draw(c, raster, wrapped, PAD as f32, y)),
+                Line::Text(t) => drop(text.draw(c, raster, t, PAD as f32, y)),
                 Line::Gap => {}
             }
             y += LINE_H;
         }
-        if pages > 1 {
-            let label = Label { face: sans, size: 32.0, ink: INK };
-            label.draw_centred(
-                c,
-                raster,
-                &format!("‹   {} / {pages}   ›", page + 1),
-                W as f32 / 2.0,
-                H - PAGER_H / 2 + 12,
-            );
-        }
+        pager(c, raster, sans, page, pages);
     }
 }
