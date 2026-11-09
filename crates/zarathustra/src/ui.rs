@@ -158,6 +158,11 @@ impl Label<'_> {
         advance(&self.shape(text))
     }
 
+    /// Each glyph of `text` shaped once: its byte offset in `text` and its advance.
+    pub fn advances(&self, text: &str) -> Vec<(usize, f32)> {
+        self.shape(text).iter().map(|g| (g.cluster as usize, g.x_advance)).collect()
+    }
+
     /// `text` cut with an ellipsis so it fits in `max_width`.
     /// The end of `text` that fits in `max_width`: a field's text with the caret in view.
     // ponytail: measures each suffix in turn, O(n²) shaping; fine for queries and passwords.

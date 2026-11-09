@@ -25,30 +25,33 @@ enum Line {
     Gap,
 }
 
-/// `text` in lines no wider than `width` by `measure`: broken at a space when one fits,
-/// else mid-word, so paths, URLs and hashes show whole; leading spaces stay.
-fn hard_wrap(text: &str, width: f32, measure: impl Fn(&str) -> f32) -> Vec<String> {
+/// `text` in lines no wider than `width`, given its glyphs' (byte offset, advance) from one
+/// shaping: broken at a space when one fits, else mid-word, so paths, URLs and hashes show
+/// whole; leading spaces stay.
+fn hard_wrap(text: &str, width: f32, glyphs: &[(usize, f32)]) -> Vec<String> {
     let mut lines = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        if measure(rest) <= width {
-            lines.push(rest.to_string());
-            break;
+    let (mut start, mut pen, mut k) = (0, 0.0, 0);
+    while let Some(&(at, adv)) = glyphs.get(k) {
+        if at > start && pen + adv > width {
+            let line = &text[start..at];
+            let indent = line.len() - line.trim_start().len();
+            // At a space, or back to the last one (not the indentation's), or mid-word.
+            let end = if text[at..].starts_with(' ') {
+                at
+            } else {
+                line[indent..].rfind(' ').map_or(at, |sp| start + indent + sp + 1)
+            };
+            lines.push(text[start..end].trim_end().to_string());
+            start = if end == at && text[at..].starts_with(' ') { end + 1 } else { end };
+            k = glyphs.partition_point(|g| g.0 < start);
+            pen = 0.0;
+            continue;
         }
-        // Ends of the prefixes, one char at a time; the longest that fits (at least one char).
-        let ends: Vec<usize> = rest.char_indices().skip(1).map(|(i, _)| i).chain([rest.len()]).collect();
-        let fit = ends.partition_point(|&end| measure(&rest[..end]) <= width);
-        let mut end = ends[fit.saturating_sub(1)];
-        // Mid-word: back to the last space, unless it is part of the indentation.
-        let mid_word = !rest[end..].starts_with(' ');
-        if let Some(space) = rest[..end].rfind(' ').filter(|&sp| mid_word && !rest[..sp].trim().is_empty()) {
-            end = space + 1;
-        }
-        lines.push(rest[..end].trim_end().to_string());
-        rest = &rest[end..];
-        if !mid_word {
-            rest = rest.strip_prefix(' ').unwrap_or(rest);
-        }
+        pen += adv;
+        k += 1;
+    }
+    if start < text.len() || lines.is_empty() {
+        lines.push(text[start..].to_string());
     }
     lines
 }
@@ -140,7 +143,7 @@ impl OutputSheet {
         let width = (W - 2 * PAD) as f32;
         if self.rows.borrow().is_empty() {
             let wrapped = (self.lines.iter()).flat_map(|line| match line {
-                Line::Text(t) => hard_wrap(t, width, |l| text.width(l)).into_iter().map(Line::Text).collect(),
+                Line::Text(t) => hard_wrap(t, width, &text.advances(t)).into_iter().map(Line::Text).collect(),
                 other => vec![other.clone()],
             });
             *self.rows.borrow_mut() = wrapped.collect();
@@ -173,10 +176,12 @@ mod tests {
 
     #[test]
     fn long_words_break_and_indentation_stays() {
-        let chars = |s: &str| s.chars().count() as f32;
-        assert_eq!(hard_wrap("ab cd ef", 5.0, chars), ["ab cd", "ef"]);
-        assert_eq!(hard_wrap("/mnt/us/very/long", 6.0, chars), ["/mnt/u", "s/very", "/long"]);
-        assert_eq!(hard_wrap("    at main.rs:12", 40.0, chars), ["    at main.rs:12"]);
-        assert_eq!(hard_wrap("    x y", 5.0, chars), ["    x", "y"]);
+        // One unit per character.
+        let wrap = |t: &str, w| hard_wrap(t, w, &t.char_indices().map(|(i, _)| (i, 1.0)).collect::<Vec<_>>());
+        assert_eq!(wrap("ab cd ef", 5.0), ["ab cd", "ef"]);
+        assert_eq!(wrap("ab cdef", 5.0), ["ab", "cdef"]);
+        assert_eq!(wrap("/mnt/us/very/long", 6.0), ["/mnt/u", "s/very", "/long"]);
+        assert_eq!(wrap("    at main.rs:12", 40.0), ["    at main.rs:12"]);
+        assert_eq!(wrap("    x y", 5.0), ["    x", "y"]);
     }
 }

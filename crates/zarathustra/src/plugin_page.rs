@@ -12,6 +12,7 @@ use crate::i18n::t;
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::outsheet::OutputSheet;
 use crate::plugin::{Kind, LastRun, Plugin, ACTIVE, AT_BOOT};
+use crate::toc::BACK_W;
 use crate::ui::{button, segmented_labels, segments, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
@@ -21,7 +22,6 @@ const CONTROL_H: i32 = 96;
 const CONTROL_W: i32 = 520;
 const ITEM_H: i32 = 96;
 const REMOVE_W: i32 = 220;
-const BACK_W: i32 = 420;
 /// The boot runs `zarathustra --start-services` (not yet: see the "start at power-on" row).
 const BOOT_HOOK: bool = false;
 
@@ -196,7 +196,7 @@ impl PluginPage {
         block_layout(r.x, r.y + 12, r.w, &actions_in(&self.plugin, None), self.run.as_ref())
     }
 
-    /// An action is running: the app polls every half second.
+    /// An action is running: the app polls every second.
     pub fn running(&self) -> bool {
         self.run.as_ref().is_some_and(LastRun::running)
     }
