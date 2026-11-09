@@ -56,7 +56,9 @@ Zarathustra's interface was drawn for the eye and the thumb:
 
 - **Tap a word** to get its dictionary entry in a card over the page (Wiktionary, StarDict).
 - **Footnotes open where you are.** No jump to the end of the book and no hunt for the way back.
-- **Highlights and bookmarks** are kept in a SQLite store and gathered in a notebook per book.
+- **Highlights that follow your finger.** Hold a word and drag: the selection follows smoothly, takes the closing punctuation with it, and turns the page when you hold at its edge, so a passage can run across pages. Drop-shaped handles adjust either end.
+- **Highlights and bookmarks** are kept in a SQLite store and gathered in a notebook per book. Jump to one and a pill takes you back to where you were.
+- **Reading figures that tell the truth.** Time is counted per page the way KOReader does it: a page flicked past adds nothing, a page left open counts at most two minutes, and the clock stops while a menu is open or the Kindle sleeps.
 - **Search** within a book or across the whole library.
 - **The first page of your library quotes you back to yourself**: a highlight from the book you are reading, or your reading figures if you prefer them.
 
@@ -70,6 +72,22 @@ Zarathustra's interface was drawn for the eye and the thumb:
 - **Swipe down from the top** for the quick panel: brightness, warmth (it can follow the clock), Wi-Fi, sending books, a clean refresh, suspend, page-turn animation, the clock while reading, and night mode.
 - **Night mode** turns the page white on black. Covers and pictures keep their own tones.
 - The library notices new books by itself, and you go back to it from a book in an instant.
+
+### Extensions: become what you are
+
+<div align="center">
+<img src="docs/screenshots/extensions.png" width="300" alt="The Extensions screen">
+</div>
+
+A plugin is a folder: a `plugin.toml` and executables in any language. Drop it into `zarathustra/plugins/` and it shows up in **Settings → Extensions**, with its service switch, its settings and its actions as buttons.
+
+- **Actions run in the background.** Tap one ("send my highlights", "sync with the server") and keep reading. While it runs you can stop it; an optional `timeout_seconds` stops it for you.
+- **Failures are never hidden.** A failed run shows its error on the screen. Tap it for everything the action printed, its exit code and how long it took, without a computer.
+- **Actions where you need them.** An action declared with `shown_in = ["book"]` appears in the book menu and receives that book.
+- **In your language.** Plugins translate their strings with standard [Fluent](https://projectfluent.org) files (`locales/it.ftl`, `locales/en.ftl`).
+- **SSH ships as the first plugin**: Dropbear and OpenSSH's `sftp-server`, built from source, public keys only, off until you switch it on.
+
+The plugin format is described in `docs/superpowers/specs/2026-11-08-plugins-design.md` and `docs/superpowers/specs/2026-11-09-extensions-stats-design.md`.
 
 ### Send your books across the abyss
 
@@ -90,23 +108,27 @@ Zarathustra is written in Rust, with C only where C is clearly best (SQLite, MuP
 ```
 crates/zarathustra-device   the Kindle (MTK e-ink, touch, light, power, Wi-Fi), an emulator
 crates/zarathustra-engine   fonts, DOM, CSS, layout, pagination, EPUB / MOBI / AZW3 / PDF / TXT
-crates/zarathustra-store    SQLite: annotations, reading days
-crates/zarathustra          the shell: home, reader, panels, keyboard
+crates/zarathustra-store    SQLite: annotations, reading days, positions, preferences
+crates/zarathustra          the shell: home, reader, panels, keyboard, plugins
+dist/plugins/ssh            the SSH plugin
 ```
 
-It cross-compiles to one static `armv7-unknown-linux-musleabihf` binary. A KUAL extension stops the Amazon framework while Zarathustra runs and brings it back when you leave.
+It cross-compiles to one static `armv7-unknown-linux-musleabihf` binary. A KUAL extension stops the Amazon framework while Zarathustra runs and brings it back when you leave. Drawing happens in RAM and only the refreshed rectangle is copied to the (uncached) framebuffer, so the library opens in about a tenth of a second and a selection follows the finger at a few milliseconds a frame.
 
 ## Become who you are: install it
 
-You need a **jailbroken Kindle** with KUAL. To install over the network you also need SSH (KOReader's server on port 2222 works). It has been built for the Paperwhite 5 and the code is written to be portable.
+You need a **jailbroken Kindle** with KUAL. It has been built for the Paperwhite 5 and the code is written to be portable. The first install goes over USB; after that, switch on the SSH extension, copy your public key into `zarathustra/plugins/ssh/authorized_keys`, and install over the network.
 
 ```sh
 # the cross toolchain: arm-linux-musleabihf-cross-bin (AUR) for the C dependencies
+scripts/build-ssh.sh                 # build the SSH plugin's Dropbear and sftp-server (pinned, verified)
+make install-usb                     # onto a Kindle mounted over USB (KINDLE=/path to override)
 make install-ssh                     # build, then install the app and the dictionaries over SSH
-make install-ssh KINDLE_HOST=1.2.3.4 # another address
-make install-usb                     # or onto a Kindle mounted over USB (KINDLE=/path to override)
+make update                          # the app only; the running Zarathustra restarts into it in seconds
 make run-ssh BIN=zarathustra-probe   # install, run a binary on the device, show its log
 ```
+
+Over SSH the Kindle is found on the network by itself (`KINDLE_HOST=1.2.3.4` to give its address). A new build copied over USB is picked up when the cable comes out.
 
 Put your books in `/mnt/us/library` (by cable, or with the transfer screen), then start Zarathustra from KUAL.
 
