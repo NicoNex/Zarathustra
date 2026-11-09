@@ -1,12 +1,16 @@
 #!/bin/sh
-# Prints the Kindle's address on the local network (DHCP moves it): the last one found if it
-# still answers, else the first host whose SSH port lets us in and has /mnt/us. Cached in
-# target/.kindle-host.
+# Prints the device's address on the local network (DHCP moves it): the last one found if it
+# still answers, else the first host whose SSH port lets us in and has the device's storage
+# folder. Cached in target/.<device>-host.
+#   scripts/find-kindle.sh            a Kindle (/mnt/us)
+#   DEVICE=kobo scripts/find-kindle.sh   a Kobo (/mnt/onboard)
+DEVICE=${DEVICE:-kindle}
+case $DEVICE in kobo) MARK=/mnt/onboard ;; *) MARK=/mnt/us ;; esac
 PORT=${KINDLE_PORT:-22}
-CACHE="$(dirname "$0")/../target/.kindle-host"
+CACHE="$(dirname "$0")/../target/.$DEVICE-host"
 is_kindle() {
 	ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=accept-new \
-		"root@$1" 'test -d /mnt/us' 2>/dev/null
+		"root@$1" "test -d $MARK" 2>/dev/null
 }
 last=$(cat "$CACHE" 2>/dev/null)
 if [ -n "$last" ] && is_kindle "$last"; then
@@ -23,5 +27,5 @@ for h in $(for i in $(seq 1 254); do (timeout 1 bash -c "echo >/dev/tcp/$net.$i/
 		exit 0
 	fi
 done
-echo "find-kindle: no Kindle answering on port $PORT (SSH plugin active?)" >&2
+echo "find-kindle: no $DEVICE answering on port $PORT (SSH plugin active?)" >&2
 exit 1

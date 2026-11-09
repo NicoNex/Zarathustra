@@ -12,7 +12,8 @@ else
 fi
 S='='
 [ "$1" = text ] && S=': '
-IP=$(ip -4 addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
+# The address on the default route's interface (wlan0 on a Kindle, mlan0 on a Kobo).
+IP=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
 if [ -n "$IP" ]; then echo "$L_ADDR${S}root@$IP -p $PORT"; else echo "$L_ADDR${S}$L_NOWIFI"; fi
 if [ -f "$DATA/host_key_ed25519" ]; then
 	FP=$("$DIR/dropbearmulti" dropbearkey -y -f "$DATA/host_key_ed25519" 2>/dev/null | sed -n 's/^Fingerprint: //p')

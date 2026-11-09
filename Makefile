@@ -90,6 +90,8 @@ run-ssh: stage
 	$(SSH) 'killall zarathustra 2>/dev/null; sleep 3; /mnt/us/extensions/zarathustra/run.sh $(BIN); cat /mnt/us/zarathustra/$(BIN).log'
 
 # Zarathustra on a Kobo (NickelMenu → Zarathustra).
+#   make update-kobo                  app only over SSH (the Kobo found on the network, or
+#                                     KOBO_HOST=…); the running app restarts into it.
 #   make install-kobo-usb             build and copy onto a USB-mounted Kobo, dictionaries too.
 #                                     If the app was open (USB handed over from it), it starts
 #                                     the new build when the cable comes out; else eject, then
@@ -99,7 +101,10 @@ KOBO_STAGE := target/kobo-stage
 KOBO_APP := $(KOBO_STAGE)/.adds/zarathustra
 KOBO_BIN_DIR := target/kobo/$(TARGET)/release
 
-.PHONY: build-kobo stage-kobo install-kobo-usb
+KOBO_HOST ?= $(eval KOBO_HOST := $$(or $$(shell DEVICE=kobo KINDLE_PORT=$(KINDLE_PORT) scripts/find-kindle.sh),$$(error no Kobo found on the network: Wi-Fi and SSH on? or set KOBO_HOST=...)))$(KOBO_HOST)
+KOBO_SSH = ssh -p $(KINDLE_PORT) -o BatchMode=yes root@$(KOBO_HOST)
+
+.PHONY: build-kobo stage-kobo install-kobo-usb update-kobo
 build-kobo:
 	$(KOBO_CPU) cargo build --release --target $(TARGET) --target-dir target/kobo -p zarathustra
 
@@ -115,6 +120,14 @@ stage-kobo: build-kobo
 		if [ -f target/ssh/$$b ]; then cp target/ssh/$$b $(KOBO_APP)/plugins/ssh/; \
 		else echo "warning: target/ssh/$$b not built (scripts/build-ssh.sh)" >&2; fi; \
 	done
+
+# Same restart as the Kindle's: the launch script sees the flag and runs the new binary.
+update-kobo: stage-kobo
+	@# While a computer has the storage, /mnt/onboard is an empty folder on the root filesystem.
+	$(KOBO_SSH) 'grep -q " /mnt/onboard " /proc/mounts' || { echo "The Kobo's storage is with a computer over USB: unplug first." >&2; exit 1; }
+	tar -cf - -C $(KOBO_STAGE) .adds library | $(KOBO_SSH) 'tar -xf - -C /mnt/onboard'
+	$(KOBO_SSH) '$(RESTART)'
+	@echo "Updated on $(KOBO_HOST)."
 
 install-kobo-usb: stage-kobo dev-dicts
 	@test -d "$(KOBO)/.kobo" || { echo "Kobo not mounted at $(KOBO) (set KOBO=…)" >&2; exit 1; }
