@@ -1,5 +1,12 @@
 # Handoff — 2026-11-09
 
+## NEXT: boot into Zarathustra (de-Amazon phase A)
+
+Design approved by the user: `specs/2026-11-09-boot-to-zarathustra-design.md`. Plan written,
+not started: `plans/2026-11-09-boot-to-zarathustra.md`. Start with Task 0: it needs the user
+(install the jailbreak's RescuePack; USB test with the app open). Execution method not chosen
+yet (recommended: native, the tasks are sequential and mostly on the device).
+
 ## 2026-11-09: Extensions, plugin actions, Fluent plugin strings, reading clock
 
 - Spec `specs/2026-11-09-extensions-stats-design.md`, plan `plans/2026-11-09-extensions-stats.md`.
