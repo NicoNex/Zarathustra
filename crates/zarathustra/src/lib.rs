@@ -3,6 +3,7 @@
 pub mod about;
 pub mod bookmenu;
 pub mod clock;
+pub mod device_info;
 pub mod dict;
 pub mod extensions;
 pub mod footnote;
@@ -89,6 +90,10 @@ pub struct Ctx {
     pub raster: Rasterizer,
     /// Per-book reading positions.
     pub state_dir: PathBuf,
+    /// The device's model and screen density, for the device information; set by the app
+    /// once the device is open (empty and 0 before).
+    pub device: String,
+    pub dpi: u32,
 }
 
 impl Ctx {
@@ -101,7 +106,7 @@ impl Ctx {
         let ts = Typesetter::new(Hyphenators::new(first_existing(&["/mnt/us/zarathustra/hyph", "assets/hyphenation"])));
         let state_dir = state_dir();
         i18n::set_lang(settings::Settings::load(&state_dir).lang);
-        Ctx { fonts, ts, raster: Rasterizer::new(1.3), state_dir }
+        Ctx { fonts, ts, raster: Rasterizer::new(1.3), state_dir, device: String::new(), dpi: 0 }
     }
 
     /// The reading font (also used for book titles).

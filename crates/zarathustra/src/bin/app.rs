@@ -443,8 +443,10 @@ fn main() -> Result<()> {
         shot(&mut home, &mut ctx, Some((W - 72 - 36, 118)), "power.pgm")?;
         home.tap((5, 5), (5, 5), &ctx);
         shot(&mut home, &mut ctx, Some((516 + 78, 118)), "prefs.pgm")?;
-        // The first plugin's page (SSH), then back to the settings and the home.
-        shot(&mut home, &mut ctx, Some((200, 950)), "plugin.pgm")?;
+        // The device information, back; the Extensions screen, then back to the settings and the home.
+        shot(&mut home, &mut ctx, Some((200, 200)), "device.pgm")?;
+        home.tap((100, 75), (100, 75), &ctx);
+        shot(&mut home, &mut ctx, Some((200, 1000)), "plugin.pgm")?;
         home.tap((100, 75), (100, 75), &ctx);
         home.tap((100, 75), (100, 75), &ctx);
         // Send books as it is now (no network: the retry screen), then with a fixed URL.
@@ -634,6 +636,7 @@ fn main() -> Result<()> {
     }
 
     let mut dev = zarathustra_device::Night::new(zarathustra_device::open_default()?);
+    (ctx.device, ctx.dpi) = (dev.name().to_string(), dev.dpi());
     let mut quick = QuickPanel::new(&ctx.state_dir, &mut dev);
     zarathustra_device::set_night(quick.settings().night);
     let full = Rect::new(0, 0, W, H);
