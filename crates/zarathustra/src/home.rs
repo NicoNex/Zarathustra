@@ -235,7 +235,12 @@ fn cover(thumb: Option<&Path>, (w, h): (i32, i32)) -> Option<GrayImage> {
 
 impl Home {
     pub fn scan(dirs: &[PathBuf], ctx: &Ctx) -> Home {
-        Self::build(library(dirs, ctx), dirs, ctx, HashMap::new())
+        let t = std::time::Instant::now();
+        let library = library(dirs, ctx);
+        let scanned = t.elapsed();
+        let home = Self::build(library, dirs, ctx, HashMap::new());
+        eprintln!("library: scanned in {scanned:?}, home built (positions, covers) in {:?}", t.elapsed() - scanned);
+        home
     }
 
     /// Picks up books added, removed or replaced on disk since the last look (a wireless

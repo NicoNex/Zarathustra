@@ -56,6 +56,9 @@ pub struct Reader {
     path: PathBuf,
     /// Decoded images of the pages around the current one (`render` takes `&self`).
     images: std::cell::RefCell<zarathustra_engine::image::ImageCache>,
+    /// While selecting: the screen without the selection (chapter, page, pixels), so each frame
+    /// of the drag is a copy and a tint instead of drawing the text again.
+    drag_base: std::cell::RefCell<Option<(usize, usize, Vec<u8>)>>,
     /// Show the clock in the header (`Settings::clock`, synced by the app).
     pub clock: bool,
     pace: Pace,
@@ -165,6 +168,7 @@ impl Reader {
             page: 0,
             path: path.to_path_buf(),
             images: Default::default(),
+            drag_base: Default::default(),
             // The app syncs it from the settings before every render.
             clock: false,
             pace: Pace::load(&ctx.state_dir),
@@ -873,6 +877,45 @@ impl Reader {
         if let Some(view) = &self.toc {
             return view.render(c, ctx, &self.contents, self.marks.list());
         }
+        let dragging = self.hl.is_dragging() && !self.menu && self.note.is_none() && self.card.is_none();
+        let mut base = self.drag_base.borrow_mut();
+        if !dragging {
+            *base = None;
+        }
+        match base.as_ref().filter(|(ch, p, _)| dragging && (*ch, *p) == (self.chapter_index, self.page)) {
+            Some((_, _, pixels)) => c.restore(pixels),
+            None => {
+                self.render_page(c, ctx);
+                if dragging {
+                    *base = Some((self.chapter_index, self.page, c.snapshot()));
+                }
+            }
+        }
+        self.hl.render_selection(c, &self.chapter, self.page, self.origin());
+        if dragging {
+            return;
+        }
+        self.hl.render_over(c, ctx, &self.chapter, self.page, self.origin());
+        if let Some(popup) = &self.note {
+            popup.render(c, ctx, self.typo.weight);
+        }
+        if let Some(card) = &self.card {
+            card.render(c, ctx);
+        }
+        if self.menu {
+            let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
+            let chapter = chapter.or((!self.contents.is_empty()).then_some(""));
+            menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""), chapter);
+            let f = self.scrub.unwrap_or_else(|| self.progress());
+            let chapters = self.book.chapters.len();
+            let title = nav::chapter_title(&self.contents, nav::target(f, chapters).0).unwrap_or("");
+            nav::draw_scrubber(c, ctx, menu::scrubber(), f, self.scrub.is_some(), title, chapters);
+        }
+    }
+
+    /// The page as read: images, saved highlights, text, header, footer, ribbon and the way
+    /// back; no selection or anything opened over it.
+    fn render_page(&self, c: &mut Canvas, ctx: &mut Ctx) {
         c.fill(c.bounds(), 255);
         if let Some(page) = self.chapter.pages.get(self.page) {
             let mut images = self.images.borrow_mut();
@@ -901,22 +944,6 @@ impl Reader {
         }
         if let Some(m) = self.back.get() {
             nav::draw_pill(c, ctx, m.progress);
-        }
-        self.hl.render_over(c, ctx, &self.chapter, self.page, self.origin());
-        if let Some(popup) = &self.note {
-            popup.render(c, ctx, self.typo.weight);
-        }
-        if let Some(card) = &self.card {
-            card.render(c, ctx);
-        }
-        if self.menu {
-            let chapter = self.current_entry().and_then(|i| self.contents.get(i)).map(|e| e.title.as_str());
-            let chapter = chapter.or((!self.contents.is_empty()).then_some(""));
-            menu::render(c, ctx, &self.typo, self.book.title().unwrap_or(""), chapter);
-            let f = self.scrub.unwrap_or_else(|| self.progress());
-            let chapters = self.book.chapters.len();
-            let title = nav::chapter_title(&self.contents, nav::target(f, chapters).0).unwrap_or("");
-            nav::draw_scrubber(c, ctx, menu::scrubber(), f, self.scrub.is_some(), title, chapters);
         }
     }
 

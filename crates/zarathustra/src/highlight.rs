@@ -637,7 +637,7 @@ impl Highlights {
         }
     }
 
-    /// Draws saved highlights and the selection; call before the page's glyphs.
+    /// Draws saved highlights; call before the page's glyphs.
     pub fn render_under(&self, c: &mut Canvas, chapter: &Chapter, page: usize, origin: (i32, i32)) {
         let Some(p) = chapter.pages.get(page) else { return };
         for (_, range) in &self.resolved {
@@ -645,12 +645,21 @@ impl Highlights {
                 c.fill(Rect::new(r.x, r.y, r.w, r.h - SELECTION_BAR), HIGHLIGHT_GRAY);
             }
         }
-        if let Some(sel) = &self.selection {
-            for r in screen_bands(p, &chapter.blocks, &sel.range, origin) {
-                c.fill(Rect::new(r.x, r.y, r.w, r.h - SELECTION_BAR), HIGHLIGHT_GRAY);
-                c.fill(Rect::new(r.x, r.bottom() - SELECTION_BAR, r.w, SELECTION_BAR), INK);
-            }
+    }
+
+    /// Draws the selection over the drawn page: its lines tinted the highlight gray, a bar
+    /// under each. Over the text, so a page drawn once can take every frame of a drag.
+    pub fn render_selection(&self, c: &mut Canvas, chapter: &Chapter, page: usize, origin: (i32, i32)) {
+        let (Some(p), Some(sel)) = (chapter.pages.get(page), &self.selection) else { return };
+        for r in screen_bands(p, &chapter.blocks, &sel.range, origin) {
+            c.darken(Rect::new(r.x, r.y, r.w, r.h - SELECTION_BAR), HIGHLIGHT_GRAY);
+            c.fill(Rect::new(r.x, r.bottom() - SELECTION_BAR, r.w, SELECTION_BAR), INK);
         }
+    }
+
+    /// The finger is selecting (no actions showing yet): the page under it doesn't change.
+    pub fn is_dragging(&self) -> bool {
+        self.selection.is_some() && self.popup.is_none()
     }
 
     /// Draws the popup; call after the page.

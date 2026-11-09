@@ -263,6 +263,7 @@ fn main() -> Result<()> {
     }
     let t = Instant::now();
     let mut ctx = Ctx::new();
+    eprintln!("fonts and state ready in {:?}", t.elapsed());
     let home = |ctx: &Ctx| Home::scan(&library_dirs(), ctx);
     let mut screen = Screen::Home(Box::new(home(&ctx)));
     // The home kept while a book is open (and the book's path), so going back is a redraw,
@@ -628,9 +629,6 @@ fn main() -> Result<()> {
                 }
                 // The computer let the storage go: Amazon's USB screen and light are ours again.
                 PowerEvent::Usb(false) if !asleep => {
-                    if installed.is_some() && installed_binary() != installed {
-                        restart_into_update();
-                    }
                     quick.apply(&mut dev);
                     screen.render(&mut dev.canvas(), &mut ctx, quick.settings().clock)
                 }
@@ -639,6 +637,11 @@ fn main() -> Result<()> {
             marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
             down = None;
             press = Press::default();
+        }
+        // A new binary installed over USB: checked after any power event (the cable out, waking
+        // up), since the USB prompt consumes the unplug event itself and the device may sleep.
+        if power && !asleep && installed.is_some() && installed_binary() != installed {
+            restart_into_update();
         }
         // The periodic wake-up (not a long-press or power one): bring the reader's clock up to date.
         let periodic = events.is_empty() && long_press.is_none() && due.is_none() && !power && !searching;
