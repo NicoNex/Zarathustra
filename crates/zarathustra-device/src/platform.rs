@@ -72,9 +72,11 @@ fn detect(root: &Path) -> Platform {
             dictionaries: app.join("dictionaries"),
             fonts: vec![onboard.join("fonts"), app.join("fonts")],
             plugins: app.join("plugins"),
-            // /var is a few small tmpfs on the Kobo: run plugins from /tmp, keep data on onboard.
+            // Plugins run from /tmp; their data (SSH keys…) needs Unix permissions, which the
+            // vfat onboard lacks, so it lives on the root filesystem (/var is ext4 there, bar a
+            // few small tmpfs under it).
             plugin_runtime: Some(root.join("tmp/zarathustra/plugins")),
-            plugin_data: app.join("data"),
+            plugin_data: root.join("var/zarathustra/data"),
             version_file: Some(onboard.join(".kobo/version")),
             binary: Some(app.join("bin/zarathustra")),
         }

@@ -27,7 +27,7 @@ id = "authorized_keys"
 kind = "list"
 label = "Authorized keys"
 list_executable = "keys"
-empty_label = "No keys. Copy your public key into an authorized_keys file in the Kindle's zarathustra/plugins/ssh folder (over USB), then turn the service on again."
+empty_label = "No keys. Copy your public key into an authorized_keys file in Zarathustra's plugins/ssh folder on the device (over USB), then turn the service on again."
 
 [[action]]
 menu_label = "Save diagnostics"

@@ -97,6 +97,11 @@ stage-kobo: build
 	cp dist/kobo/zarathustra.sh dist/kobo/probe.sh $(KOBO_APP)/
 	cp assets/hyphenation/*.bincode $(KOBO_APP)/hyph/
 	cp dist/kobo/nm/zarathustra $(KOBO_STAGE)/.adds/nm/
+	cp -r dist/plugins $(KOBO_APP)/
+	@for b in dropbearmulti sftp-server; do \
+		if [ -f target/ssh/$$b ]; then cp target/ssh/$$b $(KOBO_APP)/plugins/ssh/; \
+		else echo "warning: target/ssh/$$b not built (scripts/build-ssh.sh)" >&2; fi; \
+	done
 
 install-kobo-usb: stage-kobo dev-dicts
 	@test -d "$(KOBO)/.kobo" || { echo "Kobo not mounted at $(KOBO) (set KOBO=…)" >&2; exit 1; }

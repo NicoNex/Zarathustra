@@ -28,12 +28,13 @@ if [ -f "$USER_DIR/authorized_keys" ]; then
 fi
 
 # Dropbear reads them from a copy: it refuses a keys file under any folder not owned by
-# root, and /var/local belongs to Amazon's framework user. /var is root's (a tmpfs, so the
-# copy is made again at every start).
+# root, and a Kindle's /var/local belongs to Amazon's framework user. /var is root's (on a
+# Kindle a tmpfs, so the copy is made again at every start).
 KEY_DIR=/var/zarathustra-ssh
 mkdir -p "$KEY_DIR" && chmod 755 "$KEY_DIR" && cp "$KEYS" "$KEY_DIR/authorized_keys" && chmod 600 "$KEY_DIR/authorized_keys" || exit 1
 
-# Kindle firmware drops incoming TCP: let the port through while the server runs.
+# Kindle firmware drops incoming TCP: let the port through while the server runs (a no-op
+# where there is no iptables).
 firewall() { command -v iptables >/dev/null && iptables "$1" INPUT -p tcp --dport "$PORT" -j ACCEPT 2>/dev/null; }
 # Once: a run killed before closing it (SIGKILL) left the rule in place.
 firewall -C || firewall -I
