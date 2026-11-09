@@ -177,6 +177,27 @@ pub struct Strings {
     pub password: &'static str,
     pub wifi_failed: &'static str,
     pub wifi_error: &'static str,
+    /// Extensions screen and plugin actions. `{}` placeholders fill in order (see [`fill`]).
+    pub extensions: &'static str,
+    pub back_extensions: &'static str,
+    pub extensions_installed: &'static str,
+    pub running: &'static str,
+    pub stop: &'static str,
+    pub details: &'static str,
+    pub run_done: &'static str,
+    pub run_running: &'static str,
+    pub run_stopped: &'static str,
+    pub run_timed_out: &'static str,
+    pub run_exit: &'static str,
+    pub error: &'static str,
+    pub outcome: &'static str,
+    pub succeeded: &'static str,
+    pub started: &'static str,
+    pub ago: &'static str,
+    pub duration: &'static str,
+    pub output_heading: &'static str,
+    pub errors_heading: &'static str,
+    pub no_output: &'static str,
 }
 
 const IT: Strings = Strings {
@@ -323,6 +344,26 @@ const IT: Strings = Strings {
     password: "Password",
     wifi_failed: "Connessione non riuscita",
     wifi_error: "Wi-Fi non disponibile",
+    extensions: "Estensioni",
+    back_extensions: "‹  Estensioni",
+    extensions_installed: "{} installate",
+    running: "In corso…",
+    stop: "Ferma",
+    details: "Dettagli  ›",
+    run_done: "{}: fatto in {}",
+    run_running: "{}: in corso da {}",
+    run_stopped: "{}: fermata",
+    run_timed_out: "{}: tempo scaduto dopo {}",
+    run_exit: "{}: uscita con codice {}",
+    error: "Errore",
+    outcome: "Esito",
+    succeeded: "Riuscita",
+    started: "Avviata",
+    ago: "{} fa",
+    duration: "Durata",
+    output_heading: "Output",
+    errors_heading: "Messaggi di errore",
+    no_output: "Nessuno.",
 };
 
 const EN: Strings = Strings {
@@ -468,6 +509,26 @@ const EN: Strings = Strings {
     password: "Password",
     wifi_failed: "Couldn't connect",
     wifi_error: "Wi-Fi unavailable",
+    extensions: "Extensions",
+    back_extensions: "‹  Extensions",
+    extensions_installed: "{} installed",
+    running: "Running…",
+    stop: "Stop",
+    details: "Details  ›",
+    run_done: "{}: done in {}",
+    run_running: "{}: running for {}",
+    run_stopped: "{}: stopped",
+    run_timed_out: "{}: timed out after {}",
+    run_exit: "{}: exited with code {}",
+    error: "Error",
+    outcome: "Result",
+    succeeded: "Succeeded",
+    started: "Started",
+    ago: "{} ago",
+    duration: "Duration",
+    output_heading: "Output",
+    errors_heading: "Error messages",
+    no_output: "None.",
 };
 
 /// The UI language for the whole process; set once from the settings at startup.
@@ -486,6 +547,18 @@ pub fn lang() -> Lang {
 }
 
 /// The strings of the current language.
+/// `template` with each `{}` replaced by the next of `args`.
+pub fn fill(template: &str, args: &[&str]) -> String {
+    let mut out = String::new();
+    let mut parts = template.split("{}");
+    out.push_str(parts.next().unwrap_or_default());
+    for (i, part) in parts.enumerate() {
+        out.push_str(args.get(i).copied().unwrap_or_default());
+        out.push_str(part);
+    }
+    out
+}
+
 pub fn t() -> &'static Strings {
     strings(lang())
 }

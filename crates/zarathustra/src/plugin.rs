@@ -567,7 +567,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const MANIFEST: &str = r#"
@@ -630,7 +630,7 @@ list_executable = "items"
     }
 
     /// A plugin installed in a scratch folder, copied to a runtime folder like on the device.
-    pub(super) fn setup(name: &str) -> (PathBuf, Plugin) {
+    pub(crate) fn setup(name: &str) -> (PathBuf, Plugin) {
         let root = std::env::temp_dir().join(format!("zarathustra-plugin-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let installed = root.join("installed/echo");

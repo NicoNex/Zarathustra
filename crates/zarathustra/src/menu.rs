@@ -15,6 +15,8 @@ use crate::{Ctx, H, W};
 
 pub const TOPBAR_H: i32 = 150;
 pub const PAD: i32 = 64;
+/// The top bar's back link: taps left of this go back.
+pub const BACK_W: i32 = 380;
 /// The search button, at the right end of the top bar.
 const SEARCH: Rect = Rect { x: W - 180, y: 0, w: 180, h: TOPBAR_H };
 /// Touch targets: 96 px ≈ 8 mm at 300 dpi.

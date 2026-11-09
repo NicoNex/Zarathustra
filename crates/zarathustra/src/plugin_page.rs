@@ -7,9 +7,11 @@ use std::path::PathBuf;
 
 use zarathustra_device::{Canvas, Rect};
 
+use crate::extensions::{actions_in, block_height, block_layout, draw_block, tap_block, Hit};
 use crate::i18n::t;
 use crate::menu::{topbar, PAD, TOPBAR_H};
-use crate::plugin::{Kind, Plugin, ACTIVE, AT_BOOT};
+use crate::outsheet::OutputSheet;
+use crate::plugin::{Kind, LastRun, Plugin, ACTIVE, AT_BOOT};
 use crate::ui::{button, segmented_labels, segments, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
@@ -41,7 +43,8 @@ enum Row {
         id: String,
         text: String,
     },
-    Action(usize),
+    /// The action buttons and the last run.
+    Actions,
     Message(String),
 }
 
@@ -52,8 +55,11 @@ pub struct PluginPage {
     status: Vec<(String, String)>,
     running: bool,
     lists: HashMap<String, Vec<(String, String)>>,
-    /// The last action's output or error.
+    /// An error to show (a failed change, a broken list).
     message: Option<String>,
+    run: Option<LastRun>,
+    /// The last run's output, open over the page.
+    sheet: Option<OutputSheet>,
 }
 
 impl PluginPage {
@@ -68,6 +74,8 @@ impl PluginPage {
             running: false,
             lists: HashMap::new(),
             message: None,
+            run: None,
+            sheet: None,
         };
         page.reload();
         if let Err(e) = prepared {
@@ -81,6 +89,7 @@ impl PluginPage {
         let p = &self.plugin;
         self.values = p.values(&self.state_dir);
         self.running = p.is_running();
+        self.run = p.last_run();
         let mut errors = Vec::new();
         self.status = p.status(&self.state_dir).unwrap_or_else(|e| {
             errors.push(e.to_string());
@@ -151,7 +160,9 @@ impl PluginPage {
                 }
             }
         }
-        rows.extend((0..m.action.len()).map(|i| (Row::Action(i), ITEM_H + 24)));
+        if !m.action.is_empty() {
+            rows.push((Row::Actions, block_height(m.action.len(), self.run.as_ref()) + 24));
+        }
         if let Some(msg) = &self.message {
             rows.push((Row::Message(msg.clone()), STATUS_H * 2));
         }
@@ -179,8 +190,33 @@ impl PluginPage {
         Rect::new(r.right() - CONTROL_W, r.y + (r.h - CONTROL_H) / 2, CONTROL_W, CONTROL_H)
     }
 
+    /// The action block's parts in row `r`.
+    fn block(&self, r: Rect) -> Vec<(Hit, Rect)> {
+        block_layout(r.x, r.y + 12, r.w, &actions_in(&self.plugin, None), self.run.as_ref())
+    }
+
+    /// An action is running: the app polls every half second.
+    pub fn running(&self) -> bool {
+        self.run.as_ref().is_some_and(LastRun::running)
+    }
+
+    /// Looks again at a running action; `true` when the page must be redrawn.
+    pub fn poll(&mut self) -> bool {
+        if self.sheet.is_some() || !self.running() {
+            return false;
+        }
+        self.run = self.plugin.last_run();
+        true
+    }
+
     /// A tap: `false` for the back link (leave the page), else `true` (redraw).
     pub fn tap(&mut self, (x, y): (i32, i32)) -> bool {
+        if let Some(sheet) = &mut self.sheet {
+            if !sheet.tap((x, y)) {
+                self.sheet = None;
+            }
+            return true;
+        }
         if y < TOPBAR_H {
             return x >= BACK_W;
         }
@@ -227,9 +263,11 @@ impl PluginPage {
                     self.reload();
                 }
             }
-            Row::Action(i) => {
-                self.message = self.plugin.run(&self.state_dir, i, None).err().map(|e| e.to_string());
-                self.reload();
+            Row::Actions => {
+                if let Some(&(hit, _)) = self.block(r).iter().find(|(_, b)| b.contains(x, y)) {
+                    self.sheet = tap_block(&self.plugin, &self.state_dir, hit, self.run.as_ref());
+                    self.run = self.plugin.last_run();
+                }
             }
             _ => {}
         }
@@ -265,6 +303,9 @@ impl PluginPage {
     }
 
     pub fn render(&self, c: &mut Canvas, ctx: &mut Ctx) {
+        if let Some(sheet) = &self.sheet {
+            return sheet.render(c, ctx);
+        }
         c.fill(c.bounds(), PAPER);
         let Ctx { fonts, raster, .. } = ctx;
         let (Some(sans), Some(serif), Some(serif_bold)) =
@@ -334,12 +375,7 @@ impl PluginPage {
                     Label { face: sans, size: 28.0, ink: INK }.centered(c, raster, s.remove, b);
                     c.fill(Rect::new(r.x, r.bottom() - 1, r.w, 1), LINE);
                 }
-                Row::Action(i) => {
-                    let Some(a) = m.and_then(|m| m.action.get(i)) else { continue };
-                    let b = Rect::new(r.x, r.y + 12, r.w, ITEM_H);
-                    button(c, b, false);
-                    Label { face: sans, size: 30.0, ink: INK }.centered(c, raster, &a.menu_label, b);
-                }
+                Row::Actions => draw_block(c, raster, sans, &self.plugin, &self.block(r), self.run.as_ref()),
             }
         }
     }

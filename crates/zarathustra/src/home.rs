@@ -879,15 +879,21 @@ impl Home {
         self.overlay = Some(Overlay::Transfer(Transfer::open()));
     }
 
-    /// Whether the send-books screen is open (the app then polls it often).
+    /// Whether something on screen changes by itself (the send-books screen, a plugin action
+    /// running): the app then polls often.
     pub fn transferring(&self) -> bool {
-        matches!(self.overlay, Some(Overlay::Transfer(_)))
+        match &self.overlay {
+            Some(Overlay::Transfer(_)) => true,
+            Some(Overlay::Prefs(p)) => p.actions_running(),
+            _ => false,
+        }
     }
 
-    /// Takes in books arriving on the send-books screen; true if it needs a redraw.
+    /// Takes in arriving books, looks at running actions; true if it needs a redraw.
     pub fn poll_transfer(&mut self) -> bool {
         match &mut self.overlay {
             Some(Overlay::Transfer(tr)) => tr.poll(),
+            Some(Overlay::Prefs(p)) => p.poll(),
             _ => false,
         }
     }
