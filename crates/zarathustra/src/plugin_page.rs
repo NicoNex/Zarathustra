@@ -58,6 +58,8 @@ pub struct PluginPage {
     /// An error to show (a failed change, a broken list).
     message: Option<String>,
     run: Option<LastRun>,
+    /// The run line's text as last polled: a redraw only when it changes.
+    shown: Option<(bool, String)>,
     /// The last run's output, open over the page.
     sheet: Option<OutputSheet>,
 }
@@ -75,6 +77,7 @@ impl PluginPage {
             lists: HashMap::new(),
             message: None,
             run: None,
+            shown: None,
             sheet: None,
         };
         page.reload();
@@ -206,9 +209,11 @@ impl PluginPage {
         if self.sheet.is_some() || !self.running() {
             return false;
         }
-        let before = self.run.as_ref().map(|r| run_line(&self.plugin, r));
         self.run = self.plugin.last_run();
-        self.run.as_ref().map(|r| run_line(&self.plugin, r)) != before
+        let now = self.run.as_ref().map(|r| run_line(&self.plugin, r));
+        let changed = now != self.shown;
+        self.shown = now;
+        changed
     }
 
     /// A tap: `false` for the back link (leave the page), else `true` (redraw).

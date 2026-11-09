@@ -163,9 +163,14 @@ impl Plugin {
         let extra = [("book", book_path.as_str()), ("position", position), ("selection", "")];
         let inner = self.command(&action.run, &self.values(state_dir), &extra);
         // The wrapper records the exit status; the action's own arguments pass through "$@"
-        // untouched (no shell parsing of them).
+        // untouched (no shell parsing of them). It outlives a SIGTERM (`trap :`) until the
+        // action itself exits, so a run that ignores SIGTERM stays Running (and Busy) until the
+        // SIGKILL; its children still get the default SIGTERM.
         let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-c").arg(r#"s=$1; shift; "$@"; echo $? > "$s""#).arg("sh").arg(self.action_file("status"));
+        cmd.arg("-c")
+            .arg(r#"trap : TERM; s=$1; shift; "$@"; echo $? > "$s""#)
+            .arg("sh")
+            .arg(self.action_file("status"));
         cmd.arg(inner.get_program()).args(inner.get_args());
         for (k, v) in inner.get_envs() {
             if let Some(v) = v {
@@ -179,8 +184,16 @@ impl Plugin {
         let err = std::fs::File::create(self.action_file("err"))?;
         cmd.stdin(Stdio::null()).stdout(out).stderr(err).process_group(0);
         let executable = || action.run.executable.clone();
-        let child = cmd.spawn().map_err(|source| PluginError::Spawn { executable: executable(), source })?;
-        std::fs::write(self.action_file("pid"), format!("{}\n", child.id()))?;
+        let mut child = cmd.spawn().map_err(|source| PluginError::Spawn { executable: executable(), source })?;
+        if let Err(e) = std::fs::write(self.action_file("pid"), format!("{}\n", child.id())) {
+            // Untrackable without its pid file: not left running.
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(child.id() as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            let _ = child.wait();
+            return Err(e.into());
+        }
         Ok(child)
     }
 
@@ -200,10 +213,8 @@ impl Plugin {
         if std::fs::write(self.action_file("end"), format!("{why}\n")).is_err() {
             eprintln!("plugin {}: can't record the action's end", self.id);
         }
-        // Alive while anything of its process group is: the wrapper dies at the first SIGTERM,
-        // an action that traps it must still get the SIGKILL.
-        let group = nix::unistd::Pid::from_raw(pid);
-        std::thread::spawn(move || terminate(pid, || nix::sys::signal::killpg(group, None).is_ok()));
+        let me = self.clone();
+        std::thread::spawn(move || terminate(pid, || me.action_pid() == Some(pid)));
     }
 
     /// The last action run, if any. Stops a run past its timeout (the app was not running
@@ -352,10 +363,20 @@ mod tests {
     fn stop_kills_an_action_that_ignores_sigterm() {
         let (root, p) = setup("stubborn");
         p.run(&root.join("state"), 5, None).expect("run");
-        std::thread::sleep(Duration::from_millis(200));
+        // Stopped once the action ignores SIGTERM, so the SIGKILL path is what ends it.
+        let marker = p.data_dir().join("trapped");
+        for _ in 0..100 {
+            if marker.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(marker.exists(), "the action started");
         let pid: i32 = std::fs::read_to_string(p.action_file("pid")).expect("pid").trim().parse().expect("number");
         let group = nix::unistd::Pid::from_raw(pid);
         p.stop_action();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(p.last_run().is_some_and(|r| r.running()), "still running (and Busy) until the SIGKILL");
         let gone = (0..100).any(|_| {
             std::thread::sleep(Duration::from_millis(100));
             nix::sys::signal::killpg(group, None).is_err()

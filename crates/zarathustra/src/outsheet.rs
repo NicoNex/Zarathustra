@@ -143,7 +143,12 @@ impl OutputSheet {
         let width = (W - 2 * PAD) as f32;
         if self.rows.borrow().is_empty() {
             let wrapped = (self.lines.iter()).flat_map(|line| match line {
-                Line::Text(t) => hard_wrap(t, width, &text.advances(t)).into_iter().map(Line::Text).collect(),
+                Line::Text(t) => {
+                    // In text order (right-to-left runs shape with descending offsets).
+                    let mut glyphs = text.advances(t);
+                    glyphs.sort_by_key(|g| g.0);
+                    hard_wrap(t, width, &glyphs).into_iter().map(Line::Text).collect()
+                }
                 other => vec![other.clone()],
             });
             *self.rows.borrow_mut() = wrapped.collect();

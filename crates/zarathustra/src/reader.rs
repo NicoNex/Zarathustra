@@ -248,10 +248,18 @@ impl Reader {
         }
     }
 
-    /// Logs the time on the page shown so far (closing the book, sleep, exit); the page
-    /// stays and its clock starts over.
+    /// Logs the time on the page shown so far (closing the book); the page stays and its
+    /// clock starts over.
     pub fn flush_reading(&mut self) {
         self.leave_page(false);
+    }
+
+    /// Logs the page's time so far before sleep or exit, keeping the visit going: a page read
+    /// across a sleep stays one visit, and is still counted when turned.
+    pub fn bank_reading(&mut self) {
+        if let Some(d) = self.pace.bank(Instant::now()) {
+            self.hl.log_page(u32::try_from(d.as_secs()).unwrap_or(u32::MAX), 0);
+        }
     }
 
     /// Runs the page's clock while the page is in front, pauses it while anything covers it:

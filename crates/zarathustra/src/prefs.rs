@@ -9,13 +9,13 @@ use crate::extensions::Extensions;
 use crate::i18n::{t, Lang};
 use crate::menu::{topbar, PAD, TOPBAR_H};
 use crate::settings::Settings;
+use crate::toc::BACK_W;
 use crate::ui::{segments, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Action, Ctx, H, W};
 
 /// A row: its name, then the choices under it.
 const ROW_H: i32 = 210;
 const CONTROL_H: i32 = 96;
-const BACK_W: i32 = 360;
 /// The choices for a full refresh, in page turns.
 const FLASHES: [u8; 4] = [4, 8, 16, 32];
 const ROWS: usize = 3;

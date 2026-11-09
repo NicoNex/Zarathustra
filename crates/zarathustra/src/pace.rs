@@ -29,6 +29,8 @@ pub struct Pace {
     shown: Duration,
     /// Since when the page is in front, while its clock runs.
     running: Option<Instant>,
+    /// Statistics time of this visit already logged by [`Pace::bank`].
+    logged: Duration,
     state_dir: PathBuf,
 }
 
@@ -41,7 +43,14 @@ impl Pace {
             (secs.is_finite() && secs > 0.0).then_some((secs, samples))
         });
         let (secs_per_page, samples) = saved.unwrap_or((DEFAULT_SECS, 0));
-        Pace { secs_per_page, samples, shown: Duration::ZERO, running: None, state_dir: state_dir.to_path_buf() }
+        Pace {
+            secs_per_page,
+            samples,
+            shown: Duration::ZERO,
+            running: None,
+            logged: Duration::ZERO,
+            state_dir: state_dir.to_path_buf(),
+        }
     }
 
     /// The page is in front again: its clock runs. Idempotent.
@@ -74,7 +83,20 @@ impl Pace {
             self.secs_per_page += alpha * (d.as_secs_f32() - self.secs_per_page);
             crate::save_pref(&self.state_dir, "pace", &format!("{:.2} {}\n", self.secs_per_page, self.samples));
         }
-        (d >= STAT_MIN).then(|| d.min(STAT_MAX))
+        let logged = std::mem::take(&mut self.logged);
+        (d >= STAT_MIN).then(|| d.min(STAT_MAX).saturating_sub(logged))
+    }
+
+    /// The statistics time of the page so far, not yet logged (before sleep or exit, which may
+    /// never come back): the visit goes on, and [`Pace::leave`] logs only the rest.
+    pub fn bank(&mut self, now: Instant) -> Option<Duration> {
+        let total = self.shown + self.running.map_or(Duration::ZERO, |t| now.saturating_duration_since(t));
+        if total < STAT_MIN {
+            return None;
+        }
+        let due = total.min(STAT_MAX).saturating_sub(self.logged);
+        self.logged += due;
+        (!due.is_zero()).then_some(due)
     }
 
     /// Seconds per page: measured, or the default until there are enough samples.
@@ -164,6 +186,21 @@ mod tests {
         p.resume(t);
         assert_eq!(p.leave(t + Duration::from_secs(30), false), Some(Duration::from_secs(30)));
         assert_eq!(p.samples, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_page_across_a_sleep_is_banked_then_counted_once() {
+        let dir = std::env::temp_dir().join(format!("zarathustra-pace-bank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut p = Pace::load(&dir);
+        let t = Instant::now();
+        p.resume(t);
+        assert_eq!(p.bank(t + Duration::from_secs(30)), Some(Duration::from_secs(30)), "before sleep");
+        p.pause(t + Duration::from_secs(30));
+        p.resume(t + Duration::from_secs(3600));
+        // 30 s before the sleep, 3 s after: the turn logs the 3 s left and counts the page.
+        assert_eq!(p.leave(t + Duration::from_secs(3603), true), Some(Duration::from_secs(3)));
         std::fs::remove_dir_all(dir).ok();
     }
 }

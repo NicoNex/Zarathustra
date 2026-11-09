@@ -9,6 +9,7 @@ use zarathustra_store::{Annotation, Kind};
 
 use crate::i18n::{lang, t};
 use crate::menu::{topbar, PAD, ROW_H, TOPBAR_H};
+use crate::toc::BACK_W;
 use crate::ui::{button, Label, INK, INK_SOFT, LINE, PAPER};
 use crate::{Ctx, H, W};
 
@@ -25,7 +26,6 @@ const ENTRY_PAD: i32 = 30;
 /// The quote sits right of a bar, as a pull quote.
 const BAR_W: i32 = 6;
 const QUOTE_X: i32 = PAD + BAR_W + 32;
-const BACK_W: i32 = 360;
 const PAGE_BUTTON_W: i32 = 300;
 /// Horizontal travel that makes a touch a swipe (as in the reader).
 const SWIPE: i32 = 100;

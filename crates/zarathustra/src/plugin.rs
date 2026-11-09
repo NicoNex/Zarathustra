@@ -510,8 +510,9 @@ impl Plugin {
     }
 }
 
-/// Ends process group `pid`: SIGTERM, then SIGKILL if `alive` still says so after
-/// [`STOP_GRACE`]. Blocks for up to that long.
+/// Ends process group `pid`: SIGTERM, up to [`STOP_GRACE`] for its leader to exit (`alive`),
+/// then SIGKILL to whatever of the group is left (a child that ignored SIGTERM). Blocks for
+/// up to the grace time.
 fn terminate(pid: i32, alive: impl Fn() -> bool) {
     let group = Pid::from_raw(pid);
     let _ = killpg(group, Signal::SIGTERM);
@@ -519,9 +520,7 @@ fn terminate(pid: i32, alive: impl Fn() -> bool) {
     while alive() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
-    if alive() {
-        let _ = killpg(group, Signal::SIGKILL);
-    }
+    let _ = killpg(group, Signal::SIGKILL);
 }
 
 /// The pid in `pid_file`, when it names a live process running `exe` (a reused pid runs
@@ -664,7 +663,7 @@ list_executable = "items"
         script(&installed, "say", r#"echo book; echo second"#);
         script(&installed, "fail", r#"echo partial; echo "first problem" >&2; echo "disk full" >&2; exit 3"#);
         script(&installed, "sleep", "sleep 30");
-        script(&installed, "stubborn", "trap '' TERM; sleep 30");
+        script(&installed, "stubborn", "trap '' TERM; touch \"$ZARATHUSTRA_DATA_DIR/trapped\"; sleep 30");
         script(&installed, "env", r#"echo "$1|$ZARATHUSTRA_BOOK|$ZARATHUSTRA_POSITION"; head -c 300000 /dev/urandom"#);
         script(
             &installed,

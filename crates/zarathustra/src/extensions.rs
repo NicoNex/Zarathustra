@@ -203,6 +203,8 @@ enum Part {
 pub struct Extensions {
     plugins: Vec<Plugin>,
     runs: Vec<Option<LastRun>>,
+    /// Each run line's text as last polled: a redraw only when it changes.
+    shown: Vec<Option<(bool, String)>>,
     services: Vec<bool>,
     page: usize,
     detail: Option<Box<PluginPage>>,
@@ -218,6 +220,7 @@ impl Extensions {
         let plugins = discover(&Dirs::new(&ctx.state_dir));
         let mut e = Extensions {
             runs: Vec::new(),
+            shown: Vec::new(),
             services: Vec::new(),
             plugins,
             page: 0,
@@ -232,6 +235,7 @@ impl Extensions {
 
     fn reload(&mut self) {
         self.runs = self.plugins.iter().map(Plugin::last_run).collect();
+        self.shown = self.plugins.iter().zip(&self.runs).map(|(p, r)| r.as_ref().map(|r| run_line(p, r))).collect();
         self.services = self.plugins.iter().map(Plugin::is_running).collect();
     }
 
@@ -353,11 +357,12 @@ impl Extensions {
         // Only the running plugins are read again; a redraw only when a run line's text
         // changed (it ended, or its elapsed time ticked over).
         let mut changed = false;
-        for (p, run) in self.plugins.iter().zip(&mut self.runs) {
+        for ((p, run), shown) in self.plugins.iter().zip(&mut self.runs).zip(&mut self.shown) {
             if run.as_ref().is_some_and(LastRun::running) {
-                let before = run.as_ref().map(|r| run_line(p, r));
                 *run = p.last_run();
-                changed |= run.as_ref().map(|r| run_line(p, r)) != before;
+                let now = run.as_ref().map(|r| run_line(p, r));
+                changed |= now != *shown;
+                *shown = now;
             }
         }
         changed
