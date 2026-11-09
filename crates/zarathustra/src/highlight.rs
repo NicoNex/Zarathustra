@@ -20,7 +20,7 @@ use zarathustra_engine::library::{BookEntry, Format};
 use zarathustra_store::{book_key, Annotation, AnnotationData, BookId, Color, Kind, Store};
 
 use crate::ui::{rounded_rect, Label, INK, PAPER};
-use crate::{Ctx, W};
+use crate::{Ctx, H, W};
 
 /// Hold this long without moving to select a word.
 pub const LONG_PRESS: Duration = Duration::from_millis(500);
@@ -275,13 +275,21 @@ pub struct Popup {
 }
 
 impl Popup {
-    /// Centred over the bands, above them when there is room, else below.
+    /// Centred over the bands, above them when there is room, else below, else (a page-long
+    /// selection) in the middle of the screen, over the text.
     fn new(target: Option<usize>, buttons: &[Button], bands: &[Rect]) -> Popup {
         let w = BUTTON_W * buttons.len() as i32;
         let union = bands.iter().fold(Rect::default(), |u, r| u.union(r));
         let x = (union.x + union.w / 2 - w / 2).clamp(16, W - 16 - w);
         let above = union.y - POPUP_GAP - POPUP_H;
-        let y = if above >= crate::menu::TOPBAR_H { above } else { union.bottom() + POPUP_GAP };
+        let below = union.bottom() + POPUP_GAP;
+        let y = if above >= crate::menu::TOPBAR_H {
+            above
+        } else if below + POPUP_H <= H - crate::menu::TOPBAR_H {
+            below
+        } else {
+            (H - POPUP_H) / 2
+        };
         let rect = Rect::new(x, y, w, POPUP_H);
         let buttons = buttons
             .iter()
@@ -736,6 +744,16 @@ mod tests {
          mi ritrovai per una selva oscura,</p>
       <p>ché la diritta via era smarrita.</p>
     </body></html>"#;
+
+    #[test]
+    fn popup_stays_on_screen() {
+        let b = [Button::Delete, Button::Cancel];
+        let line = |y| Rect::new(100, y, 800, 40);
+        assert!(Popup::new(None, &b, &[line(800)]).rect.bottom() < 800, "above when there is room");
+        assert!(Popup::new(None, &b, &[line(160)]).rect.y > 200, "below under the top bar");
+        let page = Popup::new(None, &b, &[line(160), line(1500)]).rect;
+        assert!(page.y > 0 && page.bottom() < H, "a page-long selection: on screen, {page:?}");
+    }
 
     fn chapter(src: &str) -> (Dom, Vec<Block>) {
         let dom = Dom::parse_xml(src).expect("parses");
