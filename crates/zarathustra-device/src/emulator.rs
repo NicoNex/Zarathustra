@@ -87,6 +87,11 @@ impl Emulator {
 }
 
 impl Device for Emulator {
+    /// Stands in for the Kindle the layouts were first made for.
+    fn page_animation(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &str {
         "Emulator"
     }

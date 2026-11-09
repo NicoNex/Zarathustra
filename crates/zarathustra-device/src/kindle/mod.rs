@@ -285,6 +285,10 @@ impl Device for Kindle {
         power::set_prop("powerButton", 1)
     }
 
+    fn page_animation(&self) -> bool {
+        true
+    }
+
     fn wifi(&self) -> Option<std::sync::Arc<dyn crate::Wifi>> {
         Some(std::sync::Arc::new(wifi::KindleWifi))
     }

@@ -136,6 +136,17 @@ pub trait Device {
     fn wifi(&self) -> Option<Arc<dyn Wifi>> {
         None
     }
+    /// The panel can animate page turns itself ([`Refresh::swipe`]).
+    fn page_animation(&self) -> bool {
+        false
+    }
+    /// A sleep cover's magnet puts the device to sleep and wakes it, when it has a sensor we
+    /// follow ourselves.
+    fn has_sleep_cover(&self) -> bool {
+        false
+    }
+    /// Follows the sleep cover (true) or ignores it.
+    fn set_sleep_cover(&mut self, _on: bool) {}
 }
 
 /// The backend this build targets: the desktop emulator with the `emulator` feature, else the

@@ -123,6 +123,9 @@ enum Tile {
     Sleep,
     AutoWarmth,
     Animation,
+    /// Sleep and wake with a magnetic cover: in the animation's place on devices that can't
+    /// animate page turns but follow a cover (Kobo).
+    Cover,
     Clock,
     /// White text on black.
     Night,
@@ -134,11 +137,15 @@ const TILES: [Tile; 8] =
 
 impl Tile {
     fn rect(self) -> Rect {
-        let i = TILES.iter().position(|t| *t == self).unwrap_or(0) as i32;
+        let slot = if self == Tile::Cover { Tile::Animation } else { self };
+        let i = TILES.iter().position(|t| *t == slot).unwrap_or(0) as i32;
         Rect::new(PAD + (i % 4) * (tile_w() + TILE_GAP), TILE_TOP + (i / 4) * (TILE_H + TILE_GAP), tile_w(), TILE_H)
     }
 
     fn label(self) -> [&'static str; 2] {
+        if self == Tile::Cover {
+            return t().cover_tile;
+        }
         let i = TILES.iter().position(|t| *t == self).unwrap_or(0);
         t().tiles[i]
     }
@@ -180,6 +187,8 @@ pub struct QuickPanel {
     battery: Option<Battery>,
     /// `None` without a Wi-Fi we can drive.
     wifi_dev: Option<Arc<dyn Wifi>>,
+    /// The cover tile instead of the animation one ([`QuickPanel::tiles`]).
+    cover: bool,
     /// The radio and network as last read.
     wifi: WifiStatus,
     /// The Wi-Fi screen, opened from the tile: it covers the screen while the panel is open,
@@ -212,6 +221,7 @@ impl QuickPanel {
             has_warmth: current.is_none_or(|l| l.warmth.is_some()),
             battery: None,
             wifi_dev: dev.wifi(),
+            cover: !dev.page_animation() && dev.has_sleep_cover(),
             wifi: WifiStatus::default(),
             wifi_screen: None,
             watch: None,
@@ -238,6 +248,7 @@ impl QuickPanel {
             has_warmth: true,
             battery: Some(Battery { percent: 76, charging: false }),
             wifi_dev: None,
+            cover: false,
             wifi: WifiStatus { enabled: true, connected: Some("Casa".into()) },
             wifi_screen: None,
             watch: None,
@@ -462,8 +473,9 @@ impl QuickPanel {
 
     fn tap(&mut self, x: i32, y: i32, dev: &mut dyn Device) -> QuickResult {
         let inside = |r: Rect| r.contains(x, y);
+        let tiles = self.tiles();
         let s = &mut self.settings;
-        let rect = match TILES.into_iter().find(|t| inside(t.rect())) {
+        let rect = match tiles.into_iter().find(|t| inside(t.rect())) {
             Some(Tile::Wifi) => {
                 let Some(w) = &self.wifi_dev else { return QuickResult::None };
                 let r = Tile::Wifi.rect();
@@ -504,6 +516,11 @@ impl QuickPanel {
             Some(Tile::Animation) => {
                 s.swipe_animation = !s.swipe_animation;
                 Tile::Animation.rect()
+            }
+            Some(Tile::Cover) => {
+                s.sleep_cover = !s.sleep_cover;
+                dev.set_sleep_cover(s.sleep_cover);
+                Tile::Cover.rect()
             }
             Some(Tile::Clock) => {
                 s.clock = !s.clock;
@@ -580,6 +597,7 @@ impl QuickPanel {
     /// changed it).
     pub fn apply(&mut self, dev: &mut dyn Device) {
         self.applied = Some(Instant::now());
+        dev.set_sleep_cover(self.settings.sleep_cover);
         let light = Light { brightness: self.settings.brightness, warmth: self.has_warmth.then_some(self.warmth) };
         if let Err(e) = dev.set_light(light) {
             eprintln!("quick settings: set light: {e}");
@@ -588,6 +606,12 @@ impl QuickPanel {
 
     fn save(&self) {
         self.settings.save(&self.state_dir);
+    }
+
+    /// The tiles in their slots: the cover in the animation's on devices that follow a cover
+    /// but can't animate.
+    fn tiles(&self) -> [Tile; 8] {
+        TILES.map(|t| if t == Tile::Animation && self.cover { Tile::Cover } else { t })
     }
 
     /// The light off while the storage is with a computer: the app quits meanwhile and, when
@@ -634,13 +658,14 @@ impl QuickPanel {
             label.draw(c, raster, &text, icon.x as f32 - 18.0 - label.width(&text), 124);
         }
 
-        for tile in TILES {
+        for tile in self.tiles() {
             let r = tile.rect();
             // Toggles show their state; actions (transfer, clean, sleep) an icon.
             let on = match tile {
                 Tile::Wifi => Some(self.wifi.enabled),
                 Tile::AutoWarmth => Some(self.settings.auto_warmth),
                 Tile::Animation => Some(self.settings.swipe_animation),
+                Tile::Cover => Some(self.settings.sleep_cover),
                 Tile::Clock => Some(self.settings.clock),
                 Tile::Night => Some(self.settings.night),
                 Tile::Transfer | Tile::Clean | Tile::Sleep => None,
@@ -810,6 +835,8 @@ mod tests {
         px: Vec<u8>,
         light: Light,
         writes: usize,
+        /// `Some(following)` for a device with a sleep cover and no page animation (a Kobo).
+        cover: Option<bool>,
     }
 
     impl Fake {
@@ -818,6 +845,7 @@ mod tests {
                 px: vec![0; (screen_w() * crate::screen_h()) as usize],
                 light: Light { brightness: 30, warmth: Some(10) },
                 writes: 0,
+                cover: None,
             }
         }
     }
@@ -858,6 +886,34 @@ mod tests {
         fn wifi(&self) -> Option<Arc<dyn Wifi>> {
             Some(Arc::new(zarathustra_device::wifi::Fake::new(Duration::ZERO)))
         }
+        fn page_animation(&self) -> bool {
+            self.cover.is_none()
+        }
+        fn has_sleep_cover(&self) -> bool {
+            self.cover.is_some()
+        }
+        fn set_sleep_cover(&mut self, on: bool) {
+            if let Some(c) = &mut self.cover {
+                *c = on;
+            }
+        }
+    }
+
+    #[test]
+    fn the_cover_tile_takes_the_animation_slot_where_pages_cant_animate() {
+        let dir = state_dir("cover");
+        let mut dev = Fake { cover: Some(false), ..Fake::new() };
+        let mut q = QuickPanel::new(&dir, &mut dev);
+        assert_eq!(dev.cover, Some(true), "the saved setting (on by default) reaches the device");
+        q.open(&dev);
+        let r = Tile::Animation.rect();
+        let p = (r.x + r.w / 2, r.y + r.h / 2);
+        q.touch(&touch(Phase::Down, p), &mut dev);
+        q.touch(&touch(Phase::Up, p), &mut dev);
+        assert_eq!(dev.cover, Some(false));
+        assert!(!Settings::load(&dir).sleep_cover);
+        assert!(Settings::load(&dir).swipe_animation, "the animation setting is left alone");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     fn state_dir(name: &str) -> PathBuf {

@@ -91,6 +91,8 @@ pub struct Kobo {
     /// A line read only in part, completed by the next read.
     partial: String,
     power: Power,
+    /// Sleep and wake with the cover (the user can turn it off: a loose magnet).
+    follow_cover: bool,
     power_events: VecDeque<PowerEvent>,
     /// `None` when the launch script didn't pass Nickel's Wi-Fi environment.
     wifi: Option<Arc<KoboWifi>>,
@@ -128,6 +130,7 @@ impl Kobo {
             hardware,
             partial: String::new(),
             power: Power::default(),
+            follow_cover: true,
             power_events: VecDeque::new(),
             wifi: KoboWifi::from_env().map(Arc::new),
         })
@@ -167,8 +170,8 @@ impl Kobo {
         for (code, value) in keys {
             match (code, value) {
                 (KEY_POWER, 1) => self.feed(Input::Button),
-                (KEY_F1, 1) => self.feed(Input::Cover(true)),
-                (KEY_F1, 0) => self.feed(Input::Cover(false)),
+                (KEY_F1, 1) if self.follow_cover => self.feed(Input::Cover(true)),
+                (KEY_F1, 0) if self.follow_cover => self.feed(Input::Cover(false)),
                 _ => {}
             }
         }
@@ -300,6 +303,14 @@ impl Device for Kobo {
     fn sleep(&mut self) -> io::Result<()> {
         self.feed(Input::Button);
         Ok(())
+    }
+
+    fn has_sleep_cover(&self) -> bool {
+        self.cover.is_some()
+    }
+
+    fn set_sleep_cover(&mut self, on: bool) {
+        self.follow_cover = on;
     }
 
     fn wifi(&self) -> Option<Arc<dyn Wifi>> {

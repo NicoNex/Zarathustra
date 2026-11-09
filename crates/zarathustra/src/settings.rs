@@ -25,6 +25,8 @@ pub struct Settings {
     pub home_quotes: bool,
     /// Night mode: the whole screen inverted, white on black.
     pub night: bool,
+    /// Sleep and wake with a magnetic cover, where the device follows one.
+    pub sleep_cover: bool,
 }
 
 impl Default for Settings {
@@ -40,6 +42,7 @@ impl Default for Settings {
             flash_every: 8,
             home_quotes: true,
             night: false,
+            sleep_cover: true,
         }
     }
 }
@@ -78,6 +81,7 @@ impl Settings {
                 "clock" => flag(&mut s.clock),
                 "auto_warmth" => flag(&mut s.auto_warmth),
                 "night" => flag(&mut s.night),
+                "sleep_cover" => flag(&mut s.sleep_cover),
                 "night_warmth" => percent(&mut s.night_warmth),
                 "brightness" => percent(&mut s.brightness),
                 "warmth" => percent(&mut s.warmth),
@@ -104,11 +108,12 @@ impl Settings {
             flash_every,
             home_quotes,
             night,
+            sleep_cover,
         } = self;
         format!(
             "swipe_animation={swipe_animation}\nclock={clock}\nauto_warmth={auto_warmth}\n\
              night_warmth={night_warmth}\nbrightness={brightness}\nwarmth={warmth}\nlang={}\n\
-             flash_every={flash_every}\nhome_quotes={home_quotes}\nnight={night}\n",
+             flash_every={flash_every}\nhome_quotes={home_quotes}\nnight={night}\nsleep_cover={sleep_cover}\n",
             lang.code()
         )
     }
@@ -137,6 +142,7 @@ mod tests {
             flash_every: 16,
             home_quotes: false,
             night: true,
+            sleep_cover: false,
         };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let dir = scratch("round-trip");

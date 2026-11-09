@@ -112,6 +112,7 @@ pub struct Strings {
     pub weekday_initials: [&'static str; 7],
     /// Quick panel tiles, two lines each: auto warmth, page animation, clock, sleep.
     pub tiles: [[&'static str; 2]; 8],
+    pub cover_tile: [&'static str; 2],
     pub on: &'static str,
     pub off: &'static str,
     pub charging: &'static str,
@@ -281,6 +282,7 @@ const IT: Strings = Strings {
     not_read_yet: "Non ancora letto con Zarathustra.",
     sorts: ["Titolo", "Autore", "Recenti"],
     weekday_initials: ["L", "M", "M", "G", "V", "S", "D"],
+    cover_tile: ["Cover", "magnetica"],
     tiles: [
         ["Wi-Fi", "Spento"],
         ["Trasferisci", "libri"],
@@ -461,6 +463,7 @@ const EN: Strings = Strings {
     not_read_yet: "Not read with Zarathustra yet.",
     sorts: ["Title", "Author", "Recent"],
     weekday_initials: ["M", "T", "W", "T", "F", "S", "S"],
+    cover_tile: ["Sleep", "cover"],
     tiles: [
         ["Wi-Fi", "Off"],
         ["Send", "books"],
