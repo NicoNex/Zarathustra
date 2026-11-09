@@ -203,6 +203,16 @@ fix: close the DB on `userstoreDeferUnmountRequest`/USB events, or keep the DB i
 - Cron (`/etc/crontab/root`): `tinyrot` every 15 min, six `loginfo` hourly, `tmpfs_scan` every
   30 min, DEM heartbeat daily.
 
+### Upstart version (checked again 2026-11-09, afternoon)
+
+`initctl` reports **upstart 0.6.6**: no `.override` files and no `manual` stanza (both came in
+1.x), so a job cannot be kept from starting without editing its `.conf`. The jobs we need
+(`powerd`, `volumd`, `wifid`, `cmd`) and those to switch off (`todo`, `rcm`, `archive`…) all
+`start on started lab126` (and `tmd`, `phd` on `started cmd`): disabling has to be a runtime
+`stop` from our own job, as step 4 below already says. Job states and the OTA block
+(`otaupd.bck`, `otav3.bck`) were as recorded above. Design that follows from this:
+`docs/superpowers/specs/2026-11-09-boot-to-zarathustra-design.md`.
+
 ## 4. Recommended first steps (phase A)
 
 Principle: runtime `stop` first (a reboot undoes everything), persistent only after a few days
