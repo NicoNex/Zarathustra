@@ -1,5 +1,6 @@
 #!/bin/sh
-# Status lines for the plugin's page: Label=value.
+# Status lines for the plugin's page: Label=value. With "text" (the Connection info action),
+# "Label: value" for people to read.
 DIR=$(cd "$(dirname "$0")" && pwd)
 PORT=${ZARATHUSTRA_SETTING_PORT:-22}
 DATA=${ZARATHUSTRA_DATA_DIR:-/var/local/zarathustra/data/ssh}
@@ -9,17 +10,19 @@ if [ "$ZARATHUSTRA_LANGUAGE" = en ]; then
 else
 	L_ADDR=Indirizzo L_NOWIFI="senza Wi-Fi" L_HOST="Chiave del Kindle" L_FIRST="creata al primo avvio" L_KEYS="Chiavi autorizzate" L_LAST="Ultimo evento"
 fi
+S='='
+[ "$1" = text ] && S=': '
 IP=$(ip -4 addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
-if [ -n "$IP" ]; then echo "$L_ADDR=root@$IP -p $PORT"; else echo "$L_ADDR=$L_NOWIFI"; fi
+if [ -n "$IP" ]; then echo "$L_ADDR${S}root@$IP -p $PORT"; else echo "$L_ADDR${S}$L_NOWIFI"; fi
 if [ -f "$DATA/host_key_ed25519" ]; then
 	FP=$("$DIR/dropbearmulti" dropbearkey -y -f "$DATA/host_key_ed25519" 2>/dev/null | sed -n 's/^Fingerprint: //p')
-	echo "$L_HOST=${FP:-?}"
+	echo "$L_HOST${S}${FP:-?}"
 else
-	echo "$L_HOST=$L_FIRST"
+	echo "$L_HOST${S}$L_FIRST"
 fi
 N=$(grep -c '^[^#]' "$DATA/authorized_keys" 2>/dev/null || true)
-echo "$L_KEYS=${N:-0}"
+echo "$L_KEYS${S}${N:-0}"
 # Dropbear's last log line: why a login was refused, without needing a way in.
 LAST=$(grep -v -e 'Not backgrounding' -e 'Exit before auth' -e 'Child connection' "$DATA/service.log" 2>/dev/null | tail -n 1 | sed 's/^\[[0-9]*\] //')
-[ -n "$LAST" ] && echo "$L_LAST=$LAST"
+[ -n "$LAST" ] && echo "$L_LAST${S}$LAST"
 exit 0

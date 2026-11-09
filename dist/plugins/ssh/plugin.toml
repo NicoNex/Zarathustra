@@ -37,4 +37,5 @@ executable = "diagnose"
 [[action]]
 menu_label = "Connection info"
 executable = "status"
+arguments = ["text"]
 output = "show"
