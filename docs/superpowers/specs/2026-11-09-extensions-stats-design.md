@@ -75,27 +75,36 @@ then stdout and stderr (headed, monospace if a mono face is available else sans)
 
 ## 3. Plugin translations
 
-`plugin.toml` may carry `[translations.<lang>]` tables (`it`, `en`; any code the app knows)
-overriding user-visible strings: `display_name`, `description`, `actions` (keyed by the
-action's untranslated `menu_label`, gettext-style: no collisions, no extra ids) and `settings`
-(keyed by setting id, translating its `label`; and `empty_label` for lists via
-`settings_empty`). Choice options, status and list output are not translated. Shape:
+The standard way, Project Fluent (Mozilla's localization system; `fluent-bundle` 0.16, the
+Rust reference implementation, Apache-2.0/MIT): a plugin folder may hold
+`locales/<lang>.ftl`, one file per language (`it.ftl`, `en.ftl`; any code the app knows).
+The manifest's own strings are the source text (English) and the fallback when a file or a
+message is missing, so a plugin without `locales/` works as today. Translators edit plain
+`.ftl` files; no rebuild, no manifest change.
 
-```toml
-display_name = "SSH"
-description = "Remote access with keys"
+Message ids, fixed by the app:
+- `display-name`, `description`;
+- `action-<id>`: actions gain an optional `id` (`[a-z0-9-]+`) used for translation, defaulting
+  to the executable's file name;
+- `setting-<id>` (its label), `setting-<id>-empty` (a list's `empty_label`),
+  `setting-<id>-option-<value>` (a choice option's shown text; the stored value is unchanged).
 
-[translations.it]
-description = "Accesso remoto con chiavi"
-actions = { "Save diagnostics" = "Salva diagnostica" }   # keyed by menu_label
-settings = { port = "Porta", authorized_keys = "Chiavi autorizzate" }
+```ftl
+# dist/plugins/ssh/locales/it.ftl
+description = Accesso remoto con chiavi
+action-diagnose = Salva diagnostica
+setting-port = Porta
+setting-authorized_keys = Chiavi autorizzate
+setting-authorized_keys-empty = Copia authorized_keys in zarathustra/plugins/ssh via USB
 ```
 
-Lookup: the app's current language table, else the untranslated manifest string. The SSH
-plugin ships `it` and `en`. Status lines printed by plugin executables are not translated
-(the executable can read `ZARATHUSTRA_LANGUAGE`, a new env var with the app's language code).
-All new built-in strings (screen title, Running, Stop, Done, Stopped, Error, output sheet
-headings) go in `i18n.rs` for both languages.
+Lookup: the app's current language bundle, else the manifest string. A broken `.ftl` file is
+logged and skipped (Fluent parses what it can). Status and list output printed by plugin
+executables are the executable's business: it gets `ZARATHUSTRA_LANGUAGE` (new env var, the
+app's language code). All new built-in strings (screen title, Running, Stop, Done, Stopped,
+Error, output sheet headings) go in `i18n.rs` for both languages; the app's own compiled
+table stays (checked at compile time, no lookups); moving it to Fluent too is its ponytail's
+trigger (a third language), not part of this work.
 
 ## 4. Reading statistics
 
@@ -141,9 +150,9 @@ constant (KOReader makes it a setting; not now).
 
 - Agent A (worktree): §4 statistics — `pace.rs`, `reader.rs` timing hooks, `bin/app.rs`
   suspend/exit flush, `stats.rs` constants, tests.
-- Agent B (worktree): §3 translations — `plugin.rs` manifest parsing + lookup, SSH
-  `plugin.toml`, `ZARATHUSTRA_LANGUAGE`, tests. Touches `plugin.rs` only in the manifest and
-  env parts.
+- Agent B (worktree): §3 translations — new `plugin_i18n.rs` (Fluent bundles per plugin,
+  lookup API), `Action.id` + `ZARATHUSTRA_LANGUAGE` in `plugin.rs`, SSH `locales/{it,en}.ftl`,
+  `plugin_page.rs`/`prefs.rs` reading names through it, tests.
 - Main session: §1 + §2 — new `extensions.rs` screen, `plugin.rs` background runs, `prefs.rs`
   row, `bookmenu.rs` actions, `plugin_page.rs`, output sheet. Merges A and B.
 Then code-review + simplify on the whole diff, commit, `make update`, verify on the device
