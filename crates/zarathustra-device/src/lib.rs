@@ -5,11 +5,13 @@ mod fb;
 pub mod geom;
 pub mod input;
 pub mod kindle;
+pub mod kobo;
 mod night;
 pub mod platform;
 mod sys;
 pub mod sysfs;
 pub mod wifi;
+mod wpa;
 
 #[cfg(feature = "emulator")]
 pub mod emulator;
@@ -135,10 +137,17 @@ pub trait Device {
     }
 }
 
-/// The backend this build targets: the desktop emulator with the `emulator` feature, else the Kindle.
+/// The backend this build targets: the desktop emulator with the `emulator` feature, else the
+/// device [`platform()`] detects.
 pub fn open_default() -> io::Result<Box<dyn Device>> {
     #[cfg(feature = "emulator")]
     return Ok(Box::new(emulator::Emulator::new()?));
     #[cfg(not(feature = "emulator"))]
-    return Ok(Box::new(kindle::Kindle::open()?));
+    return match platform().kind {
+        Kind::Kobo => Ok(Box::new(kobo::Kobo::open()?)),
+        Kind::Kindle => Ok(Box::new(kindle::Kindle::open()?)),
+        Kind::Desktop => {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "no e-reader here: build with --features emulator"))
+        }
+    };
 }

@@ -1,2 +1,3 @@
 # Zarathustra: copied to /mnt/onboard/.adds/nm/zarathustra.
+menu_item : main : Zarathustra : cmd_spawn : quiet : exec /bin/sh /mnt/onboard/.adds/zarathustra/zarathustra.sh
 menu_item : main : Zarathustra probe : cmd_spawn : quiet : /bin/sh /mnt/onboard/.adds/zarathustra/probe.sh

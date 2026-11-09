@@ -312,6 +312,8 @@ fn main() -> Result<()> {
     while let Some(a) = args.next() {
         match a.as_str() {
             "--start-services" => services = true,
+            // The Kobo launch script, before Nickel comes back: screen mode and Wi-Fi as it left them.
+            "--release-device" => return Ok(zarathustra_device::kobo::release()?),
             "--recovery" => recovery = true,
             "--no-swipe" => swipe = false,
             "--search" => query = args.next().context("--search WORD")?,

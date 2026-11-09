@@ -3,6 +3,7 @@
 
 use std::fs::File;
 use std::io;
+use std::mem::size_of;
 use std::os::fd::{AsRawFd, RawFd};
 
 use crate::sys::ioctl;
@@ -56,8 +57,31 @@ pub struct Framebuffer {
     /// to write the whole screen), and blending and tinting read every pixel. So drawing
     /// happens in RAM and [`Framebuffer::flush`] copies a rectangle out, write-only.
     back: Vec<u8>,
-    /// The mode found at open, put back on drop when [`Framebuffer::open`] changed it.
-    saved: Option<VarInfo>,
+}
+
+/// The mode found before the first switch to gray, for [`restore_mode`]. A file, not a field:
+/// the app leaves through `process::exit` (USB, updates) and is started again by its launch
+/// script, which restores the mode once, before the vendor UI comes back.
+const SAVED_MODE: &str = "/tmp/zarathustra-fb.mode";
+
+/// Puts back the framebuffer mode saved when [`Framebuffer::open`] switched it to gray.
+pub fn restore_mode(path: &str) -> io::Result<()> {
+    let bytes = match std::fs::read(SAVED_MODE) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let mut var: VarInfo = [0; 40];
+    if bytes.len() != size_of::<VarInfo>() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "saved framebuffer mode"));
+    }
+    for (v, b) in var.iter_mut().zip(bytes.chunks_exact(4)) {
+        *v = u32::from_ne_bytes([b[0], b[1], b[2], b[3]]);
+    }
+    let file = File::options().read(true).write(true).open(path)?;
+    // SAFETY: fb_var_screeninfo is 40 u32s.
+    unsafe { ioctl(file.as_raw_fd(), FBIOPUT_VSCREENINFO, var.as_mut_ptr())? };
+    std::fs::remove_file(SAVED_MODE)
 }
 
 fn var_info(fd: RawFd) -> io::Result<VarInfo> {
@@ -69,18 +93,19 @@ fn var_info(fd: RawFd) -> io::Result<VarInfo> {
 
 impl Framebuffer {
     /// Maps the framebuffer at `path`. It must be 8-bit gray; with `to_gray`, another depth
-    /// (a Kobo's 32 bpp, as Nickel leaves it) is switched to 8-bit gray and restored on drop.
+    /// (a Kobo's 32 bpp, as Nickel leaves it) is switched to 8-bit gray, the old mode kept for
+    /// [`restore_mode`].
     pub fn open(path: &str, to_gray: bool) -> io::Result<Self> {
         let file = File::options().read(true).write(true).open(path)?;
         let fd = file.as_raw_fd();
         let mut var = var_info(fd)?;
-        let mut saved = None;
         if var[VAR_BPP] != 8 {
             if !to_gray {
                 // shortcut: 8-bit gray only (what MTK Kindles expose); add a converter if a device can't switch.
                 return Err(io::Error::new(io::ErrorKind::Unsupported, format!("{} bpp framebuffer", var[VAR_BPP])));
             }
-            saved = Some(var);
+            let bytes: Vec<u8> = var.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            std::fs::write(SAVED_MODE, bytes)?;
             var[VAR_BPP] = 8;
             var[VAR_GRAYSCALE] = GRAYSCALE_8BIT;
             // SAFETY: fb_var_screeninfo is 40 u32s, read just above.
@@ -111,7 +136,6 @@ impl Framebuffer {
             stride: fix.line_length as usize,
             rotate: var[VAR_ROTATE],
             back: Vec::new(),
-            saved,
             file,
         };
         // Start from what the screen shows, so a partial refresh never copies out stale zeros.
@@ -158,11 +182,5 @@ impl Drop for Framebuffer {
     fn drop(&mut self) {
         // SAFETY: unmapping exactly what open() mapped.
         unsafe { libc::munmap(self.map.cast(), self.map_len) };
-        if let Some(mut var) = self.saved.take() {
-            // SAFETY: fb_var_screeninfo is 40 u32s, as read at open.
-            if let Err(e) = unsafe { ioctl(self.file.as_raw_fd(), FBIOPUT_VSCREENINFO, var.as_mut_ptr()) } {
-                eprintln!("framebuffer mode not restored: {e}");
-            }
-        }
     }
 }

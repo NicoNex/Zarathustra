@@ -79,3 +79,28 @@ run-ssh: stage
 	@# Another binary takes the screen: the app quits for real first (no update flag), or two
 	@# would drive the screen and touch at once.
 	$(SSH) 'killall zarathustra 2>/dev/null; sleep 3; /mnt/us/extensions/zarathustra/run.sh $(BIN); cat /mnt/us/zarathustra/$(BIN).log'
+
+# Zarathustra on a Kobo (NickelMenu → Zarathustra).
+#   make install-kobo-usb             build and copy onto a USB-mounted Kobo, dictionaries too.
+#                                     If the app was open (USB handed over from it), it starts
+#                                     the new build when the cable comes out; else eject, then
+#                                     NickelMenu → Zarathustra.
+KOBO ?= /run/media/$(USER)/KOBOeReader
+KOBO_STAGE := target/kobo-stage
+KOBO_APP := $(KOBO_STAGE)/.adds/zarathustra
+
+.PHONY: stage-kobo install-kobo-usb
+stage-kobo: build
+	rm -rf $(KOBO_STAGE)
+	mkdir -p $(KOBO_APP)/bin $(KOBO_APP)/hyph $(KOBO_APP)/dictionaries $(KOBO_STAGE)/.adds/nm $(KOBO_STAGE)/library
+	cp $(BIN_DIR)/zarathustra $(KOBO_APP)/bin/
+	cp dist/kobo/zarathustra.sh dist/kobo/probe.sh $(KOBO_APP)/
+	cp assets/hyphenation/*.bincode $(KOBO_APP)/hyph/
+	cp dist/kobo/nm/zarathustra $(KOBO_STAGE)/.adds/nm/
+
+install-kobo-usb: stage-kobo dev-dicts
+	@test -d "$(KOBO)/.kobo" || { echo "Kobo not mounted at $(KOBO) (set KOBO=…)" >&2; exit 1; }
+	tar -cf - -C $(KOBO_STAGE) . | $(UNTAR_USB) -C "$(KOBO)"
+	tar -cf - --exclude=_dl -C dev-dicts . | $(UNTAR_USB) -C "$(KOBO)/.adds/zarathustra/dictionaries"
+	sync
+	@echo "Installed on $(KOBO). Unplug (the app restarts into it) or eject, then NickelMenu → Zarathustra."

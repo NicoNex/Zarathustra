@@ -8,10 +8,11 @@
 // ponytail: CLI tools, a process per call (tens of ms); calls run off the UI thread anyway.
 // Replace with liblipc FFI only if a device trace shows them in the way.
 
-use std::io::{self, Write};
+use std::io;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::sys::run;
 use crate::wifi::{Network, Wifi, WifiStatus};
 
 const CMD: &str = "com.lab126.cmd";
@@ -21,24 +22,6 @@ const SCAN_TIMEOUT: u32 = 10;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct KindleWifi;
-
-/// Runs `cmd`, feeding it `input`; its trimmed stdout, or an error with its stderr.
-fn run(cmd: &mut Command, input: Option<&str>) -> io::Result<String> {
-    let mut child = cmd
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin.write_all(text.as_bytes())?;
-    }
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(io::Error::other(format!("{cmd:?}: {} {}", out.status, err.trim())));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
 
 /// `lipc-get-prop -i|-s <publisher> <prop>`.
 fn get(kind: &str, publisher: &str, prop: &str) -> io::Result<String> {
@@ -59,46 +42,6 @@ fn read_hash(prop: &str) -> io::Result<Vec<Record>> {
 /// commas between pairs: the grammar the PW5's lipc-hash-prop parses).
 fn write_hash(prop: &str, fields: &[(&str, &str)]) -> io::Result<()> {
     run(Command::new("lipc-hash-prop").args([WIFID, prop]), Some(&hash_record(fields))).map(drop)
-}
-
-/// Joins a new network through wpa_supplicant (`wpa_cli` arguments go straight through, so
-/// any character in the password is fine), saving it in its config. Removed again on failure.
-// ponytail: wifid doesn't learn about this network (it isn't listed as saved, and forgetting
-// it from Zarathustra does nothing); fine until lipc-hash-prop's escaping is known.
-fn wpa_join(ssid: &str, password: Option<&str>) -> io::Result<()> {
-    let wpa = |args: &[&str]| run(Command::new("wpa_cli").args(["-i", "wlan0"]).args(args), None);
-    let ok = |out: io::Result<String>| match out {
-        Ok(o) if o.lines().last().is_some_and(|l| l.trim() == "OK") => Ok(()),
-        Ok(o) => Err(io::Error::other(format!("wpa_cli: {o}"))),
-        Err(e) => Err(e),
-    };
-    let id = wpa(&["add_network"])?.lines().last().unwrap_or_default().trim().to_string();
-    id.parse::<u32>().map_err(|_| io::Error::other(format!("wpa_cli add_network: {id}")))?;
-    let joined = (|| {
-        ok(wpa(&["set_network", &id, "ssid", &format!("\"{ssid}\"")]))?;
-        match password {
-            Some(p) => ok(wpa(&["set_network", &id, "psk", &format!("\"{p}\"")]))?,
-            None => ok(wpa(&["set_network", &id, "key_mgmt", "NONE"]))?,
-        }
-        ok(wpa(&["select_network", &id]))?;
-        let start = Instant::now();
-        while start.elapsed() < CONNECT_TIMEOUT {
-            std::thread::sleep(Duration::from_millis(500));
-            let status = wpa(&["status"]).unwrap_or_default();
-            let line = |key: &str| status.lines().find_map(|l| l.strip_prefix(key)).map(str::to_string);
-            if line("wpa_state=").as_deref() == Some("COMPLETED") && line("ssid=").as_deref() == Some(ssid) {
-                wpa(&["save_config"]).ok();
-                return Ok(());
-            }
-        }
-        Err(io::Error::new(io::ErrorKind::TimedOut, format!("{ssid}: not connected after {CONNECT_TIMEOUT:?}")))
-    })();
-    if joined.is_err() {
-        wpa(&["remove_network", &id]).ok();
-        // Back to the networks wifid knows.
-        wpa(&["enable_network", "all"]).ok();
-    }
-    joined
 }
 
 /// One record: integer fields bare, the rest quoted; values are [`plain`].
@@ -233,7 +176,7 @@ impl Wifi for KindleWifi {
             // password with '#' or '!'): then wpa_supplicant joins it directly.
             if let Err(e) = write_hash("createProfile", &fields) {
                 eprintln!("wifi: createProfile refused ({e}); joining through wpa_cli");
-                return wpa_join(ssid, password);
+                return crate::wpa::Wpa::new("wlan0").join(ssid, password, CONNECT_TIMEOUT);
             }
         }
         let joined = || {

@@ -128,6 +128,55 @@ struct RawEvent {
     value: i32,
 }
 
+const EV_KEY: u16 = 1;
+
+/// A button device (`/dev/input/event*`): power key, sleep cover…
+pub struct Keys {
+    file: File,
+}
+
+impl Keys {
+    /// Opens the input device whose name (`/sys/class/input/eventN/device/name`) is `name`.
+    pub fn find(name: &str) -> io::Result<Keys> {
+        for e in fs::read_dir("/sys/class/input")?.flatten() {
+            let found = fs::read_to_string(e.path().join("device/name")).is_ok_and(|n| n.trim() == name);
+            if found && e.file_name().to_string_lossy().starts_with("event") {
+                let path = Path::new("/dev/input").join(e.file_name());
+                let file = File::options().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
+                return Ok(Keys { file });
+            }
+        }
+        Err(io::Error::new(io::ErrorKind::NotFound, format!("no input device named {name}")))
+    }
+
+    pub fn fd(&self) -> RawFd {
+        self.file.as_raw_fd()
+    }
+
+    /// Drains pending events (non-blocking); appends `(code, value)` of each key event
+    /// (value 1 pressed, 0 released, 2 repeat).
+    pub fn read(&mut self, out: &mut Vec<(u16, i32)>) -> io::Result<()> {
+        let mut buf = [0u8; 16 * size_of::<RawEvent>()];
+        loop {
+            let n = match self.file.read(&mut buf) {
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(e) => return Err(e),
+            };
+            for chunk in buf[..n].chunks_exact(size_of::<RawEvent>()) {
+                // SAFETY: chunk is exactly one RawEvent; read_unaligned has no alignment needs.
+                let ev: RawEvent = unsafe { std::ptr::read_unaligned(chunk.as_ptr().cast()) };
+                if ev.ty == EV_KEY {
+                    out.push((ev.code, ev.value));
+                }
+            }
+            if n < buf.len() {
+                return Ok(());
+            }
+        }
+    }
+}
+
 fn abs_info(fd: RawFd, axis: u16) -> io::Result<libc::input_absinfo> {
     // SAFETY: input_absinfo is plain old data; all-zero is valid.
     let mut info: libc::input_absinfo = unsafe { std::mem::zeroed() };
