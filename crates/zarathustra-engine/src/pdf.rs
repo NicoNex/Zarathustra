@@ -165,25 +165,94 @@ fn fit(
     Ok((draw(list, &area, scale, w, h)?, Frame { x0: area.x0, y0: area.y0, scale }))
 }
 
+/// A character and its box: left, top, right, bottom.
+type Glyph = (char, [f32; 4]);
+/// A line as a reader sees it: its box and its characters.
+type VisualLine = ([f32; 4], Vec<Glyph>);
+
 /// The characters of a text page in reading order, with their boxes.
 fn page_text(stext: &mupdf::TextPage) -> PageText {
-    let mut out = PageText::default();
-    let mut line = 0;
+    let mut lines = Vec::new();
     for block in stext.blocks() {
         for l in block.lines() {
-            for ch in l.chars() {
-                let Some(c) = ch.char() else { continue };
-                let q = ch.quad();
-                let xs = [q.ul.x, q.ur.x, q.ll.x, q.lr.x];
-                let ys = [q.ul.y, q.ur.y, q.ll.y, q.lr.y];
-                let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
-                let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
-                out.chars.push(CharBox { at: out.text.len(), line, rect: [min(xs), min(ys), max(xs), max(ys)] });
-                out.text.push(c);
+            let line: Vec<Glyph> = (l.chars())
+                .filter_map(|ch| {
+                    let q = ch.quad();
+                    let xs = [q.ul.x, q.ur.x, q.ll.x, q.lr.x];
+                    let ys = [q.ul.y, q.ur.y, q.ll.y, q.lr.y];
+                    let min = |v: [f32; 4]| v.into_iter().fold(f32::INFINITY, f32::min);
+                    let max = |v: [f32; 4]| v.into_iter().fold(f32::NEG_INFINITY, f32::max);
+                    Some((ch.char()?, [min(xs), min(ys), max(xs), max(ys)]))
+                })
+                .collect();
+            if !line.is_empty() {
+                lines.push(line);
             }
-            out.text.push('\n');
-            line += 1;
         }
+    }
+    reading_order(lines)
+}
+
+/// MuPDF's lines, in its order, joined into the lines a reader sees. Formulas come out of
+/// MuPDF as many short lines, often after the rest of the page (LaTeX subscripts, symbols,
+/// displayed equations): a line overlapping another by half its height, close beside it,
+/// joins that one, and is sorted into it left to right. A line on its own that comes late
+/// goes before the first line already placed below it in the same column (horizontally
+/// overlapping); the rest keep MuPDF's order, which keeps columns apart. Selecting "from
+/// here to there" then follows the page, not the drawing order.
+fn reading_order(lines: Vec<Vec<Glyph>>) -> PageText {
+    let bbox = |l: &[Glyph]| {
+        l.iter().fold([f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], |b, (_, r)| {
+            [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])]
+        })
+    };
+    // Visual lines: their box and characters.
+    let mut seen: Vec<VisualLine> = Vec::new();
+    for line in lines {
+        let b = bbox(&line);
+        let h = b[3] - b[1];
+        let joins = |v: &[f32; 4]| {
+            let overlap = b[3].min(v[3]) - b[1].max(v[1]);
+            let gap = (b[0] - v[2]).max(v[0] - b[2]);
+            overlap >= 0.5 * h.min(v[3] - v[1]) && gap <= 1.5 * h.max(v[3] - v[1])
+        };
+        match seen.iter_mut().find(|(v, _)| joins(v)) {
+            Some((v, chars)) => {
+                *v = [v[0].min(b[0]), v[1].min(b[1]), v[2].max(b[2]), v[3].max(b[3])];
+                chars.extend(line);
+            }
+            None => seen.push((b, line)),
+        }
+    }
+    let mut placed: Vec<usize> = Vec::with_capacity(seen.len());
+    for (i, (b, _)) in seen.iter().enumerate() {
+        let below = |&j: &usize| {
+            let v = &seen[j].0;
+            v[1] > b[1] && v[0] < b[2] && b[0] < v[2]
+        };
+        match placed.iter().position(below) {
+            Some(k) => placed.insert(k, i),
+            None => placed.push(i),
+        }
+    }
+    let mut seen: Vec<Option<VisualLine>> = seen.into_iter().map(Some).collect();
+    let mut out = PageText::default();
+    for (line, (b, mut chars)) in (0..).zip(placed.into_iter().filter_map(|i| seen[i].take())) {
+        chars.sort_by(|a, c| (a.1[0] + a.1[2]).total_cmp(&(c.1[0] + c.1[2])));
+        let space = 0.25 * (b[3] - b[1]);
+        let mut last: Option<(char, f32)> = None;
+        for (c, rect) in chars {
+            // Parts joined from separate lines meet without the space MuPDF puts inside one.
+            if let Some((prev, right)) = last {
+                if rect[0] - right > space && !prev.is_whitespace() && !c.is_whitespace() {
+                    out.text.push(' ');
+                }
+            }
+            out.chars.push(CharBox { at: out.text.len(), line, rect });
+            out.text.push(c);
+            last = Some((c, rect[2]));
+        }
+        out.text.push('\n');
     }
     out
 }
@@ -329,6 +398,28 @@ pub(crate) mod tests {
         assert_eq!(text, page);
         assert_eq!((frame.x0, frame.y0, img.height), (0.0, 0.0, 421));
         assert!((frame.scale - 0.5).abs() < 0.001, "{frame:?}");
+    }
+
+    #[test]
+    fn formula_parts_join_their_line_and_columns_stay_apart() {
+        let ch = |c: char, x: f32, y: f32, h: f32| (c, [x, y, x + 5.0, y + h]);
+        let lines = vec![
+            // Left column, "a" then "b"; right column at the same height.
+            vec![ch('a', 0.0, 0.0, 10.0), ch('b', 5.0, 0.0, 10.0)],
+            vec![ch('x', 300.0, 0.0, 10.0), ch('y', 305.0, 0.0, 10.0)],
+            // A subscript after "b", drawn last: lower and smaller, but on b's line.
+            vec![ch('2', 10.0, 5.0, 7.0)],
+            // A line further down, after a gap: its own line, after the gap a space.
+            vec![ch('c', 0.0, 40.0, 10.0), ch('d', 20.0, 40.0, 10.0)],
+            // A displayed formula between "ab" and "cd", drawn last: placed before "cd".
+            vec![ch('=', 2.0, 20.0, 10.0)],
+            // One in the right column, below "xy": nothing there below it, so at the end.
+            vec![ch('+', 300.0, 30.0, 10.0)],
+        ];
+        let page = reading_order(lines);
+        assert_eq!(page.text, "ab2\nxy\n=\nc d\n+\n");
+        let two = page.chars.iter().find(|c| page.text[c.at..].starts_with('2')).expect("2");
+        assert_eq!(two.line, 0);
     }
 
     #[test]

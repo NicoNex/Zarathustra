@@ -52,6 +52,11 @@ pub(crate) fn mark(c: &mut Canvas, r: Rect) {
     c.fill(Rect::new(r.x, r.bottom() + 2, r.w, SELECTION_BAR), INK);
 }
 
+/// What [`mark`] draws over for band `r`: the band and the bar under it.
+pub(crate) fn mark_area(r: Rect) -> Rect {
+    Rect::new(r.x, r.y, r.w, r.h + 2 + SELECTION_BAR)
+}
+
 /// The book's row in `store` (added if new) and its highlights drawn on pages.
 pub(crate) fn load(
     store: &Store,

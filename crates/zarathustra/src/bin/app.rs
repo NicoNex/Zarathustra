@@ -682,6 +682,11 @@ fn main() -> Result<()> {
             _ if quick.watching_wifi() && (quick.is_open() || home) => Duration::from_secs(1),
             Screen::Home(h) if h.transferring() => Duration::from_secs(1),
             Screen::Home(_) => Duration::from_secs(30),
+            // The page's clock: wake as the minute turns, so the header shows the time.
+            _ if quick.settings().clock => {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                Duration::from_secs(60) - Duration::from_secs(now.as_secs() % 60) + Duration::from_millis(200)
+            }
             _ => Duration::from_secs(300),
         };
         // Typed keys or text waiting for the refresh over them to end.

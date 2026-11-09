@@ -11,10 +11,10 @@ use std::rc::Rc;
 use zarathustra_device::{Canvas, Rect};
 use zarathustra_engine::anchor::{reanchor, Anchor, TextQuote};
 use zarathustra_engine::library::{BookEntry, Format};
-use zarathustra_engine::pdf::{Frame, PageText};
+use zarathustra_engine::pdf::{CharBox, Frame, PageText};
 use zarathustra_store::{book_key, Annotation, AnnotationData, BookId, Color, Kind, Store};
 
-use crate::highlight::{load, mark, word_at, Button, Popup, HIGHLIGHT_GRAY};
+use crate::highlight::{load, mark, mark_area, word_at, Button, Popup, HIGHLIGHT_GRAY, SLOP};
 use crate::Ctx;
 
 /// How far (screen pixels) from a line of text a press still lands on it.
@@ -45,17 +45,34 @@ impl Place {
 }
 
 /// The byte offset of the character nearest `at`, if a line of text is within reach (and,
-/// with `near`, the character itself: a tap in the margin beside a line is not on it).
+/// with `near`, the character itself: a tap in the margin beside a line is not on it). The
+/// line comes first, as in the reader: of the lines beside the finger, the one whose middle is
+/// nearest; then the nearest character on it. Boxes of neighbouring lines overlap (tall
+/// formulas), so choosing by the characters alone flips between lines as the finger moves.
 fn hit(text: &PageText, place: &Place, at: (i32, i32), near: bool) -> Option<usize> {
     let (x, y) = place.to_page(at);
+    let reach = REACH / place.frame.scale;
     let off = |lo: f32, hi: f32, v: f32| if v < lo { lo - v } else { (v - hi).max(0.0) };
-    let d = |r: &[f32; 4]| (off(r[1], r[3], y), off(r[0], r[2], x));
-    let best = text.chars.iter().min_by(|a, b| {
-        let (da, db) = (d(&a.rect), d(&b.rect));
-        da.0.total_cmp(&db.0).then(da.1.total_cmp(&db.1))
-    })?;
-    let (dy, dx) = d(&best.rect);
-    (dy * place.frame.scale <= REACH && (!near || dx * place.frame.scale <= REACH)).then_some(best.at)
+    // Each line's box; the characters come grouped by line.
+    let mut lines: Vec<(u32, [f32; 4])> = Vec::new();
+    for c in &text.chars {
+        match lines.last_mut() {
+            Some((line, r)) if *line == c.line => {
+                *r = [r[0].min(c.rect[0]), r[1].min(c.rect[1]), r[2].max(c.rect[2]), r[3].max(c.rect[3])];
+            }
+            _ => lines.push((c.line, c.rect)),
+        }
+    }
+    let middle = |r: &[f32; 4]| (y - (r[1] + r[3]) / 2.0).abs();
+    let (line, r) = (lines.iter())
+        .filter(|(_, r)| off(r[0], r[2], x) <= reach)
+        .min_by(|a, b| middle(&a.1).total_cmp(&middle(&b.1)))?;
+    if off(r[1], r[3], y) > reach {
+        return None;
+    }
+    let centre = |c: &&CharBox| (x - (c.rect[0] + c.rect[2]) / 2.0).abs();
+    let c = text.chars.iter().filter(|c| c.line == *line).min_by(|a, b| centre(a).total_cmp(&centre(b)))?;
+    (!near || off(c.rect[0], c.rect[2], x) <= reach).then_some(c.at)
 }
 
 /// The parts of byte `range` on each line, on screen.
@@ -72,8 +89,9 @@ pub fn bands(text: &PageText, place: &Place, range: &Range<usize>) -> Vec<Rect> 
     lines.into_iter().map(|(_, r)| place.to_screen(r)).collect()
 }
 
+/// The screen area of `bands` to refresh, the selection's bar under them included.
 fn union(rects: &[Rect]) -> Rect {
-    rects.iter().fold(Rect::default(), |u, r| u.union(r))
+    rects.iter().fold(Rect::default(), |u, r| u.union(&mark_area(*r)))
 }
 
 /// The document's highlights and the selection in progress on the page shown.
@@ -86,6 +104,9 @@ pub struct PdfMarks {
     page: usize,
     /// The word first pressed and the whole selection.
     selection: Option<(Range<usize>, Range<usize>)>,
+    /// Where the long press was, until the finger leaves it: a finger shaking on the word
+    /// pressed keeps that word.
+    pressed: Option<(i32, i32)>,
     popup: Option<Popup>,
 }
 
@@ -149,11 +170,18 @@ impl PdfMarks {
         let word = word_at(&text.text, pos);
         damage = damage.union(&union(&bands(text, place, &word)));
         self.selection = Some((word.clone(), word));
+        self.pressed = Some(at);
         Some(damage)
     }
 
     /// The finger moved while selecting: the free end follows it, word by word.
     pub fn drag(&mut self, text: &PageText, place: &Place, at: (i32, i32)) -> Option<Rect> {
+        if let Some(p) = self.pressed {
+            if (at.0 - p.0).abs() <= SLOP && (at.1 - p.1).abs() <= SLOP {
+                return None;
+            }
+            self.pressed = None;
+        }
         let pos = hit(text, place, at, false)?;
         let (anchor, range) = self.selection.as_mut()?;
         let word = word_at(&text.text, pos);
@@ -298,11 +326,30 @@ mod tests {
     const PLACE: Place = Place { x: 100, y: 200, frame: Frame { x0: 0.0, y0: 0.0, scale: 2.0 } };
 
     #[test]
+    fn a_press_where_line_boxes_overlap_takes_the_nearer_line() {
+        // Line 0 (y 0..12) has characters at x 0..5 and 10..15; line 1 (y 8..20) one at x 8..12.
+        let c = |at, line, rect| CharBox { at, line, rect };
+        let text = PageText {
+            text: "a b\nc\n".into(),
+            chars: vec![
+                c(0, 0, [0.0, 0.0, 5.0, 12.0]),
+                c(2, 0, [10.0, 0.0, 15.0, 12.0]),
+                c(4, 1, [8.0, 8.0, 12.0, 20.0]),
+            ],
+        };
+        // Page (9, 9): inside both lines' boxes, on line 1's character, nearer line 0's middle.
+        assert_eq!(hit(&text, &PLACE, (118, 218), false), Some(2));
+        assert_eq!(hit(&text, &PLACE, (118, 236), false), Some(4), "page y 18: line 1");
+    }
+
+    #[test]
     fn selects_highlights_and_finds_them_again() {
         let text = page();
         let mut m = PdfMarks::default();
         // Screen (135, 210) is page (17.5, 5): the "b" of "ab".
-        assert!(m.long_press(&text, &PLACE, (135, 210)).is_some());
+        let damage = m.long_press(&text, &PLACE, (135, 210)).expect("a word");
+        // The bar under the band is refreshed too, or it stays on screen once the band goes.
+        assert_eq!(damage.bottom(), 220 + 2 + crate::highlight::SELECTION_BAR);
         assert_eq!(m.selection.as_ref().map(|s| s.1.clone()), Some(0..2));
         // Down to "ef" on the next line.
         m.drag(&text, &PLACE, (105, 250));
