@@ -255,6 +255,39 @@ const USB_EXIT: i32 = 42;
 // ponytail: on a Kindle the Amazon UI does the mass-storage switch (volumd waits for it); do it
 // ourselves (unmount /mnt/base-us, point g_mass_storage's lun at it) once the framework is gone.
 fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::io::Result<bool> {
+    let (transfer, charge) = usb_screen(dev, ctx, zarathustra::i18n::t().usb_body, true)?;
+    let mut events = Vec::new();
+    loop {
+        events.clear();
+        dev.wait_events(None, &mut events)?;
+        while let Some(ev) = dev.power_event() {
+            if let PowerEvent::Usb(false) = ev {
+                return Ok(false);
+            }
+        }
+        for ev in &events {
+            if let Event::Touch(t) = ev {
+                if t.phase == Phase::Up && transfer.contains(t.x, t.y) {
+                    // What stays on the screen while the computer has the storage.
+                    usb_screen(dev, ctx, zarathustra::i18n::t().usb_connected, false)?;
+                    return Ok(true);
+                }
+                if t.phase == Phase::Up && charge.contains(t.x, t.y) {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+}
+
+/// The USB screen: title, `body` (with `{device}` filled in), and the two choices when
+/// `buttons`; their rectangles.
+fn usb_screen(
+    dev: &mut dyn zarathustra_device::Device,
+    ctx: &mut Ctx,
+    body_text: &str,
+    buttons: bool,
+) -> std::io::Result<(Rect, Rect)> {
     use zarathustra::ui::{button, Label, INK, INK_SOFT, PAPER};
     let (transfer, charge) = (Rect::new(160, 900, screen_w() - 320, 120), Rect::new(160, 1060, screen_w() - 320, 120));
     {
@@ -272,38 +305,22 @@ fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::i
                 Rect::new(0, 480, screen_w(), 100),
             );
             let body = Label { face: sans, size: 34.0, ink: INK_SOFT };
-            let usb_body = s.usb_body.replace("{device}", zarathustra_device::platform().name);
+            let usb_body = body_text.replace("{device}", zarathustra_device::platform().name);
             for (i, line) in body.wrap(&usb_body, (screen_w() - 320) as f32, 5).iter().enumerate() {
                 body.centered(&mut c, raster, line, Rect::new(0, 620 + i as i32 * 52, screen_w(), 52));
             }
-            button(&mut c, transfer, true);
-            Label { face: bold, size: 36.0, ink: PAPER }.centered(&mut c, raster, s.usb_transfer, transfer);
-            button(&mut c, charge, false);
-            Label { face: sans, size: 36.0, ink: INK }.centered(&mut c, raster, s.usb_charge, charge);
+            if buttons {
+                button(&mut c, transfer, true);
+                Label { face: bold, size: 36.0, ink: PAPER }.centered(&mut c, raster, s.usb_transfer, transfer);
+                button(&mut c, charge, false);
+                Label { face: sans, size: 36.0, ink: INK }.centered(&mut c, raster, s.usb_charge, charge);
+            }
         }
     }
     let full = Rect::new(0, 0, screen_w(), screen_h());
-    dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
-    let mut events = Vec::new();
-    loop {
-        events.clear();
-        dev.wait_events(None, &mut events)?;
-        while let Some(ev) = dev.power_event() {
-            if let PowerEvent::Usb(false) = ev {
-                return Ok(false);
-            }
-        }
-        for ev in &events {
-            if let Event::Touch(t) = ev {
-                if t.phase == Phase::Up && transfer.contains(t.x, t.y) {
-                    return Ok(true);
-                }
-                if t.phase == Phase::Up && charge.contains(t.x, t.y) {
-                    return Ok(false);
-                }
-            }
-        }
-    }
+    let marker = dev.refresh(&Refresh { rect: full, waveform: Waveform::Full, flash: true, swipe: None })?;
+    dev.wait_refresh(marker)?;
+    Ok((transfer, charge))
 }
 
 fn main() -> Result<()> {

@@ -40,6 +40,7 @@ pub struct Strings {
     /// The screen shown when a computer is plugged in.
     pub usb_title: &'static str,
     pub usb_body: &'static str,
+    pub usb_connected: &'static str,
     pub usb_transfer: &'static str,
     pub usb_charge: &'static str,
     pub restart: &'static str,
@@ -222,6 +223,7 @@ const IT: Strings = Strings {
     standby: "Sospendi",
     usb_title: "Collegato a un computer",
     usb_body: "Per copiare libri, il {device} passa la memoria al computer. Quando scolleghi il cavo, Zarathustra si riapre da sola.",
+    usb_connected: "Il computer vede la memoria del {device}. Quando hai finito, espellila dal computer e scollega il cavo: Zarathustra si riapre da sola.",
     usb_transfer: "Collega al computer",
     usb_charge: "Solo ricarica",
     restart: "Riavvia",
@@ -401,6 +403,7 @@ const EN: Strings = Strings {
     standby: "Suspend",
     usb_title: "Connected to a computer",
     usb_body: "To copy books, the {device} hands its storage to the computer. Unplug the cable and Zarathustra comes back by itself.",
+    usb_connected: "The computer sees the {device}'s storage. When you're done, eject it on the computer and unplug the cable: Zarathustra comes back by itself.",
     usb_transfer: "Connect to computer",
     usb_charge: "Just charge",
     restart: "Restart",

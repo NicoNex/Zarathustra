@@ -253,8 +253,12 @@ impl Store {
     }
 
     pub fn add_annotation(&self, book: BookId, data: &AnnotationData) -> Result<Annotation> {
+        self.add_annotation_at(book, data, now())
+    }
+
+    /// [`Store::add_annotation`] made at `at` (Unix seconds): one imported from another reader.
+    pub fn add_annotation_at(&self, book: BookId, data: &AnnotationData, at: i64) -> Result<Annotation> {
         let id = uuid::Uuid::now_v7().to_string();
-        let at = now();
         let q = data.quote.as_ref();
         self.conn.execute(
             "INSERT INTO annotations(id, book_id, kind, spine, pos, start_cfi, end_cfi, exact, prefix, suffix,

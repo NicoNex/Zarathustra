@@ -75,7 +75,8 @@ fn detect(root: &Path) -> Platform {
             // Plugins run from /tmp; their data (SSH keys…) needs Unix permissions, which the
             // vfat onboard lacks, so it lives on the root filesystem (/var is ext4 there, bar a
             // few small tmpfs under it).
-            plugin_runtime: Some(root.join("tmp/zarathustra/plugins")),
+            // Not under /tmp/zarathustra: the launch script runs the app binary from that path.
+            plugin_runtime: Some(root.join("tmp/zarathustra-plugins")),
             plugin_data: root.join("var/zarathustra/data"),
             version_file: Some(onboard.join(".kobo/version")),
             binary: Some(app.join("bin/zarathustra")),
