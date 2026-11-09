@@ -32,6 +32,8 @@ const CARD_H: i32 = 330;
 const CARD_COVER: (i32, i32) = (172, 258);
 const CHIPS_H: i32 = 64;
 const FOOTER: i32 = 110;
+/// How far from the middle the footer's « and » sit.
+const ENDS: i32 = 200;
 /// Grid: three columns of covers at the books' usual 2:3 ratio, title and author below.
 const COLS: i32 = 3;
 /// Cell height sized so pages without the "continue reading" card hold two rows.
@@ -612,7 +614,11 @@ impl Home {
             kb.render(c, ctx);
         } else if self.pages() > 1 {
             let label = format!("‹   {} / {}   ›", self.page + 1, self.pages());
-            soft.draw_centred(c, raster, &label, W as f32 / 2.0, H - FOOTER / 2 + 10);
+            let y = H - FOOTER / 2 + 10;
+            soft.draw_centred(c, raster, &label, W as f32 / 2.0, y);
+            // First and last page, out beside the arrows.
+            soft.draw_centred(c, raster, "«", (W / 2 - ENDS) as f32, y);
+            soft.draw_centred(c, raster, "»", (W / 2 + ENDS) as f32, y);
         }
     }
 
@@ -1080,7 +1086,21 @@ impl Home {
             return Action::Redraw { turn: None };
         }
         if y0 > H - FOOTER {
-            return turn(&mut self.page, x0 > W / 2);
+            // « and » (outside the middle) jump to the first and last page; ‹ and › turn one.
+            let end = match x0 - W / 2 {
+                dx if dx < -ENDS / 2 - 50 => Some(0),
+                dx if dx > ENDS / 2 + 50 => Some(pages - 1),
+                _ => None,
+            };
+            return match end {
+                Some(page) if page != self.page => {
+                    let forward = page > self.page;
+                    self.page = page;
+                    Action::Redraw { turn: Some(forward) }
+                }
+                Some(_) => Action::None,
+                None => turn(&mut self.page, x0 > W / 2),
+            };
         }
         if let Some(sans) = ctx.sans(false) {
             let chip = Label { face: sans, size: 28.0, ink: INK };
@@ -1316,6 +1336,32 @@ fn draw_cover(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_footer_jumps_to_the_first_and_last_page() {
+        let dir = std::env::temp_dir().join(format!("zarathustra-ends-{}", std::process::id()));
+        let (books, state) = (dir.join("books"), dir.join("state"));
+        std::fs::create_dir_all(&books).expect("dirs");
+        let pdf = concat!(env!("CARGO_MANIFEST_DIR"), "/../zarathustra-engine/tests/data/text.pdf");
+        for i in 0..30 {
+            std::fs::copy(pdf, books.join(format!("{i:02}.pdf"))).expect("copy");
+        }
+        let mut ctx = Ctx::new();
+        ctx.state_dir = state;
+        let mut home = Home::scan(std::slice::from_ref(&books), &ctx);
+        let last = home.pages() - 1;
+        assert!(last >= 2, "{} pages", home.pages());
+        let y = H - FOOTER / 2;
+        let tap = |home: &mut Home, x: i32| home.tap((x, y), (x, y), &ctx);
+        assert!(matches!(tap(&mut home, W / 2 + ENDS), Action::Redraw { turn: Some(true) }));
+        assert_eq!(home.page, last);
+        tap(&mut home, W / 2 - 100);
+        assert_eq!(home.page, last - 1, "‹ turns one");
+        tap(&mut home, W / 2 - ENDS);
+        assert_eq!(home.page, 0);
+        assert!(matches!(tap(&mut home, W / 2 - ENDS), Action::None), "already there");
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn refresh_picks_up_new_and_removed_books() {
