@@ -16,6 +16,9 @@ use nix::sys::signal::{killpg, Signal};
 use nix::unistd::Pid;
 use serde::Deserialize;
 
+mod action;
+pub use action::{LastRun, Outcome};
+
 /// Why a plugin, or one of its runs, failed: shown on its page.
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -31,6 +34,8 @@ pub enum PluginError {
     Timeout { executable: String },
     #[error("{executable}: {status}")]
     Failed { executable: String, status: std::process::ExitStatus },
+    #[error("an action of this plugin is running")]
+    Busy,
     #[error("{0} is not a list setting")]
     NotAList(String),
 }
@@ -87,6 +92,33 @@ pub struct Action {
     pub menu_label: String,
     #[serde(flatten)]
     pub run: Run,
+    /// What a successful run shows: just "done", or the first line it printed.
+    #[serde(default)]
+    pub output: Output,
+    /// Where the action is offered besides the plugin's own page.
+    #[serde(default = "extensions_only")]
+    pub shown_in: Vec<Place>,
+    /// Stopped like "Stop" when it runs longer; no limit when absent.
+    pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Output {
+    #[default]
+    Quiet,
+    Show,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Place {
+    Extensions,
+    Book,
+}
+
+fn extensions_only() -> Vec<Place> {
+    vec![Place::Extensions]
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -313,8 +345,9 @@ impl Plugin {
         copy_tree(&self.user_dir(), &self.plugin_dir())
     }
 
-    /// The command for `run`, its arguments expanded and the environment set.
-    fn command(&self, run: &Run, values: &HashMap<String, String>) -> Command {
+    /// The command for `run`, its arguments expanded and the environment set. `extra` are more
+    /// placeholders, also exported as `ZARATHUSTRA_<NAME>` (an action's book).
+    fn command(&self, run: &Run, values: &HashMap<String, String>, extra: &[(&str, &str)]) -> Command {
         let mut vars: HashMap<String, String> = HashMap::new();
         for (k, v) in values {
             vars.insert(format!("setting.{k}"), v.clone());
@@ -328,6 +361,9 @@ impl Plugin {
         for (k, p) in &dirs {
             vars.insert((*k).into(), p.to_string_lossy().into_owned());
         }
+        for (k, v) in extra {
+            vars.insert((*k).into(), (*v).into());
+        }
         let mut cmd = Command::new(self.plugin_dir().join(&run.executable));
         cmd.args(run.arguments.iter().map(|a| expand(a, &vars)));
         cmd.current_dir(self.plugin_dir());
@@ -337,13 +373,16 @@ impl Plugin {
         for (k, v) in values {
             cmd.env(setting_var(k), v);
         }
+        for (k, v) in extra {
+            cmd.env(format!("ZARATHUSTRA_{}", k.to_ascii_uppercase()), v);
+        }
         cmd
     }
 
     /// Runs `run` to completion within [`RUN_TIMEOUT`]; its stdout, or why it failed. The
     /// runtime copy must be [prepared](Self::prepare).
     fn capture(&self, state_dir: &Path, run: &Run, args: &[&str]) -> Result<String> {
-        let mut cmd = self.command(run, &self.values(state_dir));
+        let mut cmd = self.command(run, &self.values(state_dir), &[]);
         cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
         let executable = || run.executable.clone();
         let mut child = cmd.spawn().map_err(|source| PluginError::Spawn { executable: executable(), source })?;
@@ -400,15 +439,6 @@ impl Plugin {
         self.capture(state_dir, &run, &["remove", id]).map(drop)
     }
 
-    /// Runs action `i`; the first line it printed (or the error), for a toast.
-    pub fn run_action(&self, state_dir: &Path, i: usize) -> String {
-        let Some(a) = self.manifest.as_ref().ok().and_then(|m| m.action.get(i).cloned()) else { return String::new() };
-        match self.capture(state_dir, &a.run, &[]) {
-            Ok(out) => out.lines().next().unwrap_or_default().to_string(),
-            Err(e) => e.to_string(),
-        }
-    }
-
     fn service(&self) -> Option<&Service> {
         self.manifest.as_ref().ok()?.service.as_ref()
     }
@@ -420,12 +450,7 @@ impl Plugin {
     /// The service's pid, when it runs: the pid file names a live process running the
     /// service's executable.
     fn running_pid(&self) -> Option<i32> {
-        let service = self.service()?;
-        let pid: i32 = std::fs::read_to_string(self.pid_file()).ok()?.trim().parse().ok()?;
-        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-        let exe = self.plugin_dir().join(&service.run.executable);
-        let exe = exe.as_os_str().as_encoded_bytes();
-        cmdline.windows(exe.len()).any(|w| w == exe).then_some(pid)
+        live_pid(&self.pid_file(), &self.plugin_dir().join(&self.service()?.run.executable))
     }
 
     pub fn is_running(&self) -> bool {
@@ -443,7 +468,7 @@ impl Plugin {
         self.prepare()?;
         let log = std::fs::File::create(self.data_dir().join("service.log"))?;
         let err = log.try_clone()?;
-        let mut cmd = self.command(&service.run, &self.values(state_dir));
+        let mut cmd = self.command(&service.run, &self.values(state_dir), &[]);
         cmd.stdin(Stdio::null()).stdout(log).stderr(err).process_group(0);
         let executable = service.run.executable.clone();
         let child = cmd.spawn().map_err(|source| PluginError::Spawn { executable, source })?;
@@ -477,6 +502,15 @@ impl Plugin {
         self.stop();
         self.start(state_dir)
     }
+}
+
+/// The pid in `pid_file`, when it names a live process running `exe` (a reused pid runs
+/// something else; a zombie has an empty command line).
+fn live_pid(pid_file: &Path, exe: &Path) -> Option<i32> {
+    let pid: i32 = std::fs::read_to_string(pid_file).ok()?.trim().parse().ok()?;
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let exe = exe.as_os_str().as_encoded_bytes();
+    cmdline.windows(exe.len()).any(|w| w == exe).then_some(pid)
 }
 
 /// Starts services: the ones the user made active (`boot` false: the app opening), or the
@@ -556,6 +590,26 @@ arguments = ["--port={setting.port}", "{unknown}"]
 menu_label = "Say"
 executable = "say"
 
+[[action]]
+menu_label = "Fail"
+executable = "fail"
+
+[[action]]
+menu_label = "Sleep"
+executable = "sleep"
+
+[[action]]
+menu_label = "Slow"
+executable = "sleep"
+timeout_seconds = 1
+output = "show"
+shown_in = ["extensions", "book"]
+
+[[action]]
+menu_label = "Env"
+executable = "env"
+arguments = ["{book}"]
+
 [[setting]]
 id = "port"
 kind = "number"
@@ -576,7 +630,7 @@ list_executable = "items"
     }
 
     /// A plugin installed in a scratch folder, copied to a runtime folder like on the device.
-    fn setup(name: &str) -> (PathBuf, Plugin) {
+    pub(super) fn setup(name: &str) -> (PathBuf, Plugin) {
         let root = std::env::temp_dir().join(format!("zarathustra-plugin-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let installed = root.join("installed/echo");
@@ -584,6 +638,9 @@ list_executable = "items"
         std::fs::write(installed.join("plugin.toml"), MANIFEST).expect("manifest");
         script(&installed, "status", r#"echo "Args=$*"; echo "Port=$ZARATHUSTRA_SETTING_PORT""#);
         script(&installed, "say", r#"echo book; echo second"#);
+        script(&installed, "fail", r#"echo partial; echo "first problem" >&2; echo "disk full" >&2; exit 3"#);
+        script(&installed, "sleep", "sleep 30");
+        script(&installed, "env", r#"echo "$1|$ZARATHUSTRA_BOOK|$ZARATHUSTRA_POSITION"; head -c 300000 /dev/urandom"#);
         script(
             &installed,
             "items",
@@ -637,7 +694,6 @@ list_executable = "items"
         let status = p.status(&state).expect("status");
         assert_eq!(status, [("Args".into(), "--port=2222 {unknown}".into()), ("Port".into(), "2222".into())]);
         assert!(p.plugin_dir().join("status").exists(), "copied to the runtime folder");
-        assert_eq!(p.run_action(&state, 0), "book");
         assert_eq!(
             p.list(&state, "items").expect("list"),
             [("a".into(), "First".into()), ("b".into(), "Second".into())]

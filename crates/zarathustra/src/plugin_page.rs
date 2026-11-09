@@ -228,7 +228,7 @@ impl PluginPage {
                 }
             }
             Row::Action(i) => {
-                self.message = Some(self.plugin.run_action(&self.state_dir, i)).filter(|m| !m.is_empty());
+                self.message = self.plugin.run(&self.state_dir, i, None).err().map(|e| e.to_string());
                 self.reload();
             }
             _ => {}
