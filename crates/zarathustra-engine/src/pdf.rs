@@ -277,6 +277,12 @@ pub(crate) mod tests {
             "<< /Title (Two) /Parent 6 0 R /Prev 7 0 R /Dest [5 0 R /Fit] >>",
             "<< /Title (Sample) /Author (Ann Author) >>",
         ];
+        pdf_of(&objects, "/Info 9 0 R ")
+    }
+
+    /// A PDF of `objects` (object 1 the catalog), offsets in the xref table computed;
+    /// `trailer_extra` goes into the trailer dictionary.
+    fn pdf_of(objects: &[&str], trailer_extra: &str) -> Vec<u8> {
         let mut out = b"%PDF-1.4\n".to_vec();
         let mut offsets = Vec::new();
         for (i, o) in objects.iter().enumerate() {
@@ -288,7 +294,7 @@ pub(crate) mod tests {
         for o in offsets {
             out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
         }
-        let trailer = format!("trailer\n<< /Size {} /Root 1 0 R /Info 9 0 R >>\n", objects.len() + 1);
+        let trailer = format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra}>>\n", objects.len() + 1);
         out.extend_from_slice(format!("{trailer}startxref\n{xref}\n%%EOF\n").as_bytes());
         out
     }
@@ -305,8 +311,8 @@ pub(crate) mod tests {
 
     #[test]
     fn page_text_has_lines_and_boxes() {
-        // Two lines of Nimbus Sans 24 at y 700 and 670, the font embedded (this build of MuPDF
-        // has no base-14 fonts). Made with `gs -sDEVICE=pdfwrite` from text.ps next to it.
+        // Two lines of Nimbus Sans 24 at y 700 and 670, the font embedded. Made with
+        // `gs -sDEVICE=pdfwrite` from text.ps next to it.
         let pdf = Pdf::from_bytes(include_bytes!("../tests/data/text.pdf")).expect("open");
         let page = pdf.text(0).expect("text");
         assert_eq!(page.text, "Hello world\nSecond\n");
@@ -323,6 +329,26 @@ pub(crate) mod tests {
         assert_eq!(text, page);
         assert_eq!((frame.x0, frame.y0, img.height), (0.0, 0.0, 421));
         assert!((frame.scale - 0.5).abs() < 0.001, "{frame:?}");
+    }
+
+    #[test]
+    fn standard_fonts_need_not_be_embedded() {
+        // Helvetica named, not embedded: MuPDF's built-in base-14 fonts draw and read it.
+        let pdf = pdf_of(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Contents 4 0 R \
+                 /Resources << /Font << /F1 5 0 R >> >> >>",
+                "<< /Length 39 >>\nstream\nBT /F1 24 Tf 20 40 Td (Helvetica) Tj ET\nendstream",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            ],
+            "",
+        );
+        let pdf = Pdf::from_bytes(&pdf).expect("open");
+        assert_eq!(pdf.text(0).expect("text").text, "Helvetica\n");
+        let img = pdf.render(0, 300, 100, false).expect("render");
+        assert!(img.pixels.iter().any(|&p| p < 128), "ink");
     }
 
     #[test]
