@@ -224,18 +224,12 @@ impl Device for Kindle {
             pfd(self.powerd.as_ref().map_or(-1, |p| p.fd())),
             libc::pollfd { fd: udc, events: libc::POLLPRI | libc::POLLERR, revents: 0 },
         ];
-        // Round up so a sub-millisecond remainder doesn't become a busy-spinning 0.
         // Watching the light after a wake: wake up often enough to catch powerd.
         let timeout = match self.relight_until {
             Some(_) => Some(timeout.map_or(RELIGHT_EVERY, |t| t.min(RELIGHT_EVERY))),
             None => timeout,
         };
-        let ms = timeout.map_or(-1, |t| t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32);
-        // SAFETY: `fds` is a valid array of `fds.len()` pollfds.
-        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) } < 0 {
-            let e = io::Error::last_os_error();
-            return if e.kind() == io::ErrorKind::Interrupted { Ok(()) } else { Err(e) };
-        }
+        crate::sys::poll(&mut fds, timeout)?;
         if fds[1].revents != 0 {
             self.read_power();
         }

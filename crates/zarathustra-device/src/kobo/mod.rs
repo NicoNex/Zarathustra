@@ -33,6 +33,9 @@ struct Model {
     /// The warmth node and whether its step 0 is the warmest.
     warm_led: Option<(&'static str, bool)>,
     battery: &'static str,
+    /// Input device names: the power button, the sleep cover's hall sensor.
+    power_key: &'static str,
+    cover: &'static str,
 }
 
 const MODELS: &[Model] = &[Model {
@@ -44,6 +47,8 @@ const MODELS: &[Model] = &[Model {
     white_led: "/sys/class/backlight/mxc_msp430.0",
     warm_led: Some(("/sys/class/leds/aw99703-bl_FL1", true)),
     battery: "/sys/class/power_supply/battery",
+    power_key: "bd71828-pwrkey",
+    cover: "gpio-keys",
 }];
 
 /// The model whose code ends the version line (`serial,…,00000000-…-000000000386`).
@@ -83,6 +88,8 @@ pub struct Kobo {
     wanted: Option<Light>,
     /// Opened read-write so poll doesn't report a hang-up whenever no writer has it open.
     hardware: Option<File>,
+    /// A line read only in part, completed by the next read.
+    partial: String,
     power: Power,
     power_events: VecDeque<PowerEvent>,
     /// `None` when the launch script didn't pass Nickel's Wi-Fi environment.
@@ -114,11 +121,12 @@ impl Kobo {
             marker: 0,
             touch,
             touches: Vec::new(),
-            power_key: keys("bd71828-pwrkey"),
-            cover: keys("gpio-keys"),
+            power_key: keys(model.power_key),
+            cover: keys(model.cover),
             light,
             wanted: None,
             hardware,
+            partial: String::new(),
             power: Power::default(),
             power_events: VecDeque::new(),
             wifi: KoboWifi::from_env().map(Arc::new),
@@ -169,11 +177,12 @@ impl Kobo {
     fn read_hardware(&mut self) {
         let Some(f) = &mut self.hardware else { return };
         let mut buf = [0u8; 512];
-        let mut text = String::new();
         while let Ok(n @ 1..) = f.read(&mut buf) {
-            text.push_str(&String::from_utf8_lossy(&buf[..n]));
+            self.partial.push_str(&String::from_utf8_lossy(&buf[..n]));
         }
-        self.power_events.extend(hardware_status(&text));
+        let Some(end) = self.partial.rfind('\n') else { return };
+        let lines: String = self.partial.drain(..=end).collect();
+        self.power_events.extend(hardware_status(&lines));
     }
 
     fn suspend_if_due(&mut self) {
@@ -183,9 +192,7 @@ impl Kobo {
         // The Wi-Fi driver doesn't survive a suspend (KOReader turns it off too).
         // shortcut: it stays off after the wake; turn it back on there if users miss it.
         if let Some(w) = &self.wifi {
-            if w.status().is_ok_and(|s| s.enabled) {
-                w.set_enabled(false).map_err(|e| eprintln!("wifi off: {e}")).ok();
-            }
+            w.off().map_err(|e| eprintln!("wifi off: {e}")).ok();
         }
         if let Err(e) = power::suspend() {
             eprintln!("suspend: {e}");
@@ -252,13 +259,7 @@ impl Device for Kobo {
             (Some(t), Some(d)) => Some(t.min(d)),
             (t, d) => t.or(d),
         };
-        // Round up so a sub-millisecond remainder doesn't become a busy-spinning 0.
-        let ms = timeout.map_or(-1, |t| t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32);
-        // SAFETY: `fds` is a valid array of `fds.len()` pollfds.
-        if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) } < 0 {
-            let e = io::Error::last_os_error();
-            return if e.kind() == io::ErrorKind::Interrupted { Ok(()) } else { Err(e) };
-        }
+        crate::sys::poll(&mut fds, timeout)?;
         self.read_keys();
         if fds[3].revents != 0 {
             self.read_hardware();
@@ -307,14 +308,11 @@ impl Device for Kobo {
 }
 
 /// Leaves the hardware as the vendor UI expects it, before the launch script restarts it:
-/// the screen mode it left, the Wi-Fi off.
+/// the screen mode it left, the Wi-Fi off. Both are tried; the first failure is returned.
 pub fn release() -> io::Result<()> {
-    if let Some(w) = KoboWifi::from_env() {
-        if w.status().is_ok_and(|s| s.enabled) {
-            w.set_enabled(false)?;
-        }
-    }
-    crate::fb::restore_mode("/dev/fb0")
+    let screen = crate::fb::restore_mode("/dev/fb0");
+    let wifi = KoboWifi::from_env().map_or(Ok(()), |w| w.off());
+    screen.and(wifi)
 }
 
 #[cfg(test)]

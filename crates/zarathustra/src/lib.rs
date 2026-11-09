@@ -67,12 +67,7 @@ pub fn screen_h() -> i32 {
     SCREEN.get().unwrap_or(&DEFAULT_SCREEN).1
 }
 
-/// `"1072x1448"` → `(1072, 1448)`; positive sizes only.
-pub fn parse_size(s: &str) -> Option<(i32, i32)> {
-    let (w, h) = s.split_once('x')?;
-    let (w, h) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
-    (w > 0 && h > 0).then_some((w, h))
-}
+pub use zarathustra_device::parse_size;
 
 /// Device paths first, then the repo's dev assets on a desktop.
 pub fn first_existing(candidates: &[&str]) -> PathBuf {
@@ -305,14 +300,6 @@ pub enum Action {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn parses_screen_sizes() {
-        assert_eq!(parse_size("1072x1448"), Some((1072, 1448)));
-        assert_eq!(parse_size("10x"), None);
-        assert_eq!(parse_size("0x5"), None);
-        assert_eq!(parse_size("-3x5"), None);
-    }
-
     use super::*;
 
     #[test]

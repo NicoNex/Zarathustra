@@ -192,12 +192,12 @@ impl Press {
 /// The binary the launch script copies to /tmp and runs (size, modification time); `None` off
 /// the device.
 fn installed_binary() -> Option<(u64, std::time::SystemTime)> {
-    let meta = std::fs::metadata(zarathustra_device::platform().installed_binary()?).ok()?;
+    let meta = std::fs::metadata(zarathustra_device::platform().binary.as_ref()?).ok()?;
     Some((meta.len(), meta.modified().ok()?))
 }
 
-/// Exits so that run.sh runs the newly installed binary at once (the flag tells it this is
-/// an update), keeping the Amazon UI stopped. The position and settings are already saved.
+/// Exits so that the launch script runs the newly installed binary at once (the flag tells it
+/// this is an update), keeping the vendor UI stopped. The position and settings are already saved.
 fn restart_into_update() -> ! {
     eprintln!("a new binary was installed: restarting into it");
     if let Err(e) = std::fs::write("/tmp/zarathustra-update", b"") {
@@ -245,14 +245,15 @@ fn write_night_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
     write_pgm(path, &inverted)
 }
 
-/// The exit status that tells run.sh to hand the storage to a computer over USB (the Amazon
-/// UI does that) and start Zarathustra again once the cable is out.
+/// The exit status that tells the launch script to hand the storage to a computer over USB (the
+/// vendor's own way: volumd on a Kindle, the firmware's udev script on a Kobo) and start
+/// Zarathustra again once the cable is out.
 const USB_EXIT: i32 = 42;
 
 /// A computer was plugged in: ask whether to hand it the storage or just charge. True to
 /// hand it over; false to go on (also when the cable goes away meanwhile).
-// ponytail: the Amazon UI does the mass-storage switch (volumd waits for it); do it ourselves
-// (unmount /mnt/base-us, point g_mass_storage's lun at it) once the framework is gone for good.
+// ponytail: on a Kindle the Amazon UI does the mass-storage switch (volumd waits for it); do it
+// ourselves (unmount /mnt/base-us, point g_mass_storage's lun at it) once the framework is gone.
 fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::io::Result<bool> {
     use zarathustra::ui::{button, Label, INK, INK_SOFT, PAPER};
     let (transfer, charge) = (Rect::new(160, 900, screen_w() - 320, 120), Rect::new(160, 1060, screen_w() - 320, 120));
@@ -313,7 +314,7 @@ fn main() -> Result<()> {
         match a.as_str() {
             "--start-services" => services = true,
             // The Kobo launch script, before Nickel comes back: screen mode and Wi-Fi as it left them.
-            "--release-device" => return Ok(zarathustra_device::kobo::release()?),
+            "--release-device" => return Ok(zarathustra_device::release()?),
             "--recovery" => recovery = true,
             "--no-swipe" => swipe = false,
             "--search" => query = args.next().context("--search WORD")?,
@@ -331,8 +332,9 @@ fn main() -> Result<()> {
     // The device first: every layout reads the screen size it reports.
     let dev =
         if pgm.is_none() { Some(zarathustra_device::Night::new(zarathustra_device::open_default()?)) } else { None };
-    let (w, h) = dev.as_ref().map(|d| d.size()).or(size).unwrap_or((screen_w(), screen_h()));
-    zarathustra::set_screen(w, h);
+    if let Some((w, h)) = dev.as_ref().map(|d| d.size()).or(size) {
+        zarathustra::set_screen(w, h);
+    }
     let t = Instant::now();
     let mut ctx = Ctx::new();
     eprintln!("fonts and state ready in {:?}", t.elapsed());
@@ -1026,8 +1028,8 @@ fn main() -> Result<()> {
                         return Ok(());
                     }
                     match std::process::Command::new(cmd).status() {
-                        // Stay put while the system goes down: quitting now would have run.sh
-                        // bring the Amazon UI back up in the middle of the shutdown.
+                        // Stay put while the system goes down: quitting now would have the launch
+                        // script bring the vendor UI back up in the middle of the shutdown.
                         Ok(s) if s.success() => loop {
                             std::thread::sleep(Duration::from_secs(60));
                         },

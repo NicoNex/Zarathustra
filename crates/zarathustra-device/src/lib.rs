@@ -9,6 +9,7 @@ pub mod kobo;
 mod night;
 pub mod platform;
 mod sys;
+pub use sys::parse_size;
 pub mod sysfs;
 pub mod wifi;
 mod wpa;
@@ -150,4 +151,13 @@ pub fn open_default() -> io::Result<Box<dyn Device>> {
             Err(io::Error::new(io::ErrorKind::Unsupported, "no e-reader here: build with --features emulator"))
         }
     };
+}
+
+/// Hands the hardware back as the vendor UI expects it; the launch script calls the app
+/// with `--release-device` right before restarting that UI.
+pub fn release() -> io::Result<()> {
+    match platform().kind {
+        Kind::Kobo => kobo::release(),
+        Kind::Kindle | Kind::Desktop => Ok(()),
+    }
 }

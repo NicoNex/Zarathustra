@@ -45,7 +45,7 @@ impl DeviceInfo {
             s.device_address,
             crate::transfer::local_ip().map_or_else(|| s.wifi_not_connected.into(), |ip| ip.to_string()),
         ));
-        if let Some(mac) = first_line("/sys/class/net/wlan0/address") {
+        if let Some(mac) = wifi_mac() {
             rows.push((s.device_mac, mac.to_uppercase()));
         }
         let dpi = if ctx.dpi > 0 { format!(", {} dpi", ctx.dpi) } else { String::new() };
@@ -76,6 +76,19 @@ impl DeviceInfo {
             c.fill(Rect::new(PAD, y + ROW_H - 1, screen_w() - 2 * PAD, 1), LINE);
         }
     }
+}
+
+/// The Wi-Fi interface's MAC (`wlan0` on a Kindle, `mlan0` on a Kobo; the Kobo's access-point
+/// and peer-to-peer twins `uap0`/`p2p0` and loopback skipped). Only while the radio is up.
+fn wifi_mac() -> Option<String> {
+    let mut names: Vec<String> = std::fs::read_dir("/sys/class/net")
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "lo" && !n.starts_with("uap") && !n.starts_with("p2p"))
+        .collect();
+    names.sort();
+    names.iter().find_map(|n| first_line(&format!("/sys/class/net/{n}/address")))
 }
 
 fn first_line(path: &str) -> Option<String> {

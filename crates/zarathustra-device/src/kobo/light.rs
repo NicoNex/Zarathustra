@@ -2,7 +2,9 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::sysfs::read_int;
 
 use crate::Light;
 
@@ -21,17 +23,13 @@ pub struct KoboLight {
     warm: Option<Warm>,
 }
 
-fn read_u32(path: &Path) -> io::Result<u32> {
-    fs::read_to_string(path)?.trim().parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-}
-
 impl KoboLight {
     pub fn open(white: &str, warm: Option<(&str, bool)>) -> io::Result<KoboLight> {
         let white = PathBuf::from(white);
-        let max = read_u32(&white.join("max_brightness"))?.max(1);
+        let max = read_int(&white.join("max_brightness"))?.clamp(1, u32::MAX as i64) as u32;
         let warm = warm.and_then(|(dir, inverted)| {
             let dir = PathBuf::from(dir);
-            let max = read_u32(&dir.join("max_color")).ok()?.clamp(1, 255) as u8;
+            let max = read_int(&dir.join("max_color")).ok()?.clamp(1, 255) as u8;
             Some(Warm { dir, max, inverted })
         });
         Ok(KoboLight { white, max, warm })
@@ -39,10 +37,10 @@ impl KoboLight {
 
     pub fn get(&self) -> Option<Light> {
         // `brightness` reads back 0 on the Clara 2E whatever was written; this one is live.
-        let raw = read_u32(&self.white.join("actual_brightness")).ok()?;
+        let raw = read_int(&self.white.join("actual_brightness")).ok()?.clamp(0, u32::MAX as i64) as u32;
         let brightness = (raw * 100 / self.max).min(100) as u8;
         let warmth = self.warm.as_ref().and_then(|w| {
-            let step = read_u32(&w.dir.join("color")).ok()?.min(w.max as u32) as u8;
+            let step = read_int(&w.dir.join("color")).ok()?.clamp(0, w.max as i64) as u8;
             let step = if w.inverted { w.max - step } else { step };
             Some((step as u32 * 100 / w.max as u32) as u8)
         });

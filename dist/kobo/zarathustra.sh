@@ -20,10 +20,11 @@ FIFO=/tmp/nickel-hardware-status
 NICKEL_ENV=/tmp/zarathustra-nickel.env
 
 # Nickel's environment from rcS (platform, Wi-Fi module and interface…), to restart it as
-# it was and for the app's Wi-Fi.
+# it was and for the app's Wi-Fi. Not its LD_LIBRARY_PATH: Nickel's Qt libraries would shadow
+# the system ones in wpa_supplicant, dhcpcd and the rest; it is set for Nickel alone.
 if pidof nickel >/dev/null; then
 	tr '\0' '\n' <"/proc/$(pidof -s nickel)/environ" |
-		grep -E '^(PLATFORM|PRODUCT|WIFI_MODULE|INTERFACE|LANG|NICKEL_HOME|LD_LIBRARY_PATH|DBUS_SESSION_BUS_ADDRESS)=' |
+		grep -E '^(PLATFORM|PRODUCT|WIFI_MODULE|INTERFACE|LANG|NICKEL_HOME|DBUS_SESSION_BUS_ADDRESS)=' |
 		sed 's/^/export /' >"$NICKEL_ENV"
 fi
 [ -f "$NICKEL_ENV" ] && . "$NICKEL_ENV"
@@ -35,7 +36,7 @@ restore() {
 	rm -f "$FIFO"
 	mkfifo "$FIFO"
 	sync
-	cd /
+	export LD_LIBRARY_PATH=/usr/local/Kobo
 	/usr/local/Kobo/hindenburg &
 	LIBC_FATAL_STDERR_=1 /usr/local/Kobo/nickel -platform kobo -skipFontLoad &
 	udevadm trigger &
@@ -48,12 +49,10 @@ restore() {
 usb_session() {
 	VERSION=$(cut -d, -f3 /mnt/onboard/.kobo/version)
 	SN=$(cut -d, -f1 /mnt/onboard/.kobo/version)
-	case "$(cut -d, -f6 /mnt/onboard/.kobo/version)" in
-	*386) PRODUCT_ID=0x4235 ;;
-	*) PRODUCT_ID=0x4200 ;;
-	esac
+	# shortcut: the Clara 2E's USB product id (what computers and Calibre see); per model
+	# (next to MODELS in kobo/mod.rs) when another Kobo is ported.
+	PRODUCT_ID=0x4235
 	export VERSION SN PRODUCT_ID
-	cd /
 	ACTION=add /usr/local/Kobo/udev/usb >>"$LOG" 2>&1
 	# Each udev line is one write; read one line per open.
 	while :; do
@@ -75,12 +74,16 @@ rm -f "$FIFO"
 mkfifo "$FIFO"
 
 : >"$LOG"
+first=1
 while :; do
 	rm -f "$UPDATE_FLAG"
 	if ! cp "$APP/bin/$NAME" "$BIN" || ! chmod +x "$BIN"; then
 		echo "no $APP/bin/$NAME" >>"$LOG"
 		break
 	fi
+	# Start from a radio that is off: Nickel's, left up, has lost its dhcpcd.
+	[ $first = 1 ] && "$BIN" --release-device >>"$LOG" 2>&1
+	first=0
 	"$BIN" "$@" >>"$LOG" 2>&1
 	status=$?
 	echo "exit status $status" >>"$LOG"

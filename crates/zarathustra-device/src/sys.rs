@@ -41,3 +41,36 @@ pub fn run(cmd: &mut Command, input: Option<&str>) -> io::Result<String> {
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
+
+/// `poll(2)` on `fds` for up to `timeout` (`None`: forever). An interrupted wait is not an
+/// error: callers just look at the events again.
+pub fn poll(fds: &mut [libc::pollfd], timeout: Option<std::time::Duration>) -> io::Result<()> {
+    // Round up so a sub-millisecond remainder doesn't become a busy-spinning 0.
+    let ms = timeout.map_or(-1, |t| t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32);
+    // SAFETY: `fds` is a valid slice of `fds.len()` pollfds.
+    if unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) } < 0 {
+        let e = io::Error::last_os_error();
+        return if e.kind() == io::ErrorKind::Interrupted { Ok(()) } else { Err(e) };
+    }
+    Ok(())
+}
+
+/// `"1072x1448"` → `(1072, 1448)`; positive sizes only.
+pub fn parse_size(s: &str) -> Option<(i32, i32)> {
+    let (w, h) = s.split_once('x')?;
+    let (w, h) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_screen_sizes() {
+        assert_eq!(parse_size("1072x1448"), Some((1072, 1448)));
+        assert_eq!(parse_size("10x"), None);
+        assert_eq!(parse_size("0x5"), None);
+        assert_eq!(parse_size("-3x5"), None);
+    }
+}

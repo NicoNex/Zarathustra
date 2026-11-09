@@ -20,8 +20,8 @@ pub struct Platform {
     pub name: &'static str,
     /// The books the home shows.
     pub library: PathBuf,
-    /// Zarathustra's own files: `bin/`, `hyph/`, `state/`, `plugins/`, logs.
-    pub app_dir: PathBuf,
+    /// The app binary the launch script copies to /tmp and runs; `None` on a desktop.
+    pub binary: Option<PathBuf>,
     /// Positions, preferences, the database.
     pub state: PathBuf,
     pub hyphenation: PathBuf,
@@ -50,11 +50,6 @@ impl Platform {
             _ => Some(line.to_string()).filter(|l| !l.is_empty()),
         }
     }
-
-    /// The app binary the launch script copies and runs, on a device.
-    pub fn installed_binary(&self) -> Option<PathBuf> {
-        (self.kind != Kind::Desktop).then(|| self.app_dir.join("bin/zarathustra"))
-    }
 }
 
 /// This system's platform, detected on first use.
@@ -81,7 +76,7 @@ fn detect(root: &Path) -> Platform {
             plugin_runtime: Some(root.join("tmp/zarathustra/plugins")),
             plugin_data: app.join("data"),
             version_file: Some(onboard.join(".kobo/version")),
-            app_dir: app,
+            binary: Some(app.join("bin/zarathustra")),
         }
     } else if root.join("mnt/us").exists() {
         let us = root.join("mnt/us");
@@ -98,7 +93,7 @@ fn detect(root: &Path) -> Platform {
             plugin_runtime: Some(root.join("var/local/zarathustra/plugins")),
             plugin_data: root.join("var/local/zarathustra/data"),
             version_file: Some(root.join("etc/prettyversion.txt")),
-            app_dir: app,
+            binary: Some(app.join("bin/zarathustra")),
         }
     } else {
         let repo = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
@@ -115,7 +110,7 @@ fn detect(root: &Path) -> Platform {
             plugin_runtime: None,
             plugin_data: state.join("plugins"),
             version_file: None,
-            app_dir: repo.to_path_buf(),
+            binary: None,
             state,
         }
     }
@@ -154,9 +149,9 @@ mod tests {
         let r = root(&["bin/kobo_config.sh", "mnt/onboard"]);
         let p = detect(&r);
         assert_eq!(p.kind, Kind::Kobo);
-        assert!(p.app_dir.ends_with("mnt/onboard/.adds/zarathustra"));
+        assert!(p.state.ends_with("mnt/onboard/.adds/zarathustra/state"));
         assert!(p.library.ends_with("mnt/onboard/library"));
-        assert_eq!(p.installed_binary(), Some(p.app_dir.join("bin/zarathustra")));
+        assert!(p.binary.as_ref().is_some_and(|b| b.ends_with(".adds/zarathustra/bin/zarathustra")));
         std::fs::create_dir_all(r.join("mnt/onboard/.kobo")).expect("mkdir");
         std::fs::write(r.join("mnt/onboard/.kobo/version"), "N123456789012,4.1.15,4.38.23852,4.1.15,4.1.15,0-386\n")
             .expect("write");
@@ -168,6 +163,6 @@ mod tests {
         let p = detect(&root(&["home"]));
         assert_eq!(p.kind, Kind::Desktop);
         assert!(p.library.ends_with("dev-books"));
-        assert_eq!(p.installed_binary(), None);
+        assert_eq!(p.binary, None);
     }
 }

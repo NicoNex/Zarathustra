@@ -20,9 +20,33 @@ const CONFIG: &str = "/etc/wpa_supplicant/wpa_supplicant.conf";
 /// `/dev/ntx_io` request that powers the Wi-Fi chip on NXP boards with the `moal` driver.
 const NTX_WIFI_POWER: libc::c_ulong = 208;
 
+/// What a Wi-Fi driver needs to come up.
+struct Chip {
+    /// Loaded first.
+    dep: &'static str,
+    params: &'static [&'static str],
+    /// wpa_supplicant's `-D`.
+    driver: &'static str,
+    /// From the interface appearing to it taking `up`.
+    settle: Duration,
+}
+
+/// The chips we know, by `WIFI_MODULE`.
+// shortcut: only NXP's `moal` (Clara 2E, Libra 2…); Realtek (`8821cs`) or MediaTek boards
+// power up through `sdio_wifi_pwr`/`wmt` instead: add them here when such a Kobo is ported.
+fn chip(module: &str) -> Option<Chip> {
+    (module == "moal").then_some(Chip {
+        dep: "mlan",
+        params: &["mod_para=nxp/wifi_mod_para_sd8987.conf"],
+        driver: "nl80211",
+        settle: Duration::from_secs(2),
+    })
+}
+
 pub struct KoboWifi {
     /// `WIFI_MODULE` from rcS (`moal` on the Clara 2E).
     module: String,
+    chip: Chip,
     /// `INTERFACE` (`mlan0`).
     iface: String,
     /// `/drivers/$PLATFORM/wifi`.
@@ -31,11 +55,13 @@ pub struct KoboWifi {
 }
 
 impl KoboWifi {
-    /// From the environment the launch script copies from Nickel; `None` without it.
+    /// From the environment the launch script copies from Nickel; `None` without it or for
+    /// a chip we don't know.
     pub fn from_env() -> Option<KoboWifi> {
         let var = |k| std::env::var(k).ok().filter(|v| !v.is_empty());
         let (module, iface, platform) = (var("WIFI_MODULE")?, var("INTERFACE")?, var("PLATFORM")?);
         Some(KoboWifi {
+            chip: chip(&module)?,
             wpa: Wpa::new(&iface),
             modules: Path::new("/drivers").join(platform).join("wifi"),
             module,
@@ -55,67 +81,70 @@ impl KoboWifi {
     }
 
     fn power(&self, on: bool) -> io::Result<()> {
-        if self.module == "moal" {
-            let f = File::options().read(true).custom_flags(libc::O_NONBLOCK).open("/dev/ntx_io")?;
-            // SAFETY: this ntx_io request takes its argument by value, not a pointer.
-            if unsafe { libc::ioctl(f.as_raw_fd(), NTX_WIFI_POWER as _, on as libc::c_int) } < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        } else if on {
-            self.insmod("sdio_wifi_pwr", &[])
-        } else {
-            run(Command::new("rmmod").arg("sdio_wifi_pwr"), None).map(drop)
+        let f = File::options().read(true).custom_flags(libc::O_NONBLOCK).open("/dev/ntx_io")?;
+        // SAFETY: this ntx_io request takes its argument by value, not a pointer.
+        if unsafe { libc::ioctl(f.as_raw_fd(), NTX_WIFI_POWER as _, on as libc::c_int) } < 0 {
+            return Err(io::Error::last_os_error());
         }
+        Ok(())
+    }
+
+    /// wpa_supplicant runs for the interface (its control socket is there).
+    fn supplicant(&self) -> bool {
+        Path::new("/var/run/wpa_supplicant").join(&self.iface).exists()
     }
 
     fn up(&self) -> io::Result<()> {
         self.power(true)?;
         std::thread::sleep(Duration::from_millis(250));
-        let mut params = Vec::new();
+        self.insmod(self.chip.dep, &[])?;
+        std::thread::sleep(Duration::from_millis(250));
         let region = fs::read_to_string("/mnt/onboard/.kobo/Kobo/Kobo eReader.conf")
             .ok()
             .and_then(|c| c.lines().find_map(|l| l.strip_prefix("WifiRegulatoryDomain=")).map(str::to_string));
-        if self.module == "moal" {
-            self.insmod("mlan", &[])?;
-            std::thread::sleep(Duration::from_millis(250));
-            params.extend(region.map(|r| format!("reg_alpha2={r}")));
-            params.push("mod_para=nxp/wifi_mod_para_sd8987.conf".into());
-        }
+        let mut params: Vec<String> = region.map(|r| format!("reg_alpha2={r}")).into_iter().collect();
+        params.extend(self.chip.params.iter().map(|p| p.to_string()));
         self.insmod(&self.module, &params)?;
         let net = Path::new("/sys/class/net").join(&self.iface);
         let start = Instant::now();
         while !net.exists() && start.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(200));
         }
-        std::thread::sleep(Duration::from_secs(if self.module == "moal" { 2 } else { 1 }));
+        std::thread::sleep(self.chip.settle);
         run(Command::new("ifconfig").args([&self.iface, "up"]), None)?;
-        let driver = if self.module == "moal" { "nl80211" } else { "wext" };
-        if self.wpa.connected().is_err() {
-            run(
-                Command::new("wpa_supplicant").args(["-D", driver, "-s", "-i", &self.iface, "-c", CONFIG]).args([
-                    "-C",
-                    "/var/run/wpa_supplicant",
-                    "-B",
-                ]),
-                None,
-            )?;
+        if !self.supplicant() {
+            let args =
+                ["-D", self.chip.driver, "-s", "-i", &self.iface, "-c", CONFIG, "-C", "/var/run/wpa_supplicant", "-B"];
+            run(Command::new("wpa_supplicant").args(args), None)?;
         }
-        // A daemon that follows the link: an address whenever a network is joined.
-        run(Command::new("dhcpcd").args(["-b", &self.iface]), None).map(drop)
+        // A daemon that follows the link: an address whenever a network is joined. One may
+        // run already (a second start fails): that's fine, it's the radio that matters.
+        if let Err(e) = run(Command::new("dhcpcd").args(["-b", &self.iface]), None) {
+            eprintln!("wifi: {e}");
+        }
+        Ok(())
     }
 
+    /// Takes everything down as far as it goes, and always powers the chip off.
     fn down(&self) -> io::Result<()> {
         run(Command::new("dhcpcd").args(["-k", &self.iface]), None).ok();
         run(Command::new("wpa_cli").args(["-i", &self.iface, "terminate"]), None).ok();
         run(Command::new("ifconfig").args([&self.iface, "down"]), None).ok();
-        for m in [self.module.as_str(), "mlan"] {
+        for m in [self.module.as_str(), self.chip.dep] {
             if self.loaded(m) {
                 std::thread::sleep(Duration::from_millis(250));
-                run(Command::new("rmmod").arg(m), None)?;
+                run(Command::new("rmmod").arg(m), None).map_err(|e| eprintln!("wifi: {e}")).ok();
             }
         }
         self.power(false)
+    }
+
+    /// Off, if it was on (before a suspend, and before the vendor UI comes back).
+    pub fn off(&self) -> io::Result<()> {
+        if self.loaded(&self.module) {
+            self.down()?;
+        }
+        Ok(())
     }
 
     /// An IPv4 address on the interface: joined and usable.
@@ -127,8 +156,9 @@ impl KoboWifi {
 
 impl Wifi for KoboWifi {
     fn status(&self) -> io::Result<WifiStatus> {
+        // Polled every second while a panel waits for a network: no process unless it runs.
         let enabled = self.loaded(&self.module) && Path::new("/sys/class/net").join(&self.iface).exists();
-        let connected = if enabled { self.wpa.connected().ok().flatten() } else { None };
+        let connected = if enabled && self.supplicant() { self.wpa.connected().ok().flatten() } else { None };
         Ok(WifiStatus { enabled, connected })
     }
 

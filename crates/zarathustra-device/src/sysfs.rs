@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{Battery, Light};
 
-fn read_int(path: &Path) -> io::Result<i64> {
+pub(crate) fn read_int(path: &Path) -> io::Result<i64> {
     fs::read_to_string(path)?.trim().parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
