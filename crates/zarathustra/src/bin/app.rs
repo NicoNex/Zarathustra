@@ -355,6 +355,9 @@ fn main() -> Result<()> {
     let t = Instant::now();
     let mut ctx = Ctx::new();
     eprintln!("fonts and state ready in {:?}", t.elapsed());
+    if pgm.is_none() {
+        zarathustra::nickel::import_in_background(&ctx.state_dir);
+    }
     let home = |ctx: &Ctx| Home::scan(&library_dirs(), ctx);
     let mut screen = Screen::Home(Box::new(home(&ctx)));
     // The home kept while a book is open (and the book's path), so going back is a redraw,

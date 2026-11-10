@@ -58,6 +58,28 @@ pub(crate) fn mark_area(r: Rect) -> Rect {
 }
 
 /// The book's row in `store` (added if new) and its highlights drawn on pages.
+/// The store's key and row for the book at `path`.
+pub(crate) fn book_record(path: &Path, book: &Book) -> (String, BookEntry) {
+    let meta = book.metadata();
+    // ponytail: without a dc:identifier the key hashes the full path (books with the same file
+    // name stay apart), so a moved file loses its highlights; hash the OPF bytes once the book
+    // exposes them.
+    let key = book_key(meta.identifier.as_deref(), path.as_os_str().as_encoded_bytes());
+    let entry = BookEntry {
+        path: path.to_path_buf(),
+        title: meta.title.clone().unwrap_or_default(),
+        authors: meta.authors.clone(),
+        language: meta.language.clone(),
+        series: meta.series.clone(),
+        series_index: meta.series_index,
+        format: Format::from_path(path).unwrap_or(Format::Epub),
+        size: 0,
+        modified: std::time::SystemTime::UNIX_EPOCH,
+        cover_thumb: None,
+    };
+    (key, entry)
+}
+
 pub(crate) fn load(
     store: &Store,
     key: &str,
@@ -356,23 +378,7 @@ impl Highlights {
     /// (unwritable state dir) highlighting still works for the session, it is just not saved.
     pub fn open(path: &Path, book: &Book, state_dir: &Path) -> Highlights {
         let store = Store::open(&state_dir.join("zarathustra.db")).and_then(|store| {
-            let meta = book.metadata();
-            // ponytail: without a dc:identifier the key hashes the full path (books with the
-            // same file name stay apart), so a moved file loses its highlights; hash the OPF
-            // bytes once the book exposes them.
-            let key = book_key(meta.identifier.as_deref(), path.as_os_str().as_encoded_bytes());
-            let entry = BookEntry {
-                path: path.to_path_buf(),
-                title: meta.title.clone().unwrap_or_default(),
-                authors: meta.authors.clone(),
-                language: meta.language.clone(),
-                series: meta.series.clone(),
-                series_index: meta.series_index,
-                format: Format::from_path(path).unwrap_or(Format::Epub),
-                size: 0,
-                modified: std::time::SystemTime::UNIX_EPOCH,
-                cover_thumb: None,
-            };
+            let (key, entry) = book_record(path, book);
             let (id, saved) = load(&store, &key, &entry)?;
             Ok(((store, id), saved))
         });

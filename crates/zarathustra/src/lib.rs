@@ -13,6 +13,7 @@ pub mod i18n;
 pub mod keyboard;
 pub mod menu;
 pub mod nav;
+pub mod nickel;
 pub mod notebook;
 pub mod outsheet;
 pub mod pace;

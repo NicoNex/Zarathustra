@@ -24,6 +24,7 @@ nix = { version = "0.31", default-features = false, features = ["signal", "fs"] 
 thiserror = "2"
 fluent-bundle = "0.16"
 unic-langid = "0.9.6"
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 [[bin]]
 name = "zarathustra-textprobe"
@@ -36,3 +37,6 @@ path = "src/bin/app.rs"
 [[bin]]
 name = "zarathustra-powerprobe"
 path = "src/bin/powerprobe.rs"
+
+[dev-dependencies]
+tempfile = "3"
