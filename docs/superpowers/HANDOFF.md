@@ -37,7 +37,7 @@ storage of /mnt/onboard, memory, IP, MAC of mlan0, 1072×1448 300 dpi, uptime); 
 - `Night` (always wrapping the real device) now forwards `draws_over_refresh`, `page_animation`,
   `has_sleep_cover`, `set_sleep_cover`: before, the Kobo showed the page-animation tile instead
   of "Cover magnetica" and the cover switch never reached the device.
-- `Device::draws_over_refresh` (Kobo true): `ready()` and `Night::restore` skip waiting for the
+- User confirmed 2026-11-10: much faster, sliders above all. `Device::draws_over_refresh` (Kobo true): `ready()` and `Night::restore` skip waiting for the
   last refresh before drawing. Measured with injected taps: a turn during a running GL16 waited
   331 ms; now 16 rapid turns drawn in 19–108 ms (the high ones lay out a new chapter).
 - Clara 2E waveforms measured (ioctl takes the first number of sysfs `code:index`): A2 238 ms,

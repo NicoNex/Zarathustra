@@ -4,3 +4,4 @@ dev-fonts/
 dev-books/
 dev-dicts
 .claude/worktrees/
+.claude/settings.local.json
