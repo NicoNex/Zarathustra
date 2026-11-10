@@ -153,7 +153,8 @@ fn child_at(dom: &Dom, parent: NodeId, index: usize, id: Option<&str>) -> Option
     id.and_then(|id| element_by_id(dom, id))
 }
 
-fn element_by_id(dom: &Dom, id: &str) -> Option<NodeId> {
+/// The element whose `id` attribute is `id`.
+pub fn element_by_id(dom: &Dom, id: &str) -> Option<NodeId> {
     dom.descendants(Dom::ROOT).find(|&n| dom.attr(n, "id") == Some(id))
 }
 

@@ -267,12 +267,15 @@ fn usb_prompt(dev: &mut dyn zarathustra_device::Device, ctx: &mut Ctx) -> std::i
         }
         for ev in &events {
             if let Event::Touch(t) = ev {
-                if t.phase == Phase::Up && transfer.contains(t.x, t.y) {
+                if t.phase != Phase::Up {
+                    continue;
+                }
+                if transfer.contains(t.x, t.y) {
                     // What stays on the screen while the computer has the storage.
                     usb_screen(dev, ctx, zarathustra::i18n::t().usb_connected, false)?;
                     return Ok(true);
                 }
-                if t.phase == Phase::Up && charge.contains(t.x, t.y) {
+                if charge.contains(t.x, t.y) {
                     return Ok(false);
                 }
             }

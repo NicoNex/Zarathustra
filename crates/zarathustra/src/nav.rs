@@ -30,7 +30,7 @@ fn ribbon() -> Rect {
 /// Depth of the V cut into the ribbon's tail.
 const NOTCH: i32 = 16;
 /// Words of the page's opening kept as the bookmark's quote (shown in the list).
-const QUOTE_WORDS: usize = 12;
+pub(crate) const QUOTE_WORDS: usize = 12;
 const PILL_W: i32 = 440;
 const PILL_CLOSE_W: i32 = 90;
 const PILL_H: i32 = 72;
@@ -74,7 +74,7 @@ fn block_pos(blocks: &[Block], node: NodeId, offset: usize) -> Option<TextPos> {
 }
 
 /// End of the first `words` words of `text` from `start` (leading whitespace skipped).
-fn words_end(text: &str, start: usize, words: usize) -> usize {
+pub(crate) fn words_end(text: &str, start: usize, words: usize) -> usize {
     let mut seen = 0;
     let mut in_word = false;
     for (i, c) in text[start..].char_indices() {

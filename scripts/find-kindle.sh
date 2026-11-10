@@ -8,12 +8,12 @@ DEVICE=${DEVICE:-kindle}
 case $DEVICE in kobo) MARK=/mnt/onboard ;; *) MARK=/mnt/us ;; esac
 PORT=${KINDLE_PORT:-22}
 CACHE="$(dirname "$0")/../target/.$DEVICE-host"
-is_kindle() {
+is_device() {
 	ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=accept-new \
 		"root@$1" "test -d $MARK" 2>/dev/null
 }
 last=$(cat "$CACHE" 2>/dev/null)
-if [ -n "$last" ] && is_kindle "$last"; then
+if [ -n "$last" ] && is_device "$last"; then
 	echo "$last"
 	exit 0
 fi
@@ -21,7 +21,7 @@ fi
 net=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9]*\.[0-9]*\.[0-9]*\)\..*/\1/p')
 [ -n "$net" ] || { echo "find-kindle: no network" >&2; exit 1; }
 for h in $(for i in $(seq 1 254); do (timeout 1 bash -c "echo >/dev/tcp/$net.$i/$PORT" 2>/dev/null && echo "$net.$i") & done; wait); do
-	if is_kindle "$h"; then
+	if is_device "$h"; then
 		mkdir -p "$(dirname "$CACHE")" && echo "$h" >"$CACHE"
 		echo "$h"
 		exit 0

@@ -36,6 +36,8 @@ pub struct Platform {
     pub plugin_data: PathBuf,
     /// A file whose first line names the system version.
     version_file: Option<PathBuf>,
+    /// The vendor reader's database, whose reading data the app takes in once (Nickel's).
+    pub vendor_db: Option<PathBuf>,
 }
 
 impl Platform {
@@ -79,6 +81,7 @@ fn detect(root: &Path) -> Platform {
             plugin_runtime: Some(root.join("tmp/zarathustra-plugins")),
             plugin_data: root.join("var/zarathustra/data"),
             version_file: Some(onboard.join(".kobo/version")),
+            vendor_db: Some(onboard.join(".kobo/KoboReader.sqlite")),
             binary: Some(app.join("bin/zarathustra")),
         }
     } else if root.join("mnt/us").exists() {
@@ -96,6 +99,7 @@ fn detect(root: &Path) -> Platform {
             plugin_runtime: Some(root.join("var/local/zarathustra/plugins")),
             plugin_data: root.join("var/local/zarathustra/data"),
             version_file: Some(root.join("etc/prettyversion.txt")),
+            vendor_db: None,
             binary: Some(app.join("bin/zarathustra")),
         }
     } else {
@@ -113,6 +117,7 @@ fn detect(root: &Path) -> Platform {
             plugin_runtime: None,
             plugin_data: state.join("plugins"),
             version_file: None,
+            vendor_db: None,
             binary: None,
             state,
         }

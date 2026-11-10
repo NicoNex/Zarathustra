@@ -8,7 +8,7 @@ OUT="$USER_DIR/ssh-diagnostica.txt"
 	date
 	echo "== id"; id
 	echo "== folders"; ls -ld / /var "$(dirname "$(dirname "$DATA")")" "$(dirname "$DATA")" "$DATA" /var/zarathustra-ssh
-	echo "== network"; ip -4 -o addr 2>&1; netstat -ltn 2>&1 | grep ':22 \|:2222 '
+	echo "== network"; ip -4 -o addr 2>&1; netstat -ltn 2>&1 | grep -E ':(22|2222) '
 	echo "== env"; env | grep '^ZARATHUSTRA_' | grep -v -i key
 	echo "== data"; ls -la "$DATA"
 	echo "== keys"; cat "$DATA/authorized_keys"

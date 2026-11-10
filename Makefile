@@ -29,8 +29,18 @@ install: install-ssh
 #   Kobo Clara 2E: i.MX6 SoloLite, Cortex-A9 r4p1: NEON + VFPv3-D32, no hardware divide.
 CFLAGS_VAR := CFLAGS_armv7_unknown_linux_musleabihf
 CXXFLAGS_VAR := CXXFLAGS_armv7_unknown_linux_musleabihf
-KINDLE_CPU := RUSTFLAGS="-C target-cpu=cortex-a53" $(CFLAGS_VAR)="-mcpu=cortex-a53 -mfpu=neon-fp-armv8" $(CXXFLAGS_VAR)="-mcpu=cortex-a53 -mfpu=neon-fp-armv8"
-KOBO_CPU := RUSTFLAGS="-C target-cpu=cortex-a9" $(CFLAGS_VAR)="-mcpu=cortex-a9 -mfpu=neon" $(CXXFLAGS_VAR)="-mcpu=cortex-a9 -mfpu=neon"
+KINDLE_CC := -mcpu=cortex-a53 -mfpu=neon-fp-armv8
+KOBO_CC := -mcpu=cortex-a9 -mfpu=neon
+KINDLE_CPU := RUSTFLAGS="-C target-cpu=cortex-a53" $(CFLAGS_VAR)="$(KINDLE_CC)" $(CXXFLAGS_VAR)="$(KINDLE_CC)"
+KOBO_CPU := RUSTFLAGS="-C target-cpu=cortex-a9" $(CFLAGS_VAR)="$(KOBO_CC)" $(CXXFLAGS_VAR)="$(KOBO_CC)"
+
+# The SSH plugin's binaries from scripts/build-ssh.sh, into folder $(1), when they are built.
+define copy_ssh
+	@for b in dropbearmulti sftp-server; do \
+		if [ -f target/ssh/$$b ]; then cp target/ssh/$$b $(1)/; \
+		else echo "warning: target/ssh/$$b not built (scripts/build-ssh.sh)" >&2; fi; \
+	done
+endef
 
 build:
 	$(KINDLE_CPU) cargo build --release --target $(TARGET) -p zarathustra
@@ -45,10 +55,7 @@ stage: build
 	cp assets/hyphenation/*.bincode $(STAGE)/zarathustra/hyph/
 	@# Plugins, with the SSH binaries from scripts/build-ssh.sh when they are built.
 	cp -r dist/plugins $(STAGE)/zarathustra/
-	@for b in dropbearmulti sftp-server; do \
-		if [ -f target/ssh/$$b ]; then cp target/ssh/$$b $(STAGE)/zarathustra/plugins/ssh/; \
-		else echo "warning: target/ssh/$$b not built (scripts/build-ssh.sh)" >&2; fi; \
-	done
+	$(call copy_ssh,$(STAGE)/zarathustra/plugins/ssh)
 
 dev-dicts:
 	scripts/fetch-dicts.sh
@@ -116,10 +123,7 @@ stage-kobo: build-kobo
 	cp assets/hyphenation/*.bincode $(KOBO_APP)/hyph/
 	cp dist/kobo/nm/zarathustra $(KOBO_STAGE)/.adds/nm/
 	cp -r dist/plugins $(KOBO_APP)/
-	@for b in dropbearmulti sftp-server; do \
-		if [ -f target/ssh/$$b ]; then cp target/ssh/$$b $(KOBO_APP)/plugins/ssh/; \
-		else echo "warning: target/ssh/$$b not built (scripts/build-ssh.sh)" >&2; fi; \
-	done
+	$(call copy_ssh,$(KOBO_APP)/plugins/ssh)
 
 # Same restart as the Kindle's: the launch script sees the flag and runs the new binary.
 update-kobo: stage-kobo

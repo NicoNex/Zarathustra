@@ -7,15 +7,13 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OpenFlags};
-use zarathustra_engine::anchor::{cfi_for, reanchor, Anchor, TextMap, TextQuote};
+use zarathustra_engine::anchor::{cfi_for, element_by_id, reanchor, Anchor, TextMap, TextQuote};
 use zarathustra_engine::book::Book;
-use zarathustra_engine::dom::{Dom, NodeId};
+use zarathustra_engine::dom::Dom;
 use zarathustra_store::{AnnotationData, Color, Kind, Store};
 
 use crate::reader::Position;
 
-/// Nickel's database on a Kobo.
-pub const DATABASE: &str = "/mnt/onboard/.kobo/KoboReader.sqlite";
 /// The preference that records the import, so it runs once.
 const DONE: &str = "nickel-import";
 
@@ -48,6 +46,13 @@ struct Volume {
     seconds: i64,
 }
 
+impl Volume {
+    /// Opened at least once in Nickel: reading, finished or partly read.
+    fn started(&self) -> bool {
+        self.status > 0 || self.percent > 0.0
+    }
+}
+
 struct Mark {
     chapter: String,
     span: Option<String>,
@@ -77,7 +82,7 @@ pub fn import(nickel: &Path, store: &Store, library: &Path) -> Result<Report> {
         .collect::<rusqlite::Result<_>>()?;
     let mut marks_of = db.prepare(
         "SELECT ContentID, StartContainerPath, Text, Annotation, Type, DateCreated FROM Bookmark
-         WHERE VolumeID = ?1 AND (Hidden IS NULL OR Hidden != 'true')",
+         WHERE VolumeID = ?1 AND (Hidden IS NULL OR Hidden != 'true') ORDER BY ContentID",
     )?;
     let mut report = Report::default();
     for v in volumes {
@@ -99,8 +104,7 @@ pub fn import(nickel: &Path, store: &Store, library: &Path) -> Result<Report> {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
-        let reading = v.status > 0 || v.percent > 0.0;
-        if !reading && marks.is_empty() && v.seconds == 0 {
+        if !v.started() && marks.is_empty() && v.seconds == 0 {
             continue;
         }
         match import_book(&v, &marks, &path, store, &mut report) {
@@ -115,7 +119,7 @@ fn import_book(v: &Volume, marks: &[Mark], path: &Path, store: &Store, report: &
     let book = Book::open(path)?;
     let key = path.to_string_lossy();
     let finished = v.status == 2 || v.percent >= 100.0;
-    if (finished || v.status == 1 || v.percent > 0.0) && store.position(&key)?.is_none() {
+    if v.started() && store.position(&key)?.is_none() {
         let last = book.chapters.len().saturating_sub(1);
         let chapter =
             if finished { last } else { v.chapter.as_deref().and_then(|c| chapter_index(&book, c)).unwrap_or(0) };
@@ -128,19 +132,33 @@ fn import_book(v: &Volume, marks: &[Mark], path: &Path, store: &Store, report: &
     }
     let (book_key, entry) = crate::highlight::book_record(path, &book);
     let id = store.ensure_book(&book_key, &entry)?;
-    if v.seconds > 0 {
+    // An import cut short (the app quit meanwhile) runs again from the start: a book that
+    // already has reading time or marks keeps them, rather than getting them twice.
+    if v.seconds > 0 && store.reading_days(Some(id))?.is_empty() {
+        // shortcut: the UTC day of the last reading, where the app logs local days; off by one
+        // for readings that ended just after midnight.
         let day = v.last_read.as_deref().and_then(unix_time).unwrap_or(0).div_euclid(86_400);
         store.add_reading(id, day, u32::try_from(v.seconds).unwrap_or(u32::MAX), 0)?;
         report.seconds += v.seconds as u64;
     }
+    if !store.annotations(id)?.is_empty() {
+        return Ok(());
+    }
+    // Marks come grouped by chapter: each chapter is parsed once.
+    let mut chapter: Option<(usize, Dom, TextMap)> = None;
     for m in marks {
         let Some(i) = chapter_index(&book, &m.chapter) else {
             report.lost += 1;
             continue;
         };
-        let dom = book.chapter_dom(i)?;
+        if chapter.as_ref().is_none_or(|(c, ..)| *c != i) {
+            let dom = book.chapter_dom(i)?;
+            let map = TextMap::new(&dom);
+            chapter = Some((i, dom, map));
+        }
+        let Some((_, dom, map)) = &chapter else { continue };
         let spine = u32::try_from(book.spine.get(i).copied().unwrap_or(i)).unwrap_or(u32::MAX);
-        match annotation(&dom, spine, m) {
+        match annotation(dom, map, spine, m) {
             Some(data) => {
                 let at = m.created.as_deref().and_then(unix_time).unwrap_or(0);
                 store.add_annotation_at(id, &data, at)?;
@@ -176,19 +194,14 @@ fn span_id(path: &str) -> Option<String> {
     (!id.is_empty()).then_some(id)
 }
 
-fn by_id(dom: &Dom, id: &str) -> Option<NodeId> {
-    dom.descendants(Dom::ROOT).find(|&n| dom.attr(n, "id") == Some(id))
-}
-
 /// Nickel's mark as one of ours: a dog-ear becomes a bookmark at its span, a highlight (with
 /// its note, if any) is found again by its text, from its span on.
-fn annotation(dom: &Dom, spine: u32, m: &Mark) -> Option<AnnotationData> {
-    let map = TextMap::new(dom);
+fn annotation(dom: &Dom, map: &TextMap, spine: u32, m: &Mark) -> Option<AnnotationData> {
     let text = map.text();
-    let at_span = m.span.as_deref().and_then(|id| by_id(dom, id)).and_then(|n| map.to_text(n, 0));
+    let at_span = m.span.as_deref().and_then(|id| element_by_id(dom, id)).and_then(|n| map.to_text(n, 0));
     if m.kind == "dogear" {
         let start = at_span.unwrap_or(0);
-        let end = text[start..].char_indices().nth(60).map_or(text.len(), |(i, _)| start + i);
+        let end = crate::nav::words_end(text, start, crate::nav::QUOTE_WORDS);
         let (node, offset) = map.to_dom(start)?;
         return Some(AnnotationData {
             kind: Kind::Bookmark,
@@ -201,7 +214,10 @@ fn annotation(dom: &Dom, spine: u32, m: &Mark) -> Option<AnnotationData> {
             color: Color::Gray,
         });
     }
-    let exact = m.text.trim();
+    // Nickel joins paragraphs with newlines; the chapter text is matched with its whitespace
+    // collapsed, so the quote is too.
+    let exact = m.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let exact = exact.as_str();
     if exact.is_empty() {
         return None;
     }
@@ -274,18 +290,16 @@ fn unix_time(s: &str) -> Option<i64> {
 /// second per 40 annotated books on a desktop, many more on the device), so the home shows at
 /// once; it picks the positions up at its next look.
 pub fn import_in_background(state_dir: &Path) {
-    use zarathustra_device::{platform, Kind};
-    if platform().kind != Kind::Kobo {
-        return;
-    }
-    let (db, library) = (crate::db_path(state_dir), platform().library.clone());
+    let platform = zarathustra_device::platform();
+    let Some(nickel) = platform.vendor_db.clone() else { return };
+    let (db, library) = (crate::db_path(state_dir), platform.library.clone());
     std::thread::spawn(move || {
         let store = match Store::open(&db) {
             Ok(s) => s,
             Err(e) => return eprintln!("nickel import: {e}"),
         };
         let t = std::time::Instant::now();
-        if let Some(report) = import_once(Path::new(DATABASE), &store, &library) {
+        if let Some(report) = import_once(&nickel, &store, &library) {
             eprintln!("nickel import: {report:?} in {:?}", t.elapsed());
         }
     });
@@ -366,6 +380,10 @@ mod tests {
         assert_eq!(notes[0].data.note.as_deref(), Some("una nota"));
         assert_eq!(notes[0].created_at, 1_704_936_075);
         assert!(import_once(&nickel, &store, &library).is_none(), "only once");
+        // An import cut short runs again in full: nothing comes twice.
+        import(&nickel, &store, &library).expect("again");
+        assert_eq!(store.annotations(id).expect("annotations").len(), 1);
+        assert_eq!(store.reading_days(Some(id)).expect("days").iter().map(|d| d.seconds).sum::<i64>(), 3600);
     }
 
     /// A dry run on a real Kobo's data: `NICKEL_DB=… NICKEL_LIBRARY=… cargo test -p zarathustra
