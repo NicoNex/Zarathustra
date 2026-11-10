@@ -2,7 +2,7 @@
 
 Start here: `docs/superpowers/HANDOFF.md` (current state, open bugs, next steps).
 
-Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 (portable to other e-ink devices). Design: `docs/superpowers/specs/2026-11-04-zarathustra-reader-design.md`. Plans: `docs/superpowers/plans/`.
+Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 (portable to other e-ink devices). Design: `docs/superpowers/specs/2026-11-04-zarathustra-reader-design.md`. Plans in progress: `docs/superpowers/plans/` (finished ones are in git history).
 
 ## How we work (always)
 
@@ -28,7 +28,7 @@ Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 
 ## Layout
 
 - `crates/zarathustra-device`: `Device` trait; Kindle MTK backend (`kindle/`), Kobo i.MX backend (`kobo/`), `platform.rs` (paths per system), emulator, touch decoding, sysfs light/battery.
-- `crates/zarathustra-engine`: fonts (harfrust + skrifa + zeno), DOM, EPUB container; style, layout and pagination are next.
+- `crates/zarathustra-engine`: fonts (harfrust + skrifa + zeno), DOM, EPUB and AZW3/MOBI, CSS, layout and pagination, dictionaries, search, PDF via MuPDF.
 - `crates/zarathustra-store`: SQLite (rusqlite, bundled): books, annotations, `events` change feed; schema migrations in `src/v*.sql`. Positions (CFI, text-quote re-anchoring) live in `zarathustra-engine::anchor`.
-- `crates/zarathustra`: binaries (probes now, the app later).
+- `crates/zarathustra`: the app (`bin/app.rs`: event loop, screens) and probes.
 - `dist/kual/zarathustra`: KUAL extension; `run.sh` stops/restores the Amazon UI.
