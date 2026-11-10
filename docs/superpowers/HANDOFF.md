@@ -55,9 +55,12 @@ Working on the Kobo:
 
 ## Kindle PW5 (parked)
 
+- 2026-11-10: the Kindle runs the current build and the Kobo's database (paths rewritten to
+  /mnt/us/library, path-keyed `fnv:` hashes recomputed, the Kindle's 13 own highlights merged in,
+  its settings/plugin.ssh/pace prefs kept; old DB in `state/pre-kobo-db/`).
 - Boot into Zarathustra (de-Amazon phase A): spec `specs/2026-11-09-boot-to-zarathustra-design.md`,
-  plan `plans/2026-11-09-boot-to-zarathustra.md`, not started. Task 0 needs the user (install the
-  jailbreak's RescuePack; USB test with the app open). Amazon services inventory:
+  plan `plans/2026-11-09-boot-to-zarathustra.md`, not started. Task 0: OTA block verified; the
+  RescuePack is missing (user installs it) and the USB test with the app open needs the user. Amazon services inventory:
   `research/2026-11-09-amazon-services-inventory.md`. Then show the "start at power-on" row
   (`plugin_page::BOOT_HOOK`).
 - USB: volumd enters drive mode by itself on plug; a white Amazon screen stays after "eject" until

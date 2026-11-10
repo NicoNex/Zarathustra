@@ -242,3 +242,11 @@ of normal use.
 4. **Persistent service disable:** do it from the same boot job (the batch-1 `stop` list) rather
    than renaming Amazon's `.conf` files, so the rootfs carries one added file and nothing else;
    undo = delete that file.
+
+## Phase A prerequisites (checked 2026-11-10, FW 5.17.1.0.3)
+
+- RescuePack: **missing** (`/var/local/rp/debrick` absent, `/mnt/us/rp/` empty). Phase A waits
+  for the user to install it.
+- USB with the app open: not yet tested by the user on this build.
+- OTA block: in place. `/usr/bin/otaupd.bck` and `/usr/bin/otav3.bck` only; the `otacheck` line
+  in `/etc/crontab/root` is commented; no `/mnt/us/update*.bin`.
