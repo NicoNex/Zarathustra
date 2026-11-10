@@ -1,4 +1,4 @@
-# Handoff — 2026-11-10
+# Handoff — 2026-11-10 (evening)
 
 ## NOW: Kobo Clara 2E port (spec `specs/2026-11-09-kobo-port-design.md`, plan `plans/2026-11-09-kobo-port.md`)
 
@@ -28,11 +28,33 @@ Done and running on the Kobo (user-confirmed: the app works, SSH works, USB expo
   Dry run on the user's data: `NICKEL_DB=… NICKEL_LIBRARY=… cargo test -p zarathustra --lib
   nickel::tests::dry_run -- --ignored --nocapture`.
 
-To check on the device next: the import's result (`/tmp/zarathustra.log`, "nickel import: Report…"),
-warmth direction, the "connected" screen and light off during USB, the sleep cover tile, suspend/wake
-(battery drain overnight), Wi-Fi join of a new network, refresh speed (`wait_refresh` is called on a
-board KOReader calls unreliable; ~0.45 s initial fb read per start — measure before changing).
-Plan tasks left: 10 (docs/porting.md guide). Skipped review items are listed in the fix commits' bodies.
+Verified on the Kobo 2026-11-10 (user): warmth direction, USB with the computer, suspend overnight
+(little drain; Wi-Fi had dropped at some point), smoothness after the draw-wait fix. Device
+information screen checked on the device: every row right (model, Kobo 4.38.23852, battery,
+storage of /mnt/onboard, memory, IP, MAC of mlan0, 1072×1448 300 dpi, uptime); no change needed.
+
+2026-11-10:
+- `Night` (always wrapping the real device) now forwards `draws_over_refresh`, `page_animation`,
+  `has_sleep_cover`, `set_sleep_cover`: before, the Kobo showed the page-animation tile instead
+  of "Cover magnetica" and the cover switch never reached the device.
+- `Device::draws_over_refresh` (Kobo true): `ready()` and `Night::restore` skip waiting for the
+  last refresh before drawing. Measured with injected taps: a turn during a running GL16 waited
+  331 ms; now 16 rapid turns drawn in 19–108 ms (the high ones lay out a new chapter).
+- Clara 2E waveforms measured (ioctl takes the first number of sysfs `code:index`): A2 238 ms,
+  DU 287, GL16 332, REAGL 346, GC16 426. Current choices are right.
+- Touch can be scripted over SSH (write 16-byte `input_event`s to /dev/input/event1; raw
+  x = screen y, raw y = 1071 − screen x). It moves real reading positions: avoid in the
+  user's books, or put them back.
+- The first start after a fresh install scanned the library in 20.7 s (94 books, no cache);
+  later starts ~13 ms. Fine as a one-off.
+- Italian strings: Zarathustra is masculine ("si riapre da solo").
+- `docs/porting.md`: the add-a-device guide (plan Task 10 step 1).
+
+Open on the Kobo: Nickel import result (positions/highlights, user to confirm), Wi-Fi join of a new
+network (and '#'/'!' passwords), whether the "Cover magnetica" tile should give way to a
+Bluetooth one (user undecided).
+NEXT: Bluetooth — ask what it is for (page-turn remote, audio, keyboard), then brainstorm → spec.
+Skipped review items are listed in the fix commits' bodies.
 
 ## 2026-11-09 (Kindle work, parked)
 

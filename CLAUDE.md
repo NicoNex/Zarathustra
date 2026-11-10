@@ -20,13 +20,14 @@ Rust e-reader shell replacing the Amazon UI on a jailbroken Kindle Paperwhite 5 
 
 - Device build: `make build` (Kindle, Cortex-A53) / `make build-kobo` (Kobo, Cortex-A9, in `target/kobo`): each device gets its own CPU flags for Rust and the C deps (static musl, linked with `rust-lld`). C deps use the AUR `arm-linux-musleabihf-cross-bin` toolchain via `.cargo/config.toml`.
 - Emulator: `cargo run -p zarathustra --features emulator --bin zarathustra-probe`.
+- Kobo: `make update-kobo` (over SSH; `DEVICE=kobo scripts/find-kindle.sh` finds it), `make install-kobo-usb`; launched from NickelMenu (`dist/kobo/`). Porting to another device: `docs/porting.md`.
 - Deploy over SSH (Zarathustra's SSH plugin, port 22, key auth; the address is found on the network by `scripts/find-kindle.sh`): `make update` (app only, the running app restarts into it in seconds), `make install-ssh` (with dictionaries), `make run-ssh BIN=zarathustra-probe` runs another binary. Over USB: `make install-usb` (the app restarts into the new binary when the cable comes out).
 - Screenshot of the device: `KINDLE_HOST=… scripts/screenshot.sh out.png`.
 - Local-only test assets (gitignored): `dev-fonts/` (Bookerly, Baskerville from the device), `dev-books/` (user's EPUBs). Tests skip silently when they are missing.
 
 ## Layout
 
-- `crates/zarathustra-device`: `Device` trait; Kindle MTK backend (`kindle/`), emulator, touch decoding, sysfs light/battery.
+- `crates/zarathustra-device`: `Device` trait; Kindle MTK backend (`kindle/`), Kobo i.MX backend (`kobo/`), `platform.rs` (paths per system), emulator, touch decoding, sysfs light/battery.
 - `crates/zarathustra-engine`: fonts (harfrust + skrifa + zeno), DOM, EPUB container; style, layout and pagination are next.
 - `crates/zarathustra-store`: SQLite (rusqlite, bundled): books, annotations, `events` change feed; schema migrations in `src/v*.sql`. Positions (CFI, text-quote re-anchoring) live in `zarathustra-engine::anchor`.
 - `crates/zarathustra`: binaries (probes now, the app later).
