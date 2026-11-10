@@ -136,6 +136,12 @@ pub trait Device {
     fn wifi(&self) -> Option<Arc<dyn Wifi>> {
         None
     }
+    /// Drawing over an area whose refresh is still running is safe: the controller takes its
+    /// pixels when the refresh starts and replays colliding ones itself (i.MX EPDC). When
+    /// false (MTK), the app waits for the last refresh before drawing.
+    fn draws_over_refresh(&self) -> bool {
+        false
+    }
     /// The panel can animate page turns itself ([`Refresh::swipe`]).
     fn page_animation(&self) -> bool {
         false

@@ -305,6 +305,10 @@ impl Device for Kobo {
         Ok(())
     }
 
+    fn draws_over_refresh(&self) -> bool {
+        true
+    }
+
     fn has_sleep_cover(&self) -> bool {
         self.cover.is_some()
     }
