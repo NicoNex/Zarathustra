@@ -1,4 +1,40 @@
-# Handoff — 2026-11-09
+# Handoff — 2026-11-10
+
+## NOW: Kobo Clara 2E port (spec `specs/2026-11-09-kobo-port-design.md`, plan `plans/2026-11-09-kobo-port.md`)
+
+Kobo only for now (user: the Kindle is set aside; its boot-to-Zarathustra plan stays parked).
+**Last reviewed: 5cf138e** (two five-agent reviews: 4ae325d..fa0615f, fa0615f..HEAD).
+
+Done and running on the Kobo (user-confirmed: the app works, SSH works, USB export works):
+- Abstractions for ports: screen size from the device (`screen_w()/screen_h()`, `--pgm --size WxH`,
+  `ZARATHUSTRA_SIZE` for the emulator); `zarathustra_device::platform()` (paths, name, system version,
+  binary, plugin dirs, `vendor_db`); shared `fb::Framebuffer`, `sys::poll`, `wpa.rs`; `Device` capabilities
+  `page_animation`/`has_sleep_cover`/`set_sleep_cover`; `zarathustra_device::release()`.
+- Kobo backend `zarathustra-device/src/kobo/`: mxcfb Mark 7, touch (swap + mirror x), power key + sleep
+  cover + own suspend, ComfortLight + warmth (0 = warmest), battery, USB notices from
+  `/tmp/nickel-hardware-status`, Wi-Fi (moal: ntx_io power, mlan/moal, wpa_supplicant on Nickel's config,
+  dhcpcd). Clara 2E facts in the spec.
+- `dist/kobo/zarathustra.sh` (NickelMenu): stops Nickel, runs from /tmp, USB via the firmware's
+  `/usr/local/Kobo/udev/usb`, always brings Nickel back (`--release-device`: fb mode + Wi-Fi off).
+- Builds per device: `make build` (Kindle, cortex-a53) / `make build-kobo` (cortex-a9, target/kobo);
+  the first Kobo build died with "Illegal instruction" (A53 code on the A9).
+- Deploy: `make update-kobo` over SSH (Kobo at 192.168.1.15 last time; `DEVICE=kobo scripts/find-kindle.sh`),
+  `make install-kobo-usb` over USB. SSH plugin keys live in /var/zarathustra/data on the Kobo.
+- Library: `/mnt/onboard/library/` (94 books copied from the root; originals left for Nickel).
+- Quick panel: "Sleep cover" tile replaces the page animation on the Kobo; top band for the panel
+  swipe widened to 100 px (the Clara senses a finger only ~65 px down).
+- Nickel import (`nickel.rs`): once, in a background thread at the first start after the update:
+  positions (chapter start), finished state, reading time, 781/782 highlights+notes, dog-ears.
+  Dry run on the user's data: `NICKEL_DB=… NICKEL_LIBRARY=… cargo test -p zarathustra --lib
+  nickel::tests::dry_run -- --ignored --nocapture`.
+
+To check on the device next: the import's result (`/tmp/zarathustra.log`, "nickel import: Report…"),
+warmth direction, the "connected" screen and light off during USB, the sleep cover tile, suspend/wake
+(battery drain overnight), Wi-Fi join of a new network, refresh speed (`wait_refresh` is called on a
+board KOReader calls unreliable; ~0.45 s initial fb read per start — measure before changing).
+Plan tasks left: 10 (docs/porting.md guide). Skipped review items are listed in the fix commits' bodies.
+
+## 2026-11-09 (Kindle work, parked)
 
 ## NEXT: boot into Zarathustra (de-Amazon phase A)
 
