@@ -61,8 +61,9 @@ impl Night {
     // drawing in night colours (a flag on Canvas) would remove the inversion and the wait.
     fn restore(&mut self) -> io::Result<()> {
         let mut result = Ok(());
+        let wait = !self.inner.draws_over_refresh();
         for (r, marker) in std::mem::take(&mut self.inverted) {
-            if let Err(e) = self.inner.wait_refresh(marker) {
+            if let Err(e) = if wait { self.inner.wait_refresh(marker) } else { Ok(()) } {
                 result = Err(e);
             }
             self.invert(r);
@@ -128,6 +129,18 @@ impl Device for Night {
     fn wifi(&self) -> Option<Arc<dyn Wifi>> {
         self.inner.wifi()
     }
+    fn draws_over_refresh(&self) -> bool {
+        self.inner.draws_over_refresh()
+    }
+    fn page_animation(&self) -> bool {
+        self.inner.page_animation()
+    }
+    fn has_sleep_cover(&self) -> bool {
+        self.inner.has_sleep_cover()
+    }
+    fn set_sleep_cover(&mut self, on: bool) {
+        self.inner.set_sleep_cover(on)
+    }
 }
 
 #[cfg(test)]
@@ -174,6 +187,21 @@ mod tests {
         fn battery(&self) -> Option<Battery> {
             None
         }
+        fn draws_over_refresh(&self) -> bool {
+            true
+        }
+        fn page_animation(&self) -> bool {
+            true
+        }
+        fn has_sleep_cover(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn forwards_the_capabilities() {
+        let n = Night::new(Box::new(Panel { px: vec![255; 4], sent: Arc::default() }));
+        assert!(n.draws_over_refresh() && n.page_animation() && n.has_sleep_cover());
     }
 
     #[test]
