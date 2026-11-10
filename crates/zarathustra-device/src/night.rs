@@ -1,8 +1,8 @@
 //! Night mode: white on black, for any backend.
 //!
 //! Screens draw as usual; while `on`, a refresh inverts the framebuffer just before it goes
-//! to the panel, and the next drawing access (or refresh with the mode off) waits for that
-//! refresh and turns it back. Drawing code never sees inverted pixels, so partial redraws
+//! to the panel, and the next drawing access (or refresh with the mode off) turns it back,
+//! first waiting for that refresh where the panel reads the pixels while it runs (MTK). Drawing code never sees inverted pixels, so partial redraws
 //! (a panel over a page, a key under a finger) keep working unchanged.
 //!
 //! Pictures (covers, book images, PDF pages) must look as they are, not as negatives: their
@@ -57,13 +57,12 @@ impl Night {
 
     /// Back to the pixels as drawn once the panel has read the inverted ones; put back even
     /// when a wait fails, so drawing never lands on inverted pixels.
-    // ponytail: waits for every pending refresh, so typing in night mode is serialized again;
-    // drawing in night colours (a flag on Canvas) would remove the inversion and the wait.
+    // ponytail: on MTK, waits for every pending refresh, so typing in night mode is serialized
+    // again; drawing in night colours (a flag on Canvas) would remove the inversion and the wait.
     fn restore(&mut self) -> io::Result<()> {
         let mut result = Ok(());
-        let wait = !self.inner.draws_over_refresh();
         for (r, marker) in std::mem::take(&mut self.inverted) {
-            if let Err(e) = if wait { self.inner.wait_refresh(marker) } else { Ok(()) } {
+            if let Err(e) = self.inner.wait_before_draw(marker) {
                 result = Err(e);
             }
             self.invert(r);

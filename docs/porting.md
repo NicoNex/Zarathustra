@@ -29,14 +29,16 @@ Reuse before writing:
 
 The capabilities have safe defaults; override the ones that are true:
 
-- `draws_over_refresh`: the controller takes the pixels when an update starts and
-  replays colliding updates itself (i.MX EPDC). Then the app draws without waiting for
-  the panel: on the Clara 2E that removed a 330 ms stall per quick tap.
+- `draws_over_refresh`: the framebuffer changes only inside `refresh()` (back buffer) and
+  the controller merges or replays colliding updates itself (i.MX EPDC). Then the app
+  draws without waiting for the panel: on the Clara 2E that removed a 330 ms stall per
+  quick tap.
 - `page_animation`, `has_sleep_cover`/`set_sleep_cover`, `wifi`, `light`, `battery`.
 
 The app wraps the device in `Night` (night mode). A new trait method must be forwarded
 there too, or the app only ever sees the default; `night::tests::forwards_the_capabilities`
-checks the ones it has.
+checks the ones it has. Before drawing over a refresh, call `wait_before_draw`, never
+`wait_refresh` (that one is for real completion, e.g. before suspend).
 
 Find the panel's waveform numbers on the device, not in headers: the Clara 2E lists them in
 `/sys/class/graphics/fb0/waveform_mode_*` as `code:index`, and the ioctl takes the code.

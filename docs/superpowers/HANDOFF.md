@@ -3,7 +3,7 @@
 ## NOW: Kobo Clara 2E port (spec `specs/2026-11-09-kobo-port-design.md`, plan `plans/2026-11-09-kobo-port.md`)
 
 Kobo only for now (user: the Kindle is set aside; its boot-to-Zarathustra plan stays parked).
-**Last reviewed: 5cf138e** (two five-agent reviews: 4ae325d..fa0615f, fa0615f..HEAD).
+**Last reviewed: HEAD after "fix: review and simplify of 5cf138e..HEAD"** (two five-agent reviews: 4ae325d..fa0615f, fa0615f..HEAD).
 
 Done and running on the Kobo (user-confirmed: the app works, SSH works, USB export works):
 - Abstractions for ports: screen size from the device (`screen_w()/screen_h()`, `--pgm --size WxH`,

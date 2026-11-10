@@ -1,6 +1,7 @@
 //! Refreshes while typing, pipelined. The panel takes a tenth of a second or more per
-//! refresh, and drawing into an area still refreshing leaves gray blocks, so the rest of the
-//! app waits for the last refresh before drawing anything. Typing can't afford that: each key
+//! refresh, and on MTK drawing into an area still refreshing leaves gray blocks, so the rest
+//! of the app waits for the last refresh before drawing anything (devices that
+//! `draws_over_refresh`, the Kobo, need none of the waits here). Typing can't afford that: each key
 //! would wait for the field's gray refresh of the key before. Here the screen is drawn into a
 //! frame of its own and copied to the panel one area at a time; an area that overlaps a
 //! refresh still running waits, coalesced with later changes, while the others go at once.
@@ -102,7 +103,7 @@ impl Typing {
             self.show(dev, marker, rect, waveform)?;
         }
         for f in std::mem::take(&mut self.flights) {
-            dev.wait_refresh(f.marker)?;
+            dev.wait_before_draw(f.marker)?;
         }
         Ok(())
     }
@@ -125,7 +126,7 @@ impl Typing {
     /// wait for it once, before drawing over it.
     fn sync(&mut self, dev: &mut dyn Device, marker: u32) -> io::Result<()> {
         if self.flights.last().is_none_or(|f| f.marker != marker) {
-            dev.wait_refresh(marker)?;
+            dev.wait_before_draw(marker)?;
             self.flights.clear();
         }
         Ok(())
@@ -136,7 +137,7 @@ impl Typing {
     fn show(&mut self, dev: &mut dyn Device, marker: &mut u32, rect: Rect, waveform: Waveform) -> io::Result<()> {
         let rect = rect.intersect(&Rect::new(0, 0, screen_w(), screen_h()));
         for f in self.flights.iter().filter(|f| !f.rect.intersect(&rect).is_empty()) {
-            dev.wait_refresh(f.marker)?;
+            dev.wait_before_draw(f.marker)?;
         }
         // Waited for, the overlapping ones go; the others stay until settle() waits for them
         // too: the durations are estimates, and a slow gray refresh may outlive its own.
@@ -151,7 +152,10 @@ impl Typing {
             }
         }
         *marker = dev.refresh(&Refresh { rect, waveform, flash: false, swipe: None })?;
-        self.flights.push(Flight { rect, marker: *marker, done: now + duration(waveform) });
+        // Where drawing over a running refresh is safe, nothing needs to wait for this one.
+        if !dev.draws_over_refresh() {
+            self.flights.push(Flight { rect, marker: *marker, done: now + duration(waveform) });
+        }
         Ok(())
     }
 }

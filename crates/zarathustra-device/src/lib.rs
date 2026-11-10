@@ -136,11 +136,21 @@ pub trait Device {
     fn wifi(&self) -> Option<Arc<dyn Wifi>> {
         None
     }
-    /// Drawing over an area whose refresh is still running is safe: the controller takes its
-    /// pixels when the refresh starts and replays colliding ones itself (i.MX EPDC). When
+    /// Drawing over an area whose refresh is still running is safe: the framebuffer changes only
+    /// inside `refresh()`, which queues an update over what it changed, and the controller
+    /// merges or replays colliding updates itself (i.MX EPDC). When
     /// false (MTK), the app waits for the last refresh before drawing.
     fn draws_over_refresh(&self) -> bool {
         false
+    }
+    /// Before drawing over `marker`'s area: waits for that refresh unless
+    /// [`Device::draws_over_refresh`].
+    fn wait_before_draw(&mut self, marker: u32) -> io::Result<()> {
+        if self.draws_over_refresh() {
+            Ok(())
+        } else {
+            self.wait_refresh(marker)
+        }
     }
     /// The panel can animate page turns itself ([`Refresh::swipe`]).
     fn page_animation(&self) -> bool {

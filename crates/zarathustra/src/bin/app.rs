@@ -230,10 +230,7 @@ fn go_home(shelf: &mut Option<(Box<Home>, PathBuf)>, ctx: &Ctx, wifi: bool) -> B
 /// device handles that itself: on the Kobo this wait cost up to 330 ms per quick tap).
 fn ready(dev: &mut dyn Device, typing: &mut Typing, marker: &mut u32) -> std::io::Result<()> {
     typing.settle(dev, marker)?;
-    if dev.draws_over_refresh() {
-        return Ok(());
-    }
-    dev.wait_refresh(*marker)
+    dev.wait_before_draw(*marker)
 }
 
 fn write_pgm(path: PathBuf, px: &[u8]) -> Result<()> {
